@@ -20,6 +20,9 @@ Usage:
   oma-ring get <service> <account>          print stored secret
   oma-ring del <service> <account>          delete stored secret
   oma-ring list [service] [--json]          list stored secrets
+  oma-ring resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
+  oma-ring import 1password [vault]         import all 1Password items
+  oma-ring import bitwarden                 import all Bitwarden items
   oma-ring ipc <method> <json-args>         JSON IPC for other plugins
 
 Examples:
@@ -27,7 +30,8 @@ Examples:
   oma-ring get openrouter default
   oma-ring del openrouter default
   oma-ring list
-  oma-ring list openrouter --json
+  oma-ring resolve openrouter default
+  oma-ring import 1password pace-dev
   oma-ring ipc ping '{}'
   oma-ring ipc get '{"service":"openrouter","account":"default"}'
 `)
@@ -50,6 +54,10 @@ func main() {
 		handleDel()
 	case "list":
 		handleList()
+	case "resolve":
+		handleResolve()
+	case "import":
+		handleImport()
 	case "ipc":
 		handleIPC()
 	case "help", "-h", "--help":
@@ -152,6 +160,46 @@ func handleIPC() {
 	method := os.Args[2]
 	jsonArgs := os.Args[3]
 	runIPC(method, jsonArgs)
+}
+
+func handleResolve() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	secret, err := Resolve(os.Args[2], os.Args[3], true, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error resolving secret:", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
+}
+
+func handleImport() {
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
+	source := os.Args[2]
+	var err error
+	switch source {
+	case "1password", "op":
+		vault := ""
+		if len(os.Args) >= 4 {
+			vault = os.Args[3]
+		}
+		err = ImportOnePassword(vault)
+	case "bitwarden", "bw":
+		err = ImportBitwarden()
+	default:
+		usage()
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error importing:", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
 }
 
 // readSecret reads a secret from stdin without a trailing newline.
