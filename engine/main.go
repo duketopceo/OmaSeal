@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 )
 
 const appName = "oma-ring"
@@ -17,11 +19,17 @@ Usage:
   oma-ring set <service> <account>          store secret from stdin
   oma-ring get <service> <account>          print stored secret
   oma-ring del <service> <account>          delete stored secret
+  oma-ring list [service] [--json]          list stored secrets
+  oma-ring ipc <method> <json-args>         JSON IPC for other plugins
 
 Examples:
   printf 'sk-or-...' | oma-ring set openrouter default
   oma-ring get openrouter default
   oma-ring del openrouter default
+  oma-ring list
+  oma-ring list openrouter --json
+  oma-ring ipc ping '{}'
+  oma-ring ipc get '{"service":"openrouter","account":"default"}'
 `)
 }
 
@@ -32,62 +40,118 @@ func main() {
 	}
 
 	cmd := os.Args[1]
-	args := os.Args[2:]
 
 	switch cmd {
 	case "set":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
-		}
-		service, account := args[0], args[1]
-		secret, err := readSecret()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error reading secret:", err)
-			os.Exit(1)
-		}
-		if secret == "" {
-			fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
-			os.Exit(1)
-		}
-		if err := Set(service, account, secret); err != nil {
-			fmt.Fprintln(os.Stderr, "error storing secret:", err)
-			os.Exit(1)
-		}
-		fmt.Println("ok")
-
+		handleSet()
 	case "get":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
-		}
-		service, account := args[0], args[1]
-		secret, err := Get(service, account)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error retrieving secret:", err)
-			os.Exit(1)
-		}
-		fmt.Print(secret)
-
+		handleGet()
 	case "del", "delete":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
-		}
-		service, account := args[0], args[1]
-		if err := Delete(service, account); err != nil {
-			fmt.Fprintln(os.Stderr, "error deleting secret:", err)
-			os.Exit(1)
-		}
-		fmt.Println("ok")
-
+		handleDel()
+	case "list":
+		handleList()
+	case "ipc":
+		handleIPC()
 	case "help", "-h", "--help":
 		usage()
-
 	default:
 		usage()
 		os.Exit(1)
 	}
+}
+
+func handleSet() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	secret, err := readSecret()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error reading secret:", err)
+		os.Exit(1)
+	}
+	if secret == "" {
+		fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
+		os.Exit(1)
+	}
+	if err := Set(service, account, secret); err != nil {
+		fmt.Fprintln(os.Stderr, "error storing secret:", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
+}
+
+func handleGet() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	secret, err := Get(service, account)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error retrieving secret:", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
+}
+
+func handleDel() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	if err := Delete(service, account); err != nil {
+		fmt.Fprintln(os.Stderr, "error deleting secret:", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
+}
+
+func handleList() {
+	jsonOut := hasFlag(os.Args, "--json")
+
+	var service string
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] != "--json" {
+			service = os.Args[i]
+		}
+	}
+
+	items, err := List(service)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error listing secrets:", err)
+		os.Exit(1)
+	}
+
+	if jsonOut {
+		b, _ := json.Marshal(items)
+		fmt.Println(string(b))
+		return
+	}
+
+	if len(items) == 0 {
+		fmt.Println("No secrets stored.")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tACCOUNT\tLABEL")
+	for _, it := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", it.Service, it.Account, it.Label)
+	}
+	w.Flush()
+}
+
+func handleIPC() {
+	if len(os.Args) != 5 {
+		usage()
+		os.Exit(1)
+	}
+	method := os.Args[2]
+	jsonArgs := os.Args[3]
+	runIPC(method, jsonArgs)
 }
 
 // readSecret reads a secret from stdin without a trailing newline.
@@ -115,4 +179,13 @@ func isStdinTTY() bool {
 		return false
 	}
 	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
