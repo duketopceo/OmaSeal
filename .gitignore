@@ -14,3 +14,11 @@ vendor/
 
 # Local testing
 local/
+
+# Agent MCP configs (per-repo omaseal wiring)
+/.claude/mcp.json
+/.codex/mcp.json
+/.cursor/mcp.json
+/.devin/mcp.json
+/.agy/mcp.json
+/.hermes/mcp.json

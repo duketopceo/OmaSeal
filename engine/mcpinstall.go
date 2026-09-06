@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,18 @@ var mcpAgentConfig = map[string]struct {
 	dir  string
 	file string
 }{
-	"claude": {dir: ".claude", file: "mcp.json"},
-	"codex":  {dir: ".codex", file: "mcp.json"},
-	"cursor": {dir: ".cursor", file: "mcp.json"},
+	"claude":      {dir: ".claude", file: "mcp.json"},
+	"codex":       {dir: ".codex", file: "mcp.json"},
+	"cursor":      {dir: ".cursor", file: "mcp.json"},
+	"devin":       {dir: ".devin", file: "mcp.json"},
+	"agy":         {dir: ".agy", file: "mcp.json"},
+	"antigravity": {dir: ".agy", file: "mcp.json"},
+	"hermes":      {dir: ".hermes", file: "mcp.json"},
 }
+
+// canonical agents only; aliases share the same directory and should not
+// be double-written by install-all.
+var mcpCanonicalAgents = []string{"claude", "codex", "cursor", "devin", "agy", "hermes"}
 
 type mcpConfig struct {
 	MCPServers map[string]interface{} `json:"mcpServers"`
@@ -23,22 +32,80 @@ type mcpConfig struct {
 
 func handleMCPInstall() {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: omaseal mcp install <claude|codex|cursor>")
+		mcpInstallUsage()
 		os.Exit(1)
 	}
 
 	agent := os.Args[3]
-	if err := installMCP(agent); err != nil {
+	fs := flag.NewFlagSet("mcp-install", flag.ExitOnError)
+	dir := fs.String("dir", "", "Install .<agent>/mcp.json in this directory instead of the home directory")
+	if err := fs.Parse(os.Args[4:]); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		mcpInstallUsage()
+		os.Exit(1)
+	}
+
+	installedPath, err := installMCP(agent, *dir)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("OmaSeal MCP installed for %s.\n", agent)
+	fmt.Printf("OmaSeal MCP installed for %s at %s.\n", agent, installedPath)
 }
 
-func installMCP(agent string) error {
+func handleMCPInstallAll() {
+	fs := flag.NewFlagSet("mcp-install-all", flag.ExitOnError)
+	dir := fs.String("dir", "", "Install .<agent>/mcp.json directories in this path instead of the home directory")
+	// accept positional path too: `mcp install-all [path]`
+	if err := fs.Parse(os.Args[3:]); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		mcpInstallAllUsage()
+		os.Exit(1)
+	}
+
+	targetDir := *dir
+	if fs.NArg() > 0 && targetDir == "" {
+		targetDir = fs.Arg(0)
+	}
+
+	errs := []string{}
+	installed := []string{}
+	for _, agent := range mcpCanonicalAgents {
+		path, err := installMCP(agent, targetDir)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", agent, err))
+		} else {
+			installed = append(installed, path)
+		}
+	}
+	for _, p := range installed {
+		fmt.Println("installed:", p)
+	}
+	if len(errs) > 0 {
+		fmt.Fprintln(os.Stderr, "errors:")
+		for _, e := range errs {
+			fmt.Fprintln(os.Stderr, " -", e)
+		}
+		os.Exit(1)
+	}
+}
+
+func mcpInstallUsage() {
+	fmt.Fprintln(os.Stderr, "usage: omaseal mcp install <claude|codex|cursor|devin|agy|antigravity|hermes> [--dir <path>]")
+	fmt.Fprintln(os.Stderr, "       --dir .   writes .<agent>/mcp.json in the current repo")
+}
+
+func mcpInstallAllUsage() {
+	fmt.Fprintln(os.Stderr, "usage: omaseal mcp install-all [path]")
+	fmt.Fprintln(os.Stderr, "       omaseal mcp install-all --dir <path>")
+	fmt.Fprintln(os.Stderr, "  Writes .claude/mcp.json, .codex/mcp.json, .cursor/mcp.json,")
+	fmt.Fprintln(os.Stderr, "  .devin/mcp.json, .agy/mcp.json, and .hermes/mcp.json in one pass.")
+}
+
+func installMCP(agent, dir string) (string, error) {
 	meta, ok := mcpAgentConfig[agent]
 	if !ok {
-		return fmt.Errorf("unknown agent %q; try claude, codex, or cursor", agent)
+		return "", fmt.Errorf("unknown agent %q; try claude, codex, cursor, devin, agy, or hermes", agent)
 	}
 
 	self, err := os.Executable()
@@ -46,14 +113,24 @@ func installMCP(agent string) error {
 		self = "omaseal"
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return errors.New("cannot determine user home directory")
+	base := ""
+	if dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve --dir: %w", err)
+		}
+		base = abs
+	} else {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", errors.New("cannot determine user home directory")
+		}
+		base = home
 	}
 
-	agentDir := filepath.Join(home, meta.dir)
+	agentDir := filepath.Join(base, meta.dir)
 	if err := os.MkdirAll(agentDir, 0755); err != nil {
-		return fmt.Errorf("create %s: %w", agentDir, err)
+		return "", fmt.Errorf("create %s: %w", agentDir, err)
 	}
 
 	configPath := filepath.Join(agentDir, meta.file)
@@ -72,10 +149,10 @@ func installMCP(agent string) error {
 
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal mcp config: %w", err)
+		return "", fmt.Errorf("marshal mcp config: %w", err)
 	}
 	if err := os.WriteFile(configPath, b, 0644); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
+		return "", fmt.Errorf("write %s: %w", configPath, err)
 	}
-	return nil
+	return configPath, nil
 }

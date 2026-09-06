@@ -26,7 +26,9 @@ Usage:
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
-  omaseal mcp install <claude|codex|cursor>  write mcp config for an agent
+  omaseal mcp install <claude|codex|cursor|devin|agy|hermes> [--dir <path>]
+                                           write mcp config for an agent
+  omaseal mcp install-all [path]            write mcp config for every known agent
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
   omaseal ping                             health check (json with --json)
   omaseal doctor                           check the environment and dependencies
@@ -74,6 +76,8 @@ func main() {
 	case "mcp":
 		if len(os.Args) >= 3 && os.Args[2] == "install" {
 			handleMCPInstall()
+		} else if len(os.Args) >= 3 && os.Args[2] == "install-all" {
+			handleMCPInstallAll()
 		} else {
 			runMCP()
 		}
