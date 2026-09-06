@@ -61,7 +61,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
 	if err := mgr.Call(fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
-		log.Printf("oma-ring: fprintd not available, skipping biometric prompt (%v)", err)
+		log.Printf("omaseal: fprintd not available, skipping biometric prompt (%v)", err)
 		return nil
 	}
 	if devicePath == "" || devicePath == "/" {
@@ -70,14 +70,14 @@ func FprintdVerify(ctx context.Context, reason string) error {
 
 	dev := conn.Object(fprintBusName, devicePath)
 	if err := dev.Call(fprintDeviceIface+".Claim", 0, "").Err; err != nil {
-		log.Printf("oma-ring: fprintd Claim failed, skipping biometric prompt (%v)", err)
+		log.Printf("omaseal: fprintd Claim failed, skipping biometric prompt (%v)", err)
 		return nil
 	}
 	defer dev.Call(fprintDeviceIface+".Release", 0)
 
 	matchRule := fmt.Sprintf("type='signal',interface='%s',member='VerifyStatus',path='%s'", fprintDeviceIface, devicePath)
 	if err := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, matchRule).Err; err != nil {
-		log.Printf("oma-ring: fprintd AddMatch failed, skipping biometric prompt (%v)", err)
+		log.Printf("omaseal: fprintd AddMatch failed, skipping biometric prompt (%v)", err)
 		return nil
 	}
 	defer conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, matchRule)
@@ -87,7 +87,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	defer conn.RemoveSignal(ch)
 
 	if err := dev.Call(fprintDeviceIface+".VerifyStart", 0, "any").Err; err != nil {
-		log.Printf("oma-ring: fprintd VerifyStart failed, skipping biometric prompt (%v)", err)
+		log.Printf("omaseal: fprintd VerifyStart failed, skipping biometric prompt (%v)", err)
 		return nil
 	}
 	defer dev.Call(fprintDeviceIface+".VerifyStop", 0)

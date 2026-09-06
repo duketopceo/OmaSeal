@@ -11,33 +11,33 @@ import (
 	"text/tabwriter"
 )
 
-const appName = "oma-ring"
+const appName = "omaseal"
 
 func usage() {
-	fmt.Fprint(os.Stderr, `oma-ring — system keyring for Omarchy
+	fmt.Fprint(os.Stderr, `omaseal — system keyring for Omarchy
 
 Usage:
-  oma-ring set <service> <account>          store secret from stdin
-  oma-ring get <service> <account>          print stored secret
-  oma-ring reveal <service> <account>       print secret after fprintd gate
-  oma-ring del <service> <account>          delete stored secret
-  oma-ring list [service] [--json]          list stored secrets
-  oma-ring resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
-  oma-ring import 1password [vault]         import all 1Password items
-  oma-ring import bitwarden                 import all Bitwarden items
-  oma-ring mcp                              start MCP stdio server
-  oma-ring ipc <method> <json-args>         JSON IPC for other plugins
+  omaseal set <service> <account>          store secret from stdin
+  omaseal get <service> <account>          print stored secret
+  omaseal reveal <service> <account>       print secret after fprintd gate
+  omaseal del <service> <account>          delete stored secret
+  omaseal list [service] [--json]          list stored secrets
+  omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
+  omaseal import 1password [vault]         import all 1Password items
+  omaseal import bitwarden                 import all Bitwarden items
+  omaseal mcp                              start MCP stdio server
+  omaseal ipc <method> <json-args>         JSON IPC for other plugins
 
 Examples:
-  printf 'sk-or-...' | oma-ring set openrouter default
-  oma-ring get openrouter default
-  oma-ring reveal openrouter default
-  oma-ring del openrouter default
-  oma-ring list
-  oma-ring resolve openrouter default
-  oma-ring import 1password pace-dev
-  oma-ring ipc ping '{}'
-  oma-ring ipc get '{"service":"openrouter","account":"default"}'
+  printf 'sk-or-...' | omaseal set openrouter default
+  omaseal get openrouter default
+  omaseal reveal openrouter default
+  omaseal del openrouter default
+  omaseal list
+  omaseal resolve openrouter default
+  omaseal import 1password pace-dev
+  omaseal ipc ping '{}'
+  omaseal ipc get '{"service":"openrouter","account":"default"}'
 `)
 }
 

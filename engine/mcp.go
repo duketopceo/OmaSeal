@@ -24,13 +24,13 @@ func runMCP() {
 		resp := handleMCPMessage([]byte(line))
 		if resp != nil {
 			if err := enc.Encode(resp); err != nil {
-				log.Printf("oma-ring mcp: encode error: %v", err)
+				log.Printf("omaseal mcp: encode error: %v", err)
 				return
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
-		log.Printf("oma-ring mcp: scanner error: %v", err)
+		log.Printf("omaseal mcp: scanner error: %v", err)
 	}
 }
 
@@ -93,7 +93,7 @@ var mcpInitResult = map[string]any{
 		"tools": map[string]any{},
 	},
 	"serverInfo": map[string]string{
-		"name":    "oma-ring",
+		"name":    "omaseal",
 		"version": "0.2.0",
 	},
 }
@@ -101,7 +101,7 @@ var mcpInitResult = map[string]any{
 var mcpToolsResult = map[string]any{
 	"tools": []map[string]any{
 		{
-			"name":        "oma_ring_get",
+			"name":        "omaseal_get",
 			"description": "Return a secret from the local keyring. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -110,7 +110,7 @@ var mcpToolsResult = map[string]any{
 			},
 		},
 		{
-			"name":        "oma_ring_resolve",
+			"name":        "omaseal_resolve",
 			"description": "Resolve a secret from local keyring, 1Password, or Bitwarden. Caches the result locally. Safe for noninteractive calls.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -119,10 +119,10 @@ var mcpToolsResult = map[string]any{
 			},
 		},
 		{
-			"name":        "oma_ring_set",
+			"name":        "omaseal_set",
 			"description": "Store a secret in the local keyring. The secret value is provided in the arguments (this tool is intended for local agent use only).",
 			"inputSchema": map[string]any{
-				"type":       "object",
+				"type": "object",
 				"properties": map[string]any{
 					"service": map[string]string{"type": "string"},
 					"account": map[string]string{"type": "string"},
@@ -132,7 +132,7 @@ var mcpToolsResult = map[string]any{
 			},
 		},
 		{
-			"name":        "oma_ring_delete",
+			"name":        "omaseal_delete",
 			"description": "Delete a secret from the local keyring by service and account.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -141,7 +141,7 @@ var mcpToolsResult = map[string]any{
 			},
 		},
 		{
-			"name":        "oma_ring_list",
+			"name":        "omaseal_list",
 			"description": "List secrets in the local keyring. Optionally filter by service. Returns metadata only; no secret values.",
 			"inputSchema": map[string]any{
 				"type":       "object",
@@ -165,7 +165,7 @@ type mcpToolCallResponse struct {
 func callMCPTool(req mcpToolCall) *mcpResponse {
 	r := mcpToolCallResponse{Content: []map[string]any{}}
 	switch req.Name {
-	case "oma_ring_get":
+	case "omaseal_get":
 		var a struct {
 			Service string `json:"service"`
 			Account string `json:"account"`
@@ -179,7 +179,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
-	case "oma_ring_resolve":
+	case "omaseal_resolve":
 		var a struct {
 			Service string `json:"service"`
 			Account string `json:"account"`
@@ -193,7 +193,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
-	case "oma_ring_set":
+	case "omaseal_set":
 		var a struct {
 			Service string `json:"service"`
 			Account string `json:"account"`
@@ -207,7 +207,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
 
-	case "oma_ring_delete":
+	case "omaseal_delete":
 		var a struct {
 			Service string `json:"service"`
 			Account string `json:"account"`
@@ -220,7 +220,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
 
-	case "oma_ring_list":
+	case "omaseal_list":
 		var a struct {
 			Service string `json:"service"`
 		}
@@ -251,5 +251,3 @@ func toolErrorResp(req mcpToolCall, err error) *mcpResponse {
 		"isError": true,
 	}}
 }
-
-

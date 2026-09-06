@@ -1,4 +1,4 @@
-# Oma Ring
+# OmaSeal
 
 A first-party keyring for [Omarchy](https://omarchy.org). It layers a
 macOS-Keychain-style secret store over the existing `gnome-keyring` /
@@ -9,7 +9,7 @@ way.
 
 Linux has had `gnome-keyring` for years. Omarchy plugins currently reinvent
 storage in `~/.config/<app>/config.json`, `.env` files, or worse, commit API
-keys to dotfiles. Oma Ring is the one standard interface for secrets: ask for
+keys to dotfiles. OmaSeal is the one standard interface for secrets: ask for
 `service / account`, get back the secret, and never worry about where it lives.
 
 ## What it uses
@@ -24,11 +24,11 @@ keys to dotfiles. Oma Ring is the one standard interface for secrets: ask for
 
 ```sh
 cd engine
-go build -o oma-ring .
-install -Dm755 oma-ring ~/.local/bin/oma-ring
+go build -o omaseal .
+install -Dm755 omaseal ~/.local/bin/omaseal
 
 # Omarchy plugin
-cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.oma-ring
+cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.omaseal
 omarchy-restart-shell
 ```
 
@@ -36,33 +36,33 @@ omarchy-restart-shell
 
 ```sh
 # Store
-printf 'sk-or-...' | oma-ring set openrouter default
+printf 'sk-or-...' | omaseal set openrouter default
 
 # Retrieve (fast, local-only)
-oma-ring get openrouter default
+omaseal get openrouter default
 
 # Retrieve with best-effort fprintd gate
-oma-ring reveal openrouter default
+omaseal reveal openrouter default
 
 # Resolve: local → 1Password → Bitwarden → prompt, with local caching
-oma-ring resolve openrouter default
+omaseal resolve openrouter default
 
 # Delete
-oma-ring del openrouter default
+omaseal del openrouter default
 
 # List metadata (no secrets)
-oma-ring list
-oma-ring list openrouter --json
+omaseal list
+omaseal list openrouter --json
 
 # Import from another vault
-oma-ring import 1password pace-dev
-oma-ring import bitwarden
+omaseal import 1password pace-dev
+omaseal import bitwarden
 
 # IPC for other plugins
-oma-ring ipc resolve '{"service":"openrouter","account":"default"}'
+omaseal ipc resolve '{"service":"openrouter","account":"default"}'
 
 # MCP stdio server for agents
-oma-ring mcp
+omaseal mcp
 ```
 
 ## Quickshell panel
@@ -79,7 +79,7 @@ A `BarWidget` and `Panel` are included:
 
 - Secrets live in the Secret Service default/login collection, encrypted at
   rest by `gnome-keyring`.
-- Oma Ring only ever sees secrets in memory; it never writes them to files,
+- OmaSeal only ever sees secrets in memory; it never writes them to files,
   logs, argv, or the panel state.
 - `list` returns metadata only.
 - `reveal` triggers the `fprintd` gate when a reader is enrolled; on systems
@@ -92,16 +92,16 @@ A `BarWidget` and `Panel` are included:
 ```json
 {
   "mcpServers": {
-    "oma-ring": {
-      "command": "/home/lukedaduke/.local/bin/oma-ring",
+    "omaseal": {
+      "command": "/home/lukedaduke/.local/bin/omaseal",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-Tools: `oma_ring_get`, `oma_ring_resolve`, `oma_ring_set`,
-`oma_ring_delete`, `oma_ring_list`.
+Tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`,
+`omaseal_delete`, `omaseal_list`.
 
 ## License
 

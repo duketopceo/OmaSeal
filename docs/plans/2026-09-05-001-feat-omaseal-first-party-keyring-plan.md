@@ -3,16 +3,16 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 execution: code
 product_contract_source: ce-brainstorm
-title: "Oma Ring: first-party Omarchy keyring plugin and upstream OS PR"
+title: "OmaSeal: first-party Omarchy keyring plugin and upstream OS PR"
 date: 2026-09-05
 plan_type: feat
 ---
 
-# Oma Ring: first-party Omarchy keyring plugin and upstream OS PR
+# OmaSeal: first-party Omarchy keyring plugin and upstream OS PR
 
 ## Summary
 
-Build `oma-ring` as a clean, first-party-quality keyring product for Omarchy. It uses the existing `gnome-keyring` + `libsecret` stack, adds a Quickshell panel, a Go CLI, `fprintd` per-device authentication, an MCP/agent surface, and a standard IPC convention so other Omarchy plugins can store and request secrets. The plan also produces a concrete upstream PR spec for `basecamp/omarchy` so the keyring can migrate from a third-party plugin to a native OS feature.
+Build `omaseal` as a clean, first-party-quality keyring product for Omarchy. It uses the existing `gnome-keyring` + `libsecret` stack, adds a Quickshell panel, a Go CLI, `fprintd` per-device authentication, an MCP/agent surface, and a standard IPC convention so other Omarchy plugins can store and request secrets. The plan also produces a concrete upstream PR spec for `basecamp/omarchy` so the keyring can migrate from a third-party plugin to a native OS feature.
 
 ---
 
@@ -25,7 +25,7 @@ Omarchy ships `gnome-keyring` and `libsecret`, and creates a default keyring at 
 - **No macOS Keychain equivalent** — no standard API that agents, CLIs, and panels can call.
 - **No per-device authentication** beyond the OS login. macOS users get Touch ID per-secret; Omarchy users get nothing equivalent.
 
-`oma-ring` closes that gap without inventing new crypto. It is a thin, opinionated, well-tested layer on top of the existing Secret Service.
+`omaseal` closes that gap without inventing new crypto. It is a thin, opinionated, well-tested layer on top of the existing Secret Service.
 
 ---
 
@@ -33,12 +33,12 @@ Omarchy ships `gnome-keyring` and `libsecret`, and creates a default keyring at 
 
 ### In scope
 
-1. `oma-ring` Go engine: `get`, `set`, `del`, `list`, `lock`, `unlock` against `gnome-keyring`.
+1. `omaseal` Go engine: `get`, `set`, `del`, `list`, `lock`, `unlock` against `gnome-keyring`.
 2. Quickshell `BarWidget` and `Panel` for visual management.
 3. `fprintd` D-Bus integration for per-secret fingerprint gating.
 4. `omarchy-shell` IPC target so other plugins can request secrets.
 5. MCP server and CLI so agents can use the keyring.
-6. Design and documentation for Dayflow to source API keys from `oma-ring`.
+6. Design and documentation for Dayflow to source API keys from `omaseal`.
 7. Upstream `basecamp/omarchy` PR spec for a first-party `Omakeyring` integration.
 8. Marketplace-ready packaging, README, and tests.
 
@@ -66,7 +66,7 @@ Omarchy ships `gnome-keyring` and `libsecret`, and creates a default keyring at 
 Store, retrieve, and delete secrets using `service` + `account` attributes, backed by the Secret Service / `gnome-keyring` default collection.
 
 ### R2. CLI
-Provide `oma-ring get|set|del|list` with secrets passed over `stdin`/`stdout` to avoid `ps` leakage.
+Provide `omaseal get|set|del|list` with secrets passed over `stdin`/`stdout` to avoid `ps` leakage.
 
 ### R3. Panel UI
 A Quickshell panel listing secrets, with add/copy/delete controls and a fingerprint-gated reveal flow.
@@ -75,16 +75,16 @@ A Quickshell panel listing secrets, with add/copy/delete controls and a fingerpr
 Before revealing a high-value secret, verify the user with `fprintd` over D-Bus. The keyring itself remains unlocked; the fingerprint is an authorization gate.
 
 ### R5. Plugin IPC
-Register an `oma-ring` `omarchy-shell` IPC target that exposes `get`, `set`, `del`, `list`, and `ping` to other plugins.
+Register an `omaseal` `omarchy-shell` IPC target that exposes `get`, `set`, `del`, `list`, and `ping` to other plugins.
 
 ### R6. Agent surface
-Expose an MCP server (stdio) with `oma_ring_get`, `oma_ring_set`, `oma_ring_list`, and `oma_ring_delete` tools.
+Expose an MCP server (stdio) with `omaseal_get`, `omaseal_set`, `omaseal_list`, and `omaseal_delete` tools.
 
 ### R7. Dayflow integration
-Produce a design document and, in the `dayflow-linux` repository, implement a provider key source that reads from `oma-ring` when `api_key` is absent from `config.json`.
+Produce a design document and, in the `dayflow-linux` repository, implement a provider key source that reads from `omaseal` when `api_key` is absent from `config.json`.
 
 ### R8. Upstream spec
-Produce a `basecamp/omarchy` PR design document covering PAM/fprintd keyring unlock, a first-party `omarchy-keyring` CLI, and a migration path from `oma-ring`.
+Produce a `basecamp/omarchy` PR design document covering PAM/fprintd keyring unlock, a first-party `omarchy-keyring` CLI, and a migration path from `omaseal`.
 
 ### R9. Quality
 All feature-bearing units have unit or integration tests. The QML panel is visually verified. `go test` and `go vet` pass.
@@ -94,16 +94,16 @@ All feature-bearing units have unit or integration tests. The QML panel is visua
 ## Key Technical Decisions
 
 ### KTD1. Use `gnome-keyring` + `libsecret` as the only storage backend
-Rationale: the backend is already installed on Omarchy, it is maintained by GNOME, and the disk is LUKS-encrypted. No new crypto is introduced. `oma-ring` is a convenience and convention layer, not a vault.
+Rationale: the backend is already installed on Omarchy, it is maintained by GNOME, and the disk is LUKS-encrypted. No new crypto is introduced. `omaseal` is a convenience and convention layer, not a vault.
 
 ### KTD2. Use `github.com/zalando/go-keyring` as the Go client
-Rationale: pure Go, no CGO, supports Secret Service via `godbus/dbus`, and produces a static binary. Proven with the existing `oma-ring/engine/main.go` scaffold.
+Rationale: pure Go, no CGO, supports Secret Service via `godbus/dbus`, and produces a static binary. Proven with the existing `omaseal/engine/main.go` scaffold.
 
 ### KTD3. Fingerprint is a UI/auth gate, not a keyring password
-Rationale: the Omarchy default keyring is passwordless and unlocks at session start. Requiring a fingerprint to unlock `gnome-keyring` would need PAM changes. Instead, `oma-ring` uses `fprintd` to authorize revealing a secret while the keyring is already open. This is a plugin-level feature, not an OS PAM change.
+Rationale: the Omarchy default keyring is passwordless and unlocks at session start. Requiring a fingerprint to unlock `gnome-keyring` would need PAM changes. Instead, `omaseal` uses `fprintd` to authorize revealing a secret while the keyring is already open. This is a plugin-level feature, not an OS PAM change.
 
 ### KTD4. Secrets never pass through shell arguments
-Rationale: `ps` and shell history are world-readable to the user session. `oma-ring set` reads from `stdin`; `get` writes to `stdout`. The `omarchy-shell` IPC call also accepts a secret over a pipe or a JSON body, not as a positional arg.
+Rationale: `ps` and shell history are world-readable to the user session. `omaseal set` reads from `stdin`; `get` writes to `stdout`. The `omarchy-shell` IPC call also accepts a secret over a pipe or a JSON body, not as a positional arg.
 
 ### KTD5. Free core + premium per-device features
 Rationale: the marketplace story is stronger if every user gets a usable keyring manager, while fingerprint gating, collections, and imports sit behind a paid tier. This plan covers the free core and one premium feature (fingerprint) so the premium hook is real, not speculative.
@@ -120,7 +120,7 @@ flowchart LR
     T[Terminal CLI]
   end
 
-  subgraph Engine[oma-ring engine Go binary]
+  subgraph Engine[omaseal engine Go binary]
     C[CLI]
     M[MCP]
     I[IPC handler]
@@ -158,7 +158,7 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   participant P as Panel
-  participant E as oma-ring engine
+  participant E as omaseal engine
   participant F as fprintd
   participant G as gnome-keyring
   P->>E: get service=openrouter account=default
@@ -223,7 +223,7 @@ sequenceDiagram
 - `set` reads the secret from `stdin` (pipe) or a hidden interactive prompt. Refuse to accept secrets as command-line arguments.
 - `get` prints the secret to `stdout` with no trailing newline.
 - `del` and `list` follow the same attribute model.
-- `ipc` subcommand handles `omarchy-shell oma-ring <method> <json-args>`.
+- `ipc` subcommand handles `omarchy-shell omaseal <method> <json-args>`.
 - IPC methods:
   - `ping` -> `ok`
   - `get {"service":"...","account":"..."}` -> secret or error
@@ -248,7 +248,7 @@ sequenceDiagram
 
 ### U3. Quickshell panel and bar widget
 
-**Goal:** Build the visual interface for `oma-ring`.
+**Goal:** Build the visual interface for `omaseal`.
 
 **Requirements:** R3, R9
 
@@ -295,7 +295,7 @@ sequenceDiagram
 - Use `godbus/dbus` to call `net.reactivated.Fprint.Manager` to list devices.
 - Call `Claim("")`, `VerifyStart("any")`, wait for `VerifyStatus` signal, then `VerifyStop()`.
 - Wrap this as `fprintd.Verify(ctx) error` with a timeout.
-- In `Panel.qml`, the `Reveal` button triggers a `fprintd` check before calling `oma-ring get`.
+- In `Panel.qml`, the `Reveal` button triggers a `fprintd` check before calling `omaseal get`.
 - A `require_fingerprint` flag can be set per item (attribute `require-fingerprint=true`); if absent, the secret is not high-value.
 
 **Patterns to follow:**
@@ -314,7 +314,7 @@ sequenceDiagram
 
 ### U5. Agent and MCP surface
 
-**Goal:** Allow Claude, Codex, and other MCP clients to read and write secrets through `oma-ring`.
+**Goal:** Allow Claude, Codex, and other MCP clients to read and write secrets through `omaseal`.
 
 **Requirements:** R6, R9
 
@@ -326,10 +326,10 @@ sequenceDiagram
 **Approach:**
 - Implement a small MCP server over `stdio`.
 - Tools:
-  - `oma_ring_get(service, account)` -> secret value
-  - `oma_ring_set(service, account, secret)` -> ok
-  - `oma_ring_delete(service, account)` -> ok
-  - `oma_ring_list(service?)` -> JSON metadata
+  - `omaseal_get(service, account)` -> secret value
+  - `omaseal_set(service, account, secret)` -> ok
+  - `omaseal_delete(service, account)` -> ok
+  - `omaseal_list(service?)` -> JSON metadata
 - Each tool returns the same JSON as the CLI for consistency.
 - The MCP server reuses `engine/keyring.go`.
 
@@ -338,8 +338,8 @@ sequenceDiagram
 - Do not include secrets in tool `description` fields.
 
 **Test scenarios:**
-- Happy: `oma_ring_set` then `oma_ring_get` returns the value.
-- Edge: `oma_ring_get` for missing secret returns an MCP error, not a panic.
+- Happy: `omaseal_set` then `omaseal_get` returns the value.
+- Edge: `omaseal_get` for missing secret returns an MCP error, not a panic.
 - Error: malformed JSON args are rejected with a structured error.
 
 **Verification:** `go test` covers tool dispatch, and a manual `claude mcp add` round-trip works.
@@ -348,7 +348,7 @@ sequenceDiagram
 
 ### U6. Dayflow integration spec
 
-**Goal:** Design how `dayflow-linux` sources API keys from `oma-ring`.
+**Goal:** Design how `dayflow-linux` sources API keys from `omaseal`.
 
 **Requirements:** R7
 
@@ -356,16 +356,16 @@ sequenceDiagram
 - `docs/integrations/dayflow-adapter.md`
 
 **Approach:**
-- When a provider's `api_key` is empty or set to `"oma-ring:<service>:<account>"`, `dayflow` calls `oma-ring get <service> <account>`.
+- When a provider's `api_key` is empty or set to `"omaseal:<service>:<account>"`, `dayflow` calls `omaseal get <service> <account>`.
 - Document the attribute convention: `service=dayflow`, `account=<provider-id>`.
-- Document migration: `dayflow config set openrouter_api_key ""` then `printf 'key' | oma-ring set dayflow default`.
-- Keep `dayflow` fallback: if `oma-ring` is unavailable, fall back to `config.json` or fail cleanly.
+- Document migration: `dayflow config set openrouter_api_key ""` then `printf 'key' | omaseal set dayflow default`.
+- Keep `dayflow` fallback: if `omaseal` is unavailable, fall back to `config.json` or fail cleanly.
 
 **Patterns to follow:**
-- No `dayflow` code is in the `oma-ring` repo. This document is a contract for the cross-repo work.
+- No `dayflow` code is in the `omaseal` repo. This document is a contract for the cross-repo work.
 
 **Test scenarios:**
-- Cross-repo integration test (to be written in `dayflow-linux`): a `dayflow` provider with `api_key` empty and a matching `oma-ring` entry returns the correct key.
+- Cross-repo integration test (to be written in `dayflow-linux`): a `dayflow` provider with `api_key` empty and a matching `omaseal` entry returns the correct key.
 
 **Verification:** The design document is reviewed and accepted before the `dayflow-linux` implementation begins.
 
@@ -384,7 +384,7 @@ sequenceDiagram
 - Define `omarchy-keyring` as a first-party package and CLI.
 - PAM/fprintd integration for unlocking the default keyring at session start.
 - A `libsecret` Secret Service provider that ships with Omarchy and is always available.
-- Migration from the `oma-ring` plugin: `oma-ring` exports to the new first-party store; users keep the same UI.
+- Migration from the `omaseal` plugin: `omaseal` exports to the new first-party store; users keep the same UI.
 - A Quickshell panel in the first-party shell plugin set.
 - Permissions model: which plugins can request which `service` secrets.
 
@@ -394,15 +394,15 @@ sequenceDiagram
 
 **Test scenarios:**
 - Review: the spec is read by a second engineer and found implementable.
-- Acceptance: the spec includes a migration path and does not break existing `oma-ring` users.
+- Acceptance: the spec includes a migration path and does not break existing `omaseal` users.
 
-**Verification:** The spec is committed to the `oma-ring` repo and referenced in the marketplace submission.
+**Verification:** The spec is committed to the `omaseal` repo and referenced in the marketplace submission.
 
 ---
 
 ### U8. Marketplace packaging and documentation
 
-**Goal:** Make `oma-ring` installable and presentable.
+**Goal:** Make `omaseal` installable and presentable.
 
 **Requirements:** R9
 
@@ -440,7 +440,7 @@ sequenceDiagram
 ## Output Structure
 
 ```
-oma-ring/
+omaseal/
 ├── manifest.json
 ├── BarWidget.qml
 ├── Panel.qml
@@ -451,7 +451,7 @@ oma-ring/
 ├── .gitignore
 ├── preview.png
 ├── docs/
-│   ├── plans/2026-09-05-001-feat-oma-ring-first-party-keyring-plan.md
+│   ├── plans/2026-09-05-001-feat-omaseal-first-party-keyring-plan.md
 │   ├── specs/omarchy-os-keyring.md
 │   └── integrations/dayflow-adapter.md
 └── engine/
@@ -492,10 +492,10 @@ oma-ring/
 
 ## Open Questions
 
-1. Should `oma-ring` ship with a `systemd --user` unit, or remain a CLI-only tool invoked by the panel and agents?
+1. Should `omaseal` ship with a `systemd --user` unit, or remain a CLI-only tool invoked by the panel and agents?
 2. Should the premium tier enforce a license key, or is the marketplace the only enforcement for now?
 3. Which `fprintd` finger policy should the panel enforce — `any` or a configured finger?
-4. Should `oma-ring` support a `search` attribute like `tags`, or keep the namespace strictly `service`/`account`?
+4. Should `omaseal` support a `search` attribute like `tags`, or keep the namespace strictly `service`/`account`?
 5. What is the upstream `basecamp/omarchy` PR process — should the spec target `quattro` or `main`?
 
 ---
@@ -505,5 +505,5 @@ oma-ring/
 - `fprintd` D-Bus reference: `net.reactivated.Fprint.Manager` and `Device` interfaces, `VerifyStart`, `VerifyStatus` signals. See `https://fprint.freedesktop.org/fprintd-dev/ref-dbus.html`.
 - `libsecret` search and item listing via `org.freedesktop.secrets`. See `https://gnome.pages.gitlab.gnome.org/libsecret/method.Service.search.html`.
 - `omarchy-shell` IPC contract and plugin structure. See `https://github.com/basecamp/omarchy/blob/quattro/docs/omarchy-shell.md` and `https://omarchy.org/manual/shell-plugins/`.
-- `go-keyring` usage and compatibility with `gnome-keyring` verified in `oma-ring/engine/main.go` scaffold.
+- `go-keyring` usage and compatibility with `gnome-keyring` verified in `omaseal/engine/main.go` scaffold.
 - Quickshell panel patterns drawn from `dayflow-linux` (BarWidget and Panel structure).

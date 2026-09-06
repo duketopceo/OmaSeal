@@ -15,10 +15,10 @@ type ipcRequest struct {
 }
 
 type ipcResponse struct {
-	OK      string `json:"ok,omitempty"`
-	Secret  string `json:"secret,omitempty"`
-	Items   []Item `json:"items,omitempty"`
-	Error   string `json:"error,omitempty"`
+	OK     string `json:"ok,omitempty"`
+	Secret string `json:"secret,omitempty"`
+	Items  []Item `json:"items,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 func runIPC(method string, jsonArgs string) {

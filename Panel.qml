@@ -7,7 +7,7 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "io.github.duketopceo.oma-ring"
+  moduleName: "io.github.duketopceo.omaseal"
   manageIpc: false
 
   signal statusChanged()
@@ -54,7 +54,7 @@ Panel {
 
   function refresh() {
     root.notice = ""
-    listProc.command = ["oma-ring", "list", "--json"]
+    listProc.command = ["omaseal", "list", "--json"]
     if (!listProc.running) listProc.running = true
   }
 
@@ -86,18 +86,18 @@ Panel {
       return
     }
     root.notice = "Saving..."
-    var cmd = "printf %s " + Util.shellQuote(secret) + " | oma-ring set " + Util.shellQuote(service) + " " + Util.shellQuote(account)
+    var cmd = "printf %s " + Util.shellQuote(secret) + " | omaseal set " + Util.shellQuote(service) + " " + Util.shellQuote(account)
     setProc.command = ["bash", "-c", cmd]
     if (!setProc.running) setProc.running = true
   }
 
   function deleteSecret(service, account) {
-    delProc.command = ["oma-ring", "del", service, account]
+    delProc.command = ["omaseal", "del", service, account]
     if (!delProc.running) delProc.running = true
   }
 
   function copySecret(service, account) {
-    getProc.command = ["/home/lukedaduke/.local/bin/oma-ring", "reveal", service, account]
+    getProc.command = ["/home/lukedaduke/.local/bin/omaseal", "reveal", service, account]
     if (!getProc.running) getProc.running = true
   }
 
@@ -110,7 +110,7 @@ Panel {
 
   Process {
     id: listProc
-    command: ["oma-ring", "list", "--json"]
+    command: ["omaseal", "list", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyList(text)
@@ -224,7 +224,7 @@ Panel {
           spacing: Style.space(8)
 
           Text {
-            text: "󰌋 Oma Ring"
+            text: "󰌋 OmaSeal"
             color: root.fg
             font.family: root.fontFamily
             font.pixelSize: Style.font.heading

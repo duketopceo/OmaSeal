@@ -7,7 +7,7 @@ import (
 )
 
 func TestKeyringRoundTrip(t *testing.T) {
-	service := "test-oma-ring-roundtrip"
+	service := "test-omaseal-roundtrip"
 	account := "test-account"
 	secret := "test-secret-" + t.Name()
 
@@ -50,7 +50,7 @@ func TestKeyringRoundTrip(t *testing.T) {
 }
 
 func TestKeyringEmptyList(t *testing.T) {
-	service := "test-oma-ring-empty-" + fmt.Sprint(t.Name())
+	service := "test-omaseal-empty-" + fmt.Sprint(t.Name())
 	items, err := List(service)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -76,7 +76,7 @@ func TestKeyringValidation(t *testing.T) {
 }
 
 func TestKeyringReplacesExisting(t *testing.T) {
-	service := "test-oma-ring-replace"
+	service := "test-omaseal-replace"
 	account := "test-account"
 	if err := Set(service, account, "old"); err != nil {
 		t.Fatalf("Set old failed: %v", err)
@@ -108,7 +108,7 @@ func TestKeyringReplacesExisting(t *testing.T) {
 }
 
 func TestKeyringErrorMessage(t *testing.T) {
-	_, err := Get("test-oma-ring-does-not-exist", "none")
+	_, err := Get("test-omaseal-does-not-exist", "none")
 	if err == nil {
 		t.Fatal("expected error for missing secret")
 	}

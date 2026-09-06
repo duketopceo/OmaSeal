@@ -1,5 +1,5 @@
 # Build artifacts
-engine/oma-ring
+engine/omaseal
 engine/engine
 *.exe
 

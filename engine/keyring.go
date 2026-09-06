@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	// appAttribute is a fixed attribute that marks every item owned by oma-ring.
+	// appAttribute is a fixed attribute that marks every item owned by OmaSeal.
+	// appAttributeVal is intentionally still "oma-ring" so secrets stored before
+	// the rename continue to be found; the label (visible in keyring UIs) uses
+	// the new name.
 	appAttribute    = "app"
 	appAttributeVal = "oma-ring"
 
@@ -56,9 +59,9 @@ func keyringStore() (*ss.SecretService, dbus.BusObject, error) {
 // findItem returns the first item matching service and account.
 func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account string) (dbus.ObjectPath, error) {
 	search := map[string]string{
-		appAttribute:    appAttributeVal,
-		"service":       service,
-		"account":       account,
+		appAttribute: appAttributeVal,
+		"service":    service,
+		"account":    account,
 	}
 	paths, err := svc.SearchItems(collection, search)
 	if err != nil {
@@ -93,11 +96,11 @@ func Set(service, account, secret string) error {
 	}
 
 	attributes := map[string]string{
-		appAttribute:    appAttributeVal,
-		"service":       service,
-		"account":       account,
+		appAttribute: appAttributeVal,
+		"service":    service,
+		"account":    account,
 	}
-	label := fmt.Sprintf("oma-ring: %s / %s", service, account)
+	label := fmt.Sprintf("OmaSeal: %s / %s", service, account)
 	return svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret))
 }
 
@@ -152,7 +155,7 @@ func Delete(service, account string) error {
 	return svc.Delete(p)
 }
 
-// List returns metadata for all secrets stored by oma-ring. If service is
+// List returns metadata for all secrets stored by OmaSeal. If service is
 // non-empty, only items for that service are returned.
 func List(service string) ([]Item, error) {
 	svc, collection, err := keyringStore()

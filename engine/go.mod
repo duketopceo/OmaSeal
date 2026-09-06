@@ -1,4 +1,4 @@
-module github.com/duketopceo/oma-ring/engine
+module github.com/duketopceo/OmaSeal/engine
 
 go 1.27.1
 

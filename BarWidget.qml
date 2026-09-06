@@ -6,7 +6,7 @@ import qs.Commons
 
 BarWidget {
   id: root
-  moduleName: "io.github.duketopceo.oma-ring"
+  moduleName: "io.github.duketopceo.omaseal"
 
   property int secretCount: 0
 
@@ -69,7 +69,7 @@ BarWidget {
 
   Process {
     id: countProc
-    command: ["oma-ring", "list", "--json"]
+    command: ["omaseal", "list", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyCount(text)
@@ -87,7 +87,7 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󰌋" + (root.secretCount > 0 ? " " + root.secretCount : "")
-    tooltipText: "Oma Ring — " + root.secretCount + " secrets"
+    tooltipText: "OmaSeal — " + root.secretCount + " secrets"
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()
     }
