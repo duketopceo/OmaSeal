@@ -6,7 +6,10 @@ OmaSeal is the Omarchy-native keyring. It works like macOS Keychain: any app, pl
 
 ```sh
 omaseal doctor
+omaseal ping --json
 ```
+
+`ping` returns a machine-readable health summary that agents and plugins can call without popping a keyring unlock dialog.
 
 This checks:
 - the binary and its version
@@ -38,6 +41,13 @@ Add the MCP server to `~/.claude/mcp.json` or `~/.codex/mcp.json`:
 }
 ```
 
+Or let OmaSeal write the config for you:
+
+```sh
+omaseal mcp install claude
+omaseal mcp install codex
+```
+
 Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`.
 
 Agents should:
@@ -56,6 +66,20 @@ omaseal ipc get '{"service":"openrouter","account":"default"}'
 omaseal ipc set '{"service":"myapp","account":"api"}' < secret.txt
 omaseal ipc list '{"service":"myapp"}'
 ```
+
+## Error codes
+
+CLI and IPC errors now include a `code` and `help` field:
+
+```sh
+$ omaseal get missing account
+error: retrieving secret: secret not found in keyring (code: not_found, help: omaseal set)
+
+$ omaseal ipc get '{"service":"missing","account":"x"}'
+{"error":"secret not found in keyring","code":"not_found","help":"omaseal set"}
+```
+
+Agents can use `code` to pick the right recovery action and `help` to surface the fix to the user.
 
 ## For Quickshell / Omarchy plugins
 

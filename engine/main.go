@@ -26,7 +26,9 @@ Usage:
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
+  omaseal mcp install <claude|codex>       write mcp config for an agent
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
+  omaseal ping                             health check (json with --json)
   omaseal doctor                           check the environment and dependencies
   omaseal setup                            onboarding guide and MCP config
 
@@ -70,11 +72,17 @@ func main() {
 	case "import":
 		handleImport()
 	case "mcp":
-		runMCP()
+		if len(os.Args) >= 3 && os.Args[2] == "install" {
+			handleMCPInstall()
+		} else {
+			runMCP()
+		}
 	case "ipc":
 		handleIPC()
+	case "ping":
+		handlePing()
 	case "doctor":
-		runDoctor()
+		handleDoctor()
 	case "setup":
 		runSetup()
 	case "help", "-h", "--help":
@@ -101,7 +109,7 @@ func handleSet() {
 		os.Exit(1)
 	}
 	if err := Set(service, account, secret); err != nil {
-		fmt.Fprintln(os.Stderr, "error storing secret:", err)
+		printError("storing secret: ", err)
 		os.Exit(1)
 	}
 	fmt.Println("ok")
@@ -115,7 +123,7 @@ func handleGet() {
 	service, account := os.Args[2], os.Args[3]
 	secret, err := Get(service, account)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error retrieving secret:", err)
+		printError("retrieving secret: ", err)
 		os.Exit(1)
 	}
 	fmt.Print(secret)

@@ -38,9 +38,9 @@ func keyringError(err error) error {
 		return nil
 	}
 	if errors.Is(err, keyring.ErrNotFound) {
-		return err
+		return newError("not_found", "omaseal set", err)
 	}
-	return fmt.Errorf("keyring: %w (is gnome-keyring-daemon running? run 'omaseal doctor' for details)", err)
+	return newError("keyring_unavailable", "omaseal doctor", fmt.Errorf("keyring: %w", err))
 }
 
 // keyringReachable returns an error if the Secret Service is not reachable,
@@ -83,7 +83,7 @@ func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account
 		return "", keyringError(err)
 	}
 	if len(paths) == 0 {
-		return "", keyring.ErrNotFound
+		return "", keyringError(keyring.ErrNotFound)
 	}
 	return paths[0], nil
 }

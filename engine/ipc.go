@@ -19,6 +19,8 @@ type ipcResponse struct {
 	Secret string `json:"secret,omitempty"`
 	Items  []Item `json:"items,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Code   string `json:"code,omitempty"`
+	Help   string `json:"help,omitempty"`
 }
 
 func runIPC(method string, jsonArgs string) {
@@ -36,7 +38,7 @@ func runIPC(method string, jsonArgs string) {
 		}
 		secret, err := Get(req.Service, req.Account)
 		if err != nil {
-			resp.Error = err.Error()
+			resp.Error = err.Error(); resp.Code = codeFromError(err); resp.Help = helpFromError(err)
 			writeJSON(resp)
 			os.Exit(1)
 		}
@@ -50,7 +52,7 @@ func runIPC(method string, jsonArgs string) {
 			os.Exit(1)
 		}
 		if err := Delete(req.Service, req.Account); err != nil {
-			resp.Error = err.Error()
+			resp.Error = err.Error(); resp.Code = codeFromError(err); resp.Help = helpFromError(err)
 			writeJSON(resp)
 			os.Exit(1)
 		}
@@ -61,7 +63,7 @@ func runIPC(method string, jsonArgs string) {
 		_ = json.Unmarshal([]byte(jsonArgs), &req) // empty is fine
 		items, err := List(req.Service)
 		if err != nil {
-			resp.Error = err.Error()
+			resp.Error = err.Error(); resp.Code = codeFromError(err); resp.Help = helpFromError(err)
 			writeJSON(resp)
 			os.Exit(1)
 		}
@@ -76,7 +78,7 @@ func runIPC(method string, jsonArgs string) {
 		}
 		secret, err := Resolve(req.Service, req.Account, true, false)
 		if err != nil {
-			resp.Error = err.Error()
+			resp.Error = err.Error(); resp.Code = codeFromError(err); resp.Help = helpFromError(err)
 			writeJSON(resp)
 			os.Exit(1)
 		}

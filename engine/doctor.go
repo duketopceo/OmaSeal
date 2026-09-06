@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,42 @@ type checkResult struct {
 	name    string
 	ok      bool
 	message string
+}
+
+func handleDoctor() {
+	for _, a := range os.Args[2:] {
+		if a == "--json" {
+			runDoctorJSON()
+			return
+		}
+	}
+	runDoctor()
+}
+
+func runDoctorJSON() {
+	results := doctorChecks()
+	checks := make([]pingCheck, len(results))
+	ok := true
+	for i, r := range results {
+		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Message: r.message}
+		if !r.ok {
+			ok = false
+		}
+	}
+	res := pingResult{
+		Version: version,
+		Commit:  commit,
+		Target:  target(),
+		Ok:      ok,
+		Checks:  checks,
+		Help:    "omaseal setup",
+	}
+	b, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error marshaling doctor result:", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(b))
 }
 
 func doctorChecks() []checkResult {
