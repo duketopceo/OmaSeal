@@ -17,7 +17,7 @@ build-all: $(ARCHS)
 $(ARCHS):
 	mkdir -p dist/$(TAR_PREFIX)-$@
 	cd engine && CGO_ENABLED=0 GOOS=linux GOARCH=$@ go build -ldflags "$(LDFLAGS)" -o ../dist/$(TAR_PREFIX)-$@/omaseal .
-	cp -f BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/$(TAR_PREFIX)-$@/ 2>/dev/null || true
+	cp -f BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/$(TAR_PREFIX)-$@/
 	tar -czf dist/$(TAR_PREFIX)-$@.tar.gz -C dist $(TAR_PREFIX)-$@
 
 test:

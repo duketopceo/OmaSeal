@@ -5,32 +5,34 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     strategy:
       matrix:
         arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: engine/go.mod
       - name: Build linux/${{ matrix.arch }}
         run: |
-          mkdir -p dist
+          mkdir -p dist/omaseal-linux-${{ matrix.arch }}
           cd engine
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build \
             -ldflags "-X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA::7}" \
             -o omaseal .
           cd ..
-          mkdir -p dist/omaseal-linux-${{ matrix.arch }}
           cp engine/omaseal dist/omaseal-linux-${{ matrix.arch }}/omaseal
-          cp BarWidget.qml Panel.qml manifest.json README.md LICENSE 2>/dev/null || true
-          cp BarWidget.qml Panel.qml manifest.json README.md dist/omaseal-linux-${{ matrix.arch }}/
+          cp BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/omaseal-linux-${{ matrix.arch }}/
           tar -czf dist/omaseal-linux-${{ matrix.arch }}.tar.gz -C dist omaseal-linux-${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
@@ -40,8 +42,13 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -50,7 +57,7 @@ jobs:
         run: |
           cd dist
           sha256sum *.tar.gz > sha256sums.txt
-      - name: Sign checksums (optional)
+      - name: Sign checksums
         if: env.GPG_KEY_ID != ''
         env:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
@@ -65,5 +72,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/sha256sums.txt
-            dist/sha256sums.txt.asc
           generate_release_notes: true
