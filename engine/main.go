@@ -25,6 +25,7 @@ Usage:
   oma-ring resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
   oma-ring import 1password [vault]         import all 1Password items
   oma-ring import bitwarden                 import all Bitwarden items
+  oma-ring mcp                              start MCP stdio server
   oma-ring ipc <method> <json-args>         JSON IPC for other plugins
 
 Examples:
@@ -63,6 +64,8 @@ func main() {
 		handleResolve()
 	case "import":
 		handleImport()
+	case "mcp":
+		runMCP()
 	case "ipc":
 		handleIPC()
 	case "help", "-h", "--help":
