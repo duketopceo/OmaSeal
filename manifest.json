@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.duketopceo.oma-ring",
   "name": "Oma Ring",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "lukedaduke",
   "license": "MIT",
   "description": "A system keyring manager for Omarchy. Brings macOS Keychain-style secret storage to the bar and panel, built on the existing gnome-keyring / libsecret stack.",

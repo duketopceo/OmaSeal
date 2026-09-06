@@ -1,18 +1,24 @@
 # Oma Ring
 
-A system keyring manager for Omarchy. It gives the desktop a macOS Keychain-style secret store without inventing new crypto: it uses the `gnome-keyring` + `libsecret` stack that Omarchy already ships.
+A first-party keyring for [Omarchy](https://omarchy.org). It layers a
+macOS-Keychain-style secret store over the existing `gnome-keyring` /
+`libsecret` stack so every Omarchy plugin can read and store secrets the same
+way.
 
 ## Why
 
-macOS has Keychain. Linux has `gnome-keyring`. But there is no Omarchy-native way to view or request secrets, and every Omarchy plugin currently invents its own storage (`~/.config/<app>/config.json`, `.env` files, etc.).
-
-Oma Ring fixes that by being the single, standard secret interface for Omarchy apps.
+Linux has had `gnome-keyring` for years. Omarchy plugins currently reinvent
+storage in `~/.config/<app>/config.json`, `.env` files, or worse, commit API
+keys to dotfiles. Oma Ring is the one standard interface for secrets: ask for
+`service / account`, get back the secret, and never worry about where it lives.
 
 ## What it uses
 
-- `gnome-keyring-daemon` — the Secret Service backend.
-- `libsecret` / `secret-tool` — the CLI/library interface.
-- `github.com/zalando/go-keyring` — pure Go client, no CGO.
+- `gnome-keyring-daemon` — Secret Service backend (already on Omarchy).
+- `github.com/zalando/go-keyring` — pure Go, no CGO.
+- `github.com/godbus/dbus/v5` — direct D-Bus when needed.
+- Optional `op` (1Password) and `bw` (Bitwarden) CLI bridges for imports and
+  fallback resolution.
 
 ## Install
 
@@ -23,29 +29,79 @@ install -Dm755 oma-ring ~/.local/bin/oma-ring
 
 # Omarchy plugin
 cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.oma-ring
-omarchy-shell shell rescanPlugins
-omarchy plugin enable io.github.duketopceo.oma-ring
+omarchy-restart-shell
 ```
 
-## Usage
+## CLI
 
 ```sh
-# Store a secret
+# Store
 printf 'sk-or-...' | oma-ring set openrouter default
 
-# Retrieve a secret
+# Retrieve (fast, local-only)
 oma-ring get openrouter default
 
-# Delete a secret
+# Retrieve with best-effort fprintd gate
+oma-ring reveal openrouter default
+
+# Resolve: local → 1Password → Bitwarden → prompt, with local caching
+oma-ring resolve openrouter default
+
+# Delete
 oma-ring del openrouter default
+
+# List metadata (no secrets)
+oma-ring list
+oma-ring list openrouter --json
+
+# Import from another vault
+oma-ring import 1password pace-dev
+oma-ring import bitwarden
+
+# IPC for other plugins
+oma-ring ipc resolve '{"service":"openrouter","account":"default"}'
+
+# MCP stdio server for agents
+oma-ring mcp
 ```
 
-## Roadmap
+## Quickshell panel
 
-- [x] CLI get/set/delete via `gnome-keyring`
-- [ ] Panel UI for viewing/searching secrets
-- [ ] `omarchy-shell` IPC target for other plugins
-- [ ] Premium: collections, import/export, encrypted backup, SSH/2FA helpers
+A `BarWidget` and `Panel` are included:
+
+- Click the **O** in the bar.
+- Browse stored secrets.
+- `+ Add` creates a new `service / account / secret`.
+- The copy button runs `reveal` and uses `wl-copy` with a 30-second clear.
+- `r` refreshes; `a` toggles the add form.
+
+## Security model
+
+- Secrets live in the Secret Service default/login collection, encrypted at
+  rest by `gnome-keyring`.
+- Oma Ring only ever sees secrets in memory; it never writes them to files,
+  logs, argv, or the panel state.
+- `list` returns metadata only.
+- `reveal` triggers the `fprintd` gate when a reader is enrolled; on systems
+  without one it falls through to the local secret.
+- `resolve` falls back to `op` / `bw`, but always caches the result locally so
+  the secret is not re-requested from the external vault.
+
+## Agent / MCP
+
+```json
+{
+  "mcpServers": {
+    "oma-ring": {
+      "command": "/home/lukedaduke/.local/bin/oma-ring",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Tools: `oma_ring_get`, `oma_ring_resolve`, `oma_ring_set`,
+`oma_ring_delete`, `oma_ring_list`.
 
 ## License
 
