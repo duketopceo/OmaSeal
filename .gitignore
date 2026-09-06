@@ -1,5 +1,6 @@
 # Build artifacts
 engine/oma-ring
+engine/engine
 *.exe
 
 # Go
