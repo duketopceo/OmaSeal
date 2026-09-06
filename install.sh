@@ -34,10 +34,10 @@ done
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)
-    ARCH_NAME=x86_64
+    ARCH_NAME=amd64
     ;;
   aarch64|arm64)
-    ARCH_NAME=aarch64
+    ARCH_NAME=arm64
     ;;
   *)
     echo "Unsupported architecture: $ARCH" >&2
@@ -65,23 +65,27 @@ fi
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -fsSL -o "${TMPDIR}/${TARBALL}" "$DOWNLOAD_URL"
-curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || true
+curl -fsSL -o "${TMPDIR}/${TARBALL}" "$DOWNLOAD_URL" || {
+  echo "Download failed: ${DOWNLOAD_URL}" >&2
+  exit 1
+}
+curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
+  echo "Checksum file not found: ${SUMS_URL}" >&2
+  exit 1
+}
 
-if [[ -f "${TMPDIR}/sha256sums.txt" ]]; then
-  (cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
-    echo "Checksum verification failed." >&2
-    exit 1
-  }
-fi
+(cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
+  echo "Checksum verification failed." >&2
+  exit 1
+}
 
 if command -v gpg >/dev/null 2>&1; then
-  curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" || true
-  if [[ -f "${TMPDIR}/sha256sums.txt.asc" ]]; then
+  if curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" 2>/dev/null; then
     if gpg --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" 2>/dev/null; then
       echo "GPG signature verified."
     else
-      echo "GPG signature check skipped or failed; falling back to checksum." >&2
+      echo "GPG signature verification failed." >&2
+      exit 1
     fi
   fi
 fi

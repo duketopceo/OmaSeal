@@ -69,7 +69,7 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 	// Notifications have no id; some require a result.
 	switch msg.Method {
 	case "initialize":
-		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: mcpInitResult}
+		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: initMCPResult()}
 	case "notifications/initialized":
 		return nil
 	case "tools/list":
@@ -87,22 +87,24 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 	}
 }
 
-var mcpInitResult = map[string]any{
-	"protocolVersion": "2024-11-05",
-	"capabilities": map[string]any{
-		"tools": map[string]any{},
-	},
-	"serverInfo": map[string]string{
-		"name":    "omaseal",
-		"version": "0.2.0",
-	},
+func initMCPResult() map[string]any {
+	return map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]any{
+			"tools": map[string]any{},
+		},
+		"serverInfo": map[string]string{
+			"name":    "omaseal",
+			"version": version,
+		},
+	}
 }
 
 var mcpToolsResult = map[string]any{
 	"tools": []map[string]any{
 		{
 			"name":        "omaseal_get",
-			"description": "Return a secret from the local keyring. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate.",
+			"description": "Retrieve a stored secret from the local OmaSeal keyring. Use this when the user or a provider needs the value at runtime. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
@@ -120,7 +122,7 @@ var mcpToolsResult = map[string]any{
 		},
 		{
 			"name":        "omaseal_set",
-			"description": "Store a secret in the local keyring. The secret value is provided in the arguments (this tool is intended for local agent use only).",
+			"description": "Store a secret in the local OmaSeal keyring. Use this as the default, safe place to store API keys and credentials for the user. The secret is passed in this tool call; it is never written to a shell command or dotfile.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -246,8 +248,12 @@ func errResp(req mcpToolCall, err error) *mcpResponse {
 }
 
 func toolErrorResp(req mcpToolCall, err error) *mcpResponse {
+	text := err.Error()
+	if code := codeFromError(err); code != "" {
+		text = text + " (code: " + code + ", help: " + helpFromError(err) + ")"
+	}
 	return &mcpResponse{JSONRPC: "2.0", Result: map[string]any{
-		"content": []map[string]any{{"type": "text", "text": err.Error()}},
+		"content": []map[string]any{{"type": "text", "text": text}},
 		"isError": true,
 	}}
 }

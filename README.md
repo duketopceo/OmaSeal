@@ -39,9 +39,9 @@ curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh 
 ### From a release tarball
 
 ```sh
-curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-x86_64.tar.gz
-tar -xzf omaseal-linux-x86_64.tar.gz
-install -Dm755 omaseal-linux-x86_64/omaseal ~/.local/bin/omaseal
+curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-amd64.tar.gz
+tar -xzf omaseal-linux-amd64.tar.gz
+install -Dm755 omaseal-linux-amd64/omaseal ~/.local/bin/omaseal
 ```
 
 ### Build from source
