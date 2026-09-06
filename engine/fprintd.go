@@ -19,6 +19,31 @@ const (
 	fprintVerifyTimeout = 15 * time.Second
 )
 
+// fprintdAvailable returns nil if the fprintd service is active and has at
+// least one usable device. It is used by `omaseal doctor` to report hardware
+// availability.
+func fprintdAvailable(ctx context.Context) error {
+	if err := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
+		return errors.New("fprintd.service is not active")
+	}
+
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return errors.New("cannot connect to the D-Bus system bus")
+	}
+	defer conn.Close()
+
+	mgr := conn.Object(fprintBusName, fprintManagerPath)
+	var devicePath dbus.ObjectPath
+	if err := mgr.Call(fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
+		return fmt.Errorf("fprintd has no default device: %w", err)
+	}
+	if devicePath == "" || devicePath == "/" {
+		return errors.New("fprintd has no enrolled device")
+	}
+	return nil
+}
+
 // FprintdVerify starts a best-effort fprintd fingerprint verification.
 //
 // If the fprintd daemon is not available or no reader is enrolled, it returns

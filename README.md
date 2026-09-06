@@ -56,6 +56,15 @@ cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.omaseal
 omarchy-restart-shell
 ```
 
+## Onboarding
+
+```sh
+omaseal doctor    # check the environment
+omaseal setup     # print MCP / PATH / plugin config
+```
+
+See [`docs/onboarding.md`](docs/onboarding.md) for wiring OmaSeal into agents, BrowserOS, and other Omarchy apps.
+
 ## CLI
 
 ```sh

@@ -27,6 +27,8 @@ Usage:
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
+  omaseal doctor                           check the environment and dependencies
+  omaseal setup                            onboarding guide and MCP config
 
 Examples:
   printf 'sk-or-...' | omaseal set openrouter default
@@ -71,6 +73,10 @@ func main() {
 		runMCP()
 	case "ipc":
 		handleIPC()
+	case "doctor":
+		runDoctor()
+	case "setup":
+		runSetup()
 	case "help", "-h", "--help":
 		usage()
 	default:

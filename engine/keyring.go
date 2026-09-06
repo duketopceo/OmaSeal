@@ -40,7 +40,22 @@ func keyringError(err error) error {
 	if errors.Is(err, keyring.ErrNotFound) {
 		return err
 	}
-	return fmt.Errorf("keyring: %w (is gnome-keyring-daemon running?)", err)
+	return fmt.Errorf("keyring: %w (is gnome-keyring-daemon running? run 'omaseal doctor' for details)", err)
+}
+
+// keyringReachable returns an error if the Secret Service is not reachable,
+// without attempting to unlock any collection. This is safe for `omaseal doctor`
+// because it does not pop a keyring unlock dialog.
+func keyringReachable() error {
+	svc, err := ss.NewSecretService()
+	if err != nil {
+		return keyringError(err)
+	}
+	collection := svc.GetLoginCollection()
+	if collection == nil {
+		return keyringError(errors.New("no login collection"))
+	}
+	return nil
 }
 
 // keyringStore returns a connected SecretService and the default collection.
