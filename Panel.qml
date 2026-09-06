@@ -13,10 +13,13 @@ Panel {
 
   property var anchorItem: null
   property var hostWidget: null
+  property var settings: null
+  property bool popoutSwitchClosing: false
 
   function open() { root.controller.show(); refresh() }
   function close() { root.controller.hide() }
   function toggle() { root.visible ? close() : open() }
+  function closeForPopoutSwitch() { root.close() }
 
   implicitWidth: 520
   implicitHeight: 700

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Ui
+import qs.Commons
 
 BarWidget {
   id: root
@@ -9,13 +10,16 @@ BarWidget {
 
   property int secretCount: 0
 
-  visible: true
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  readonly property var panelItem: panelLoader.item
+  readonly property bool opened: panelItem ? panelItem.opened === true : false
+  readonly property bool popoutSwitchClosing: panelItem
+    ? panelItem.popoutSwitchClosing === true
+    : false
 
-  function open() { if (panelLoader.item) panelLoader.item.open() }
-  function close() { if (panelLoader.item) panelLoader.item.close() }
-  function toggle() { if (panelLoader.item) panelLoader.item.toggle() }
+  function open() { if (panelItem) panelItem.open() }
+  function close() { if (panelItem) panelItem.close() }
+  function toggle() { if (panelItem) panelItem.toggle() }
+  function closeForPopoutSwitch() { if (panelItem) panelItem.closeForPopoutSwitch() }
 
   function refresh() {
     if (!countProc.running) countProc.running = true
@@ -26,9 +30,23 @@ BarWidget {
       var d = JSON.parse(raw)
       root.secretCount = d.length
     } catch (e) {
-      root.secretCount = -1
+      root.secretCount = 0
     }
   }
+
+  function injectPanel() {
+    if (!panelItem) return
+    if ("bar" in panelItem) panelItem.bar = root.bar
+    if ("settings" in panelItem) panelItem.settings = root.settings
+    if ("anchorItem" in panelItem) panelItem.anchorItem = button
+    if ("hostWidget" in panelItem) panelItem.hostWidget = root
+  }
+
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
 
   Loader {
     id: panelLoader
@@ -36,11 +54,8 @@ BarWidget {
     source: Qt.resolvedUrl("Panel.qml")
     visible: false
     onLoaded: {
-      if (item) {
-        item.bar = root.bar
-        item.anchorItem = button
-        item.hostWidget = root
-      }
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
     }
   }
 
