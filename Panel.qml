@@ -97,7 +97,7 @@ Panel {
   }
 
   function copySecret(service, account) {
-    getProc.command = ["oma-ring", "get", service, account]
+    getProc.command = ["/home/lukedaduke/.local/bin/oma-ring", "reveal", service, account]
     if (!getProc.running) getProc.running = true
   }
 

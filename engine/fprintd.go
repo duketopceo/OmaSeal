@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os/exec"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -31,11 +32,31 @@ const (
 func FprintdVerify(ctx context.Context, reason string) error {
 	_ = reason
 
+	// Quick active check; skip the whole D-Bus dance if the daemon isn't running.
+	if err := exec.Command("systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
+		return nil
+	}
+
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil
 	}
 	defer conn.Close()
+
+	var names []string
+	if err := conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		return nil
+	}
+	found := false
+	for _, n := range names {
+		if n == fprintBusName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
 
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
@@ -71,12 +92,12 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	}
 	defer dev.Call(fprintDeviceIface+".VerifyStop", 0)
 
-	ctx, cancel := context.WithTimeout(ctx, fprintVerifyTimeout)
-	defer cancel()
+	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
+	defer verifyCancel()
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-verifyCtx.Done():
 			return errors.New("fingerprint verification timeout")
 		case sig, ok := <-ch:
 			if !ok {
