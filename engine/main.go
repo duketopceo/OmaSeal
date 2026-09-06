@@ -1,5 +1,3 @@
-// oma-ring — system keyring CLI for Omarchy.
-// Built on gnome-keyring / libsecret via zalando/go-keyring.
 package main
 
 import (
@@ -8,14 +6,12 @@ import (
 	"io"
 	"os"
 	"strings"
-
-	"github.com/zalando/go-keyring"
 )
 
 const appName = "oma-ring"
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `oma-ring — system keyring for Omarchy
+	fmt.Fprint(os.Stderr, `oma-ring — system keyring for Omarchy
 
 Usage:
   oma-ring set <service> <account>          store secret from stdin
@@ -54,7 +50,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
 			os.Exit(1)
 		}
-		if err := keyring.Set(service, account, secret); err != nil {
+		if err := Set(service, account, secret); err != nil {
 			fmt.Fprintln(os.Stderr, "error storing secret:", err)
 			os.Exit(1)
 		}
@@ -66,7 +62,7 @@ func main() {
 			os.Exit(1)
 		}
 		service, account := args[0], args[1]
-		secret, err := keyring.Get(service, account)
+		secret, err := Get(service, account)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error retrieving secret:", err)
 			os.Exit(1)
@@ -79,7 +75,7 @@ func main() {
 			os.Exit(1)
 		}
 		service, account := args[0], args[1]
-		if err := keyring.Delete(service, account); err != nil {
+		if err := Delete(service, account); err != nil {
 			fmt.Fprintln(os.Stderr, "error deleting secret:", err)
 			os.Exit(1)
 		}
