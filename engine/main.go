@@ -26,7 +26,7 @@ Usage:
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
-  omaseal mcp install <claude|codex>       write mcp config for an agent
+  omaseal mcp install <claude|codex|cursor>  write mcp config for an agent
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
   omaseal ping                             health check (json with --json)
   omaseal doctor                           check the environment and dependencies

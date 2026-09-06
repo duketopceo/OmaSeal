@@ -14,6 +14,7 @@ var mcpAgentConfig = map[string]struct {
 }{
 	"claude": {dir: ".claude", file: "mcp.json"},
 	"codex":  {dir: ".codex", file: "mcp.json"},
+	"cursor": {dir: ".cursor", file: "mcp.json"},
 }
 
 type mcpConfig struct {
@@ -22,7 +23,7 @@ type mcpConfig struct {
 
 func handleMCPInstall() {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: omaseal mcp install <claude|codex>")
+		fmt.Fprintln(os.Stderr, "usage: omaseal mcp install <claude|codex|cursor>")
 		os.Exit(1)
 	}
 
@@ -37,7 +38,7 @@ func handleMCPInstall() {
 func installMCP(agent string) error {
 	meta, ok := mcpAgentConfig[agent]
 	if !ok {
-		return fmt.Errorf("unknown agent %q; try claude or codex", agent)
+		return fmt.Errorf("unknown agent %q; try claude, codex, or cursor", agent)
 	}
 
 	self, err := os.Executable()
@@ -64,6 +65,7 @@ func installMCP(agent string) error {
 		cfg.MCPServers = map[string]interface{}{}
 	}
 	cfg.MCPServers["omaseal"] = map[string]interface{}{
+		"type":    "stdio",
 		"command": self,
 		"args":    []string{"mcp"},
 	}
