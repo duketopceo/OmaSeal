@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ func usage() {
 Usage:
   oma-ring set <service> <account>          store secret from stdin
   oma-ring get <service> <account>          print stored secret
+  oma-ring reveal <service> <account>       print secret after fprintd gate
   oma-ring del <service> <account>          delete stored secret
   oma-ring list [service] [--json]          list stored secrets
   oma-ring resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
@@ -28,6 +30,7 @@ Usage:
 Examples:
   printf 'sk-or-...' | oma-ring set openrouter default
   oma-ring get openrouter default
+  oma-ring reveal openrouter default
   oma-ring del openrouter default
   oma-ring list
   oma-ring resolve openrouter default
@@ -50,6 +53,8 @@ func main() {
 		handleSet()
 	case "get":
 		handleGet()
+	case "reveal":
+		handleReveal()
 	case "del", "delete":
 		handleDel()
 	case "list":
@@ -150,6 +155,23 @@ func handleList() {
 		fmt.Fprintf(w, "%s\t%s\t%s\n", it.Service, it.Account, it.Label)
 	}
 	w.Flush()
+}
+
+func handleReveal() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", os.Args[2], os.Args[3])); err != nil {
+		fmt.Fprintln(os.Stderr, "fingerprint gate:", err)
+		os.Exit(1)
+	}
+	secret, err := Get(os.Args[2], os.Args[3])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error getting secret:", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
 }
 
 func handleIPC() {

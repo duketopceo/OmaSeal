@@ -69,18 +69,24 @@ BarWidget {
 
   Process {
     id: countProc
-    command: ["/home/lukedaduke/.local/bin/oma-ring", "list", "--json"]
+    command: ["oma-ring", "list", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyCount(text)
     }
   }
 
+  Connections {
+    target: panelLoader.item
+    ignoreUnknownSignals: true
+    function onStatusChanged() { root.refresh() }
+  }
+
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "O" + (root.secretCount > 0 ? " " + root.secretCount : "")
+    text: "󰌋" + (root.secretCount > 0 ? " " + root.secretCount : "")
     tooltipText: "Oma Ring — " + root.secretCount + " secrets"
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()
