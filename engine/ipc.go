@@ -67,6 +67,21 @@ func runIPC(method string, jsonArgs string) {
 		}
 		resp.Items = items
 
+	case "resolve":
+		var req ipcRequest
+		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
+			resp.Error = "invalid json: " + err.Error()
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		secret, err := Resolve(req.Service, req.Account, true, false)
+		if err != nil {
+			resp.Error = err.Error()
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		resp.Secret = secret
+
 	default:
 		resp.Error = "unknown method: " + method
 		writeJSON(resp)

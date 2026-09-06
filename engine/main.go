@@ -153,7 +153,7 @@ func handleList() {
 }
 
 func handleIPC() {
-	if len(os.Args) != 5 {
+	if len(os.Args) != 4 {
 		usage()
 		os.Exit(1)
 	}
