@@ -1,0 +1,15 @@
+# Build artifacts
+engine/oma-ring
+*.exe
+
+# Go
+*.test
+coverage.out
+vendor/
+
+# Plugin package artifacts
+*.tar.gz
+*.zip
+
+# Local testing
+local/

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.duketopceo.oma-ring",
+  "name": "Oma Ring",
+  "version": "0.1.0",
+  "author": "lukedaduke",
+  "license": "MIT",
+  "description": "A system keyring manager for Omarchy. Brings macOS Keychain-style secret storage to the bar and panel, built on the existing gnome-keyring / libsecret stack.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Oma Ring",
+    "description": "System keyring status and quick unlock/lock indicator.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
