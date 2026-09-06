@@ -37,6 +37,23 @@ without inventing its own storage.
 
 **Installation:**
 
+From AUR (recommended on Omarchy/Arch):
+
+```sh
+yay -S omaseal
+# or for the prebuilt binary
+yay -S omaseal-bin
+```
+
+From release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh | bash
+omarchy plugin add https://github.com/duketopceo/OmaSeal.git --enable
+```
+
+Build from source:
+
 ```sh
 cd engine
 go build -o omaseal .

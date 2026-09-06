@@ -1,0 +1,22 @@
+# Maintainer: Luke Kimball <kimballluke@gmail.com>
+pkgname=omaseal-bin
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="First-party Omarchy keyring manager (prebuilt binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/duketopceo/OmaSeal"
+license=('MIT')
+depends=('gnome-keyring' 'libsecret' 'fprintd')
+source_x86_64=("https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-x86_64.tar.gz")
+source_aarch64=("https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-aarch64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+install=${pkgname}.install
+
+package() {
+  install -Dm755 omaseal "${pkgdir}/usr/bin/omaseal"
+  install -Dm644 BarWidget.qml -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
+  install -Dm644 Panel.qml -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
+  install -Dm644 manifest.json -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

@@ -50,6 +50,9 @@ func main() {
 	cmd := os.Args[1]
 
 	switch cmd {
+	case "version", "--version", "-v":
+		printVersion()
+		return
 	case "set":
 		handleSet()
 	case "get":

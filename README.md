@@ -22,6 +22,30 @@ keys to dotfiles. OmaSeal is the one standard interface for secrets: ask for
 
 ## Install
 
+### From AUR (recommended on Omarchy/Arch)
+
+```sh
+yay -S omaseal        # build from source
+# or
+yay -S omaseal-bin    # prebuilt multi-arch binary
+```
+
+### From the install script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh | bash
+```
+
+### From a release tarball
+
+```sh
+curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-x86_64.tar.gz
+tar -xzf omaseal-linux-x86_64.tar.gz
+install -Dm755 omaseal-linux-x86_64/omaseal ~/.local/bin/omaseal
+```
+
+### Build from source
+
 ```sh
 cd engine
 go build -o omaseal .
@@ -74,6 +98,16 @@ A `BarWidget` and `Panel` are included:
 - `+ Add` creates a new `service / account / secret`.
 - The copy button runs `reveal` and uses `wl-copy` with a 30-second clear.
 - `r` refreshes; `a` toggles the add form.
+
+## BrowserOS
+
+BrowserOS can store provider API keys in OmaSeal. Enable it per provider in
+**Settings → AI Providers** with the **Store credentials in OmaSeal** checkbox.
+The BrowserOS server keeps only an `omaseal://` reference and resolves the real
+secret just before each LLM request.
+
+See [`docs/integrations/browseros.md`](docs/integrations/browseros.md) for the
+service/account convention, migration steps, and troubleshooting.
 
 ## Security model
 
