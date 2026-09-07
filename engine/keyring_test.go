@@ -1,15 +1,25 @@
 package main
 
 import (
-	"fmt"
+	"crypto/rand"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
 
+func randomName(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("failed to read random bytes: %v", err)
+	}
+	return "test-omaseal-" + hex.EncodeToString(b)
+}
+
 func TestKeyringRoundTrip(t *testing.T) {
-	service := "test-omaseal-roundtrip"
-	account := "test-account"
-	secret := "test-secret-" + t.Name()
+	service := randomName(t)
+	account := randomName(t)
+	secret := randomName(t)
 
 	if err := Set(service, account, secret); err != nil {
 		t.Fatalf("Set failed: %v", err)
@@ -50,7 +60,7 @@ func TestKeyringRoundTrip(t *testing.T) {
 }
 
 func TestKeyringEmptyList(t *testing.T) {
-	service := "test-omaseal-empty-" + fmt.Sprint(t.Name())
+	service := randomName(t)
 	items, err := List(service)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -61,23 +71,25 @@ func TestKeyringEmptyList(t *testing.T) {
 }
 
 func TestKeyringValidation(t *testing.T) {
-	if err := Set("", "account", "secret"); err == nil {
+	service := randomName(t)
+	account := randomName(t)
+	if err := Set("", account, "secret"); err == nil {
 		t.Fatal("Set with empty service should fail")
 	}
-	if err := Set("service", "", "secret"); err == nil {
+	if err := Set(service, "", "secret"); err == nil {
 		t.Fatal("Set with empty account should fail")
 	}
-	if err := Set("service", "account", ""); err == nil {
+	if err := Set(service, account, ""); err == nil {
 		t.Fatal("Set with empty secret should fail")
 	}
-	if _, err := Get("", "account"); err == nil {
+	if _, err := Get("", account); err == nil {
 		t.Fatal("Get with empty service should fail")
 	}
 }
 
 func TestKeyringReplacesExisting(t *testing.T) {
-	service := "test-omaseal-replace"
-	account := "test-account"
+	service := randomName(t)
+	account := randomName(t)
 	if err := Set(service, account, "old"); err != nil {
 		t.Fatalf("Set old failed: %v", err)
 	}
@@ -108,7 +120,7 @@ func TestKeyringReplacesExisting(t *testing.T) {
 }
 
 func TestKeyringErrorMessage(t *testing.T) {
-	_, err := Get("test-omaseal-does-not-exist", "none")
+	_, err := Get(randomName(t), randomName(t))
 	if err == nil {
 		t.Fatal("expected error for missing secret")
 	}

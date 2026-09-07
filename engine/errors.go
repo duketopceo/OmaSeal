@@ -16,6 +16,10 @@ func (e *omasealError) Error() string {
 	return e.err.Error()
 }
 
+func (e *omasealError) Unwrap() error {
+	return e.err
+}
+
 func newError(code, help string, err error) error {
 	return &omasealError{code: code, help: help, err: err}
 }

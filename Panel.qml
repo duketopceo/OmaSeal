@@ -21,6 +21,7 @@ Panel {
   property string notice: ""
   property int selectedIndex: 0
   property bool isAdding: false
+  property int pendingDeleteIndex: -1
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
@@ -54,6 +55,7 @@ Panel {
 
   function refresh() {
     root.notice = ""
+    root.pendingDeleteIndex = -1
     listProc.command = ["omaseal", "list", "--json"]
     if (!listProc.running) listProc.running = true
   }
@@ -86,18 +88,35 @@ Panel {
       return
     }
     root.notice = "Saving..."
-    var cmd = "printf %s " + Util.shellQuote(secret) + " | omaseal set " + Util.shellQuote(service) + " " + Util.shellQuote(account)
-    setProc.command = ["bash", "-c", cmd]
+    setProc.command = ["omaseal", "set", service, account]
+    setProc.stdinEnabled = true
     if (!setProc.running) setProc.running = true
+    setProc.write(secret)
+    setProc.stdinEnabled = false
   }
 
-  function deleteSecret(service, account) {
+  function deleteSecret(index, service, account) {
+    if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
+      root.pendingDeleteIndex = -1
+      deleteConfirmTimer.stop()
+      root.notice = "Delete confirmation cancelled"
+      return
+    }
+    if (root.pendingDeleteIndex !== index) {
+      root.pendingDeleteIndex = index
+      deleteConfirmTimer.restart()
+      root.notice = "Press delete again to confirm deletion"
+      return
+    }
+    deleteConfirmTimer.stop()
+    root.pendingDeleteIndex = -1
+    root.notice = "Deleting..."
     delProc.command = ["omaseal", "del", service, account]
     if (!delProc.running) delProc.running = true
   }
 
   function copySecret(service, account) {
-    getProc.command = ["/home/lukedaduke/.local/bin/omaseal", "reveal", service, account]
+    getProc.command = ["omaseal", "get", service, account]
     if (!getProc.running) getProc.running = true
   }
 
@@ -106,6 +125,12 @@ Panel {
     accountField.text = ""
     secretField.text = ""
     root.isAdding = false
+  }
+
+  Timer {
+    id: deleteConfirmTimer
+    interval: 5000
+    onTriggered: root.pendingDeleteIndex = -1
   }
 
   Process {
@@ -127,7 +152,10 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(text) + " | wl-copy --sensitive --clear-after 30"])
+        copyProc.stdinEnabled = true
+        if (!copyProc.running) copyProc.running = true
+        copyProc.write(text)
+        copyProc.stdinEnabled = false
         root.notice = "Copied to clipboard (clears in 30s)"
       }
     }
@@ -136,6 +164,11 @@ Panel {
         root.notice = "Copy failed"
       }
     }
+  }
+
+  Process {
+    id: copyProc
+    command: ["wl-copy", "--sensitive", "--clear-after", "30"]
   }
 
   Process {
@@ -201,7 +234,7 @@ Panel {
       onDeleteRequested: {
         if (secretsModel.count > 0 && root.selectedIndex < secretsModel.count) {
           var item = secretsModel.get(root.selectedIndex)
-          root.deleteSecret(item.service, item.account)
+          root.deleteSecret(root.selectedIndex, item.service, item.account)
         }
       }
       onTextKey: function(t) {
@@ -326,8 +359,10 @@ Panel {
         Repeater {
           model: secretsModel
           delegate: BorderSurface {
-            required property var modelData
             required property int index
+            required property string service
+            required property string account
+            required property string label
             width: contentColumn.width - contentColumn.leftPadding - contentColumn.rightPadding
             implicitHeight: Style.space(42)
             radius: Style.cornerRadius
@@ -338,8 +373,14 @@ Panel {
               id: rowMouse
               anchors.fill: parent
               hoverEnabled: true
-              onEntered: root.selectedIndex = index
-              onClicked: root.copySecret(modelData.service, modelData.account)
+              onEntered: {
+                if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
+                  root.pendingDeleteIndex = -1
+                  deleteConfirmTimer.stop()
+                }
+                root.selectedIndex = index
+              }
+              onClicked: root.copySecret(service, account)
             }
 
             RowLayout {
@@ -360,7 +401,7 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: modelData.service + " / " + modelData.account
+                  text: service + " / " + account
                   color: root.fg
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
@@ -370,7 +411,7 @@ Panel {
 
                 Text {
                   width: parent.width
-                  text: modelData.label || ""
+                  text: label || ""
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -386,7 +427,7 @@ Panel {
                   iconText: "󰆏"
                   tooltipText: "Copy to clipboard (sensitive)"
                   foreground: root.fg
-                  onClicked: root.copySecret(modelData.service, modelData.account)
+                  onClicked: root.copySecret(service, account)
                 }
 
                 PanelActionButton {
@@ -394,7 +435,7 @@ Panel {
                   tooltipText: "Delete secret"
                   hoverColor: root.urgent
                   foreground: root.fg
-                  onClicked: root.deleteSecret(modelData.service, modelData.account)
+                  onClicked: root.deleteSecret(index, service, account)
                 }
               }
             }

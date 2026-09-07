@@ -51,9 +51,10 @@ func fprintdAvailable(ctx context.Context) error {
 // the macOS Touch ID best-effort posture: protect where possible, but do not
 // hard-fail on machines without biometric hardware.
 //
-// If fprintd is available and the user explicitly fails verification (no
-// match, timeout, etc.) it returns an error and the caller should not release
-// the secret.
+// If a default device is present, any setup failure (Claim, AddMatch,
+// VerifyStart) is treated as a verification failure and an error is returned.
+// The secret is only released when the user explicitly matches or when no
+// biometric hardware is present at all.
 func FprintdVerify(ctx context.Context, reason string) error {
 	_ = reason
 
@@ -95,15 +96,13 @@ func FprintdVerify(ctx context.Context, reason string) error {
 
 	dev := conn.Object(fprintBusName, devicePath)
 	if err := dev.Call(fprintDeviceIface+".Claim", 0, "").Err; err != nil {
-		log.Printf("omaseal: fprintd Claim failed, skipping biometric prompt (%v)", err)
-		return nil
+		return fmt.Errorf("fprintd Claim failed: %w", err)
 	}
 	defer dev.Call(fprintDeviceIface+".Release", 0)
 
 	matchRule := fmt.Sprintf("type='signal',interface='%s',member='VerifyStatus',path='%s'", fprintDeviceIface, devicePath)
 	if err := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, matchRule).Err; err != nil {
-		log.Printf("omaseal: fprintd AddMatch failed, skipping biometric prompt (%v)", err)
-		return nil
+		return fmt.Errorf("fprintd AddMatch failed: %w", err)
 	}
 	defer conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, matchRule)
 
@@ -112,8 +111,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	defer conn.RemoveSignal(ch)
 
 	if err := dev.Call(fprintDeviceIface+".VerifyStart", 0, "any").Err; err != nil {
-		log.Printf("omaseal: fprintd VerifyStart failed, skipping biometric prompt (%v)", err)
-		return nil
+		return fmt.Errorf("fprintd VerifyStart failed: %w", err)
 	}
 	defer dev.Call(fprintDeviceIface+".VerifyStop", 0)
 

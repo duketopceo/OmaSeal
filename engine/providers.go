@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,14 +10,17 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
 
+const providerTimeout = 30 * time.Second
+
 // Resolver fetches a secret from the first available source and caches it in
 // the local keyring so the next call is fast. Sources are checked in order:
 // local keyring, 1Password, Bitwarden, then an interactive prompt (TTY only).
-func Resolve(service, account string, cache bool, prompt bool) (string, error) {
+func Resolve(ctx context.Context, service, account string, cache bool, prompt bool) (string, error) {
 	if service == "" || account == "" {
 		return "", errors.New("service and account must not be empty")
 	}
@@ -31,8 +35,8 @@ func Resolve(service, account string, cache bool, prompt bool) (string, error) {
 	}
 
 	// 2. 1Password CLI
-	if op, ok := newOnePasswordProvider(); ok {
-		v, err = op.Get(service, account)
+	if op, ok := newOnePasswordProvider(ctx); ok {
+		v, err = op.Get(ctx, service, account)
 		if err == nil {
 			if cache {
 				_ = Set(service, account, v)
@@ -42,8 +46,8 @@ func Resolve(service, account string, cache bool, prompt bool) (string, error) {
 	}
 
 	// 3. Bitwarden CLI
-	if bw, ok := newBitwardenProvider(); ok {
-		v, err = bw.Get(service, account)
+	if bw, ok := newBitwardenProvider(ctx); ok {
+		v, err = bw.Get(ctx, service, account)
 		if err == nil {
 			if cache {
 				_ = Set(service, account, v)
@@ -75,30 +79,30 @@ func Resolve(service, account string, cache bool, prompt bool) (string, error) {
 
 // ImportOnePassword lists all 1Password items in the default vault and stores
 // each one under service=title / account=username in the local keyring.
-func ImportOnePassword(vault string) error {
-	p, ok := newOnePasswordProvider()
+func ImportOnePassword(ctx context.Context, vault string) error {
+	p, ok := newOnePasswordProvider(ctx)
 	if !ok {
 		return errors.New("1Password CLI (op) is not authenticated")
 	}
 	p.vault = vault
-	return p.Import()
+	return p.Import(ctx)
 }
 
 // ImportBitwarden lists all Bitwarden items and stores each one under
 // service=name / account=username in the local keyring.
-func ImportBitwarden() error {
-	p, ok := newBitwardenProvider()
+func ImportBitwarden(ctx context.Context) error {
+	p, ok := newBitwardenProvider(ctx)
 	if !ok {
 		return errors.New("Bitwarden CLI (bw) is not authenticated")
 	}
-	return p.Import()
+	return p.Import(ctx)
 }
 
 type onePasswordProvider struct {
 	vault string
 }
 
-func newOnePasswordProvider() (*onePasswordProvider, bool) {
+func newOnePasswordProvider(ctx context.Context) (*onePasswordProvider, bool) {
 	if runtime.GOOS != "linux" {
 		return nil, false
 	}
@@ -106,7 +110,9 @@ func newOnePasswordProvider() (*onePasswordProvider, bool) {
 		return nil, false
 	}
 	// Smoke test: op is authenticated.
-	out, err := exec.Command("op", "vault", "list", "--format=json").CombinedOutput()
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "op", "vault", "list", "--format=json").CombinedOutput()
 	if err != nil {
 		return nil, false
 	}
@@ -116,16 +122,19 @@ func newOnePasswordProvider() (*onePasswordProvider, bool) {
 	return &onePasswordProvider{}, true
 }
 
-func (p *onePasswordProvider) Get(service, account string) (string, error) {
-	return p.getItem(service, account)
+func (p *onePasswordProvider) Get(ctx context.Context, service, account string) (string, error) {
+	return p.getItem(ctx, service, account)
 }
 
-func (p *onePasswordProvider) getItem(service, account string) (string, error) {
-	args := []string{"item", "get", service, "--format=json"}
+func (p *onePasswordProvider) getItem(ctx context.Context, id, account string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
+	args := []string{"item", "get", id, "--format=json"}
 	if p.vault != "" {
 		args = append(args, "--vault", p.vault)
 	}
-	out, err := exec.Command("op", args...).CombinedOutput()
+	out, err := exec.CommandContext(cctx, "op", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("op: %w", err)
 	}
@@ -161,12 +170,30 @@ func (p *onePasswordProvider) getItem(service, account string) (string, error) {
 	return secret, nil
 }
 
-func (p *onePasswordProvider) Import() error {
+func (p *onePasswordProvider) getUsername(ctx context.Context, id string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
+	args := []string{"item", "get", id, "--field=username"}
+	if p.vault != "" {
+		args = append(args, "--vault", p.vault)
+	}
+	out, err := exec.CommandContext(cctx, "op", args...).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func (p *onePasswordProvider) Import(ctx context.Context) error {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
 	args := []string{"item", "list", "--format=json"}
 	if p.vault != "" {
 		args = append(args, "--vault", p.vault)
 	}
-	out, err := exec.Command("op", args...).CombinedOutput()
+	out, err := exec.CommandContext(cctx, "op", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("op: %w", err)
 	}
@@ -179,36 +206,30 @@ func (p *onePasswordProvider) Import() error {
 		return err
 	}
 
+	var firstErr error
 	for _, it := range items {
-		secret, err := p.getItem(it.Title, "")
+		secret, err := p.getItem(ctx, it.ID, "")
 		if err != nil {
 			continue
 		}
-		username, _ := p.getUsername(it.Title)
+		username, _ := p.getUsername(ctx, it.ID)
 		account := username
 		if account == "" {
 			account = "default"
 		}
-		_ = Set(it.Title, account, secret)
+		if err := Set(it.Title, account, secret); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 	}
-	return nil
-}
-
-func (p *onePasswordProvider) getUsername(service string) (string, error) {
-	args := []string{"item", "get", service, "--field=username"}
-	if p.vault != "" {
-		args = append(args, "--vault", p.vault)
-	}
-	out, err := exec.Command("op", args...).CombinedOutput()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	return firstErr
 }
 
 type bitwardenProvider struct{}
 
-func newBitwardenProvider() (*bitwardenProvider, bool) {
+func newBitwardenProvider(ctx context.Context) (*bitwardenProvider, bool) {
 	if _, err := exec.LookPath("bw"); err != nil {
 		return nil, false
 	}
@@ -218,18 +239,22 @@ func newBitwardenProvider() (*bitwardenProvider, bool) {
 	return &bitwardenProvider{}, true
 }
 
-func (p *bitwardenProvider) Get(service, account string) (string, error) {
-	return p.getItem(service, account)
+func (p *bitwardenProvider) Get(ctx context.Context, service, account string) (string, error) {
+	return p.getItem(ctx, service, account)
 }
 
-func (p *bitwardenProvider) getItem(service, account string) (string, error) {
-	// bw get item uses the exact name.
-	out, err := exec.Command("bw", "get", "item", service, "--raw").CombinedOutput()
+func (p *bitwardenProvider) getItem(ctx context.Context, id, account string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
+	// bw get item uses the exact name or id.
+	out, err := exec.CommandContext(cctx, "bw", "get", "item", id, "--raw").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("bw: %w", err)
 	}
 
 	var item struct {
+		ID    string `json:"id"`
 		Name  string `json:"name"`
 		Login struct {
 			Username string `json:"username"`
@@ -249,13 +274,17 @@ func (p *bitwardenProvider) getItem(service, account string) (string, error) {
 	return item.Login.Password, nil
 }
 
-func (p *bitwardenProvider) Import() error {
-	out, err := exec.Command("bw", "list", "items", "--raw").CombinedOutput()
+func (p *bitwardenProvider) Import(ctx context.Context) error {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(cctx, "bw", "list", "items", "--raw").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("bw: %w", err)
 	}
 
 	var items []struct {
+		ID    string `json:"id"`
 		Name  string `json:"name"`
 		Login struct {
 			Username string `json:"username"`
@@ -266,6 +295,7 @@ func (p *bitwardenProvider) Import() error {
 		return err
 	}
 
+	var firstErr error
 	for _, it := range items {
 		if it.Login.Password == "" {
 			continue
@@ -274,7 +304,12 @@ func (p *bitwardenProvider) Import() error {
 		if account == "" {
 			account = "default"
 		}
-		_ = Set(it.Name, account, it.Login.Password)
+		if err := Set(it.Name, account, it.Login.Password); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
 	}
-	return nil
+	return firstErr
 }

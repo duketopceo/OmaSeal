@@ -150,10 +150,21 @@ func handleList() {
 	jsonOut := hasFlag(os.Args, "--json")
 
 	var service string
+	serviceSet := false
 	for i := 2; i < len(os.Args); i++ {
-		if os.Args[i] != "--json" {
-			service = os.Args[i]
+		if os.Args[i] == "--json" {
+			continue
 		}
+		if strings.HasPrefix(os.Args[i], "-") {
+			fmt.Fprintln(os.Stderr, "unknown flag:", os.Args[i])
+			os.Exit(1)
+		}
+		if serviceSet {
+			fmt.Fprintln(os.Stderr, "error: list accepts at most one service argument")
+			os.Exit(1)
+		}
+		service = os.Args[i]
+		serviceSet = true
 	}
 
 	items, err := List(service)
@@ -213,7 +224,7 @@ func handleResolve() {
 		usage()
 		os.Exit(1)
 	}
-	secret, err := Resolve(os.Args[2], os.Args[3], true, true)
+	secret, err := Resolve(context.Background(), os.Args[2], os.Args[3], true, true)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error resolving secret:", err)
 		os.Exit(1)
@@ -228,15 +239,16 @@ func handleImport() {
 	}
 	source := os.Args[2]
 	var err error
+	ctx := context.Background()
 	switch source {
 	case "1password", "op":
 		vault := ""
 		if len(os.Args) >= 4 {
 			vault = os.Args[3]
 		}
-		err = ImportOnePassword(vault)
+		err = ImportOnePassword(ctx, vault)
 	case "bitwarden", "bw":
-		err = ImportBitwarden()
+		err = ImportBitwarden(ctx)
 	default:
 		usage()
 		os.Exit(1)
@@ -276,7 +288,7 @@ func isStdinTTY() bool {
 }
 
 func hasFlag(args []string, name string) bool {
-	for _, a := range args {
+	for _, a := range args[1:] {
 		if a == name {
 			return true
 		}

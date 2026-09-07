@@ -18,8 +18,9 @@ const (
 	appAttribute    = "app"
 	appAttributeVal = "oma-ring"
 
-	secretServiceName = "org.freedesktop.secrets"
-	itemInterface     = "org.freedesktop.Secret.Item"
+	secretServiceName  = "org.freedesktop.secrets"
+	collectionInterface = "org.freedesktop.Secret.Collection"
+	itemInterface      = "org.freedesktop.Secret.Item"
 )
 
 // Item is metadata for a stored secret. It intentionally does not include the
@@ -54,6 +55,9 @@ func keyringReachable() error {
 	collection := svc.GetLoginCollection()
 	if collection == nil {
 		return keyringError(errors.New("no login collection"))
+	}
+	if _, err := collection.GetProperty(collectionInterface + ".Label"); err != nil {
+		return keyringError(fmt.Errorf("login collection not reachable: %w", err))
 	}
 	return nil
 }
@@ -105,18 +109,20 @@ func Set(service, account, secret string) error {
 	}
 	defer svc.Close(session)
 
-	// Remove any existing item so Set is idempotent.
-	if p, err := findItem(svc, collection, service, account); err == nil {
-		_ = svc.Delete(p)
-	}
-
 	attributes := map[string]string{
 		appAttribute: appAttributeVal,
 		"service":    service,
 		"account":    account,
 	}
 	label := fmt.Sprintf("OmaSeal: %s / %s", service, account)
-	return svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret))
+
+	// CreateItem is called with replace=true, so an existing item with the same
+	// attributes is updated in place. If CreateItem fails, the previous secret
+	// is left untouched.
+	if err := svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret)); err != nil {
+		return keyringError(err)
+	}
+	return nil
 }
 
 // Get retrieves the secret for service and account.

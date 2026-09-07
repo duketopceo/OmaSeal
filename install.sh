@@ -31,6 +31,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}"
+OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
+
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)
@@ -81,10 +84,24 @@ curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
 
 if command -v gpg >/dev/null 2>&1; then
   if curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" 2>/dev/null; then
-    if gpg --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" 2>/dev/null; then
-      echo "GPG signature verified."
+    if [ -z "$OMASEAL_SIGNING_FINGERPRINT" ]; then
+      echo "A GPG signature is present, but OMASEAL_SIGNING_FINGERPRINT is not set." >&2
+      echo "Set it to the release signing key fingerprint before trusting a signature." >&2
+      exit 1
+    fi
+    GNUPGHOME="$TMPDIR/omaseal-gnupg"
+    mkdir -p "$GNUPGHOME"
+    chmod 700 "$GNUPGHOME"
+    export GNUPGHOME
+    KEYRING="$TMPDIR/omaseal.gpg"
+    if ! gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --keyserver "$OMASEAL_KEYSERVER" --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1; then
+      echo "Unable to fetch the OmaSeal release signing key from ${OMASEAL_KEYSERVER}." >&2
+      exit 1
+    fi
+    if gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" >/dev/null 2>&1; then
+      echo "GPG signature verified (fingerprint: $OMASEAL_SIGNING_FINGERPRINT)."
     else
-      echo "GPG signature verification failed." >&2
+      echo "GPG signature verification failed: signature is not from the pinned OmaSeal signer." >&2
       exit 1
     fi
   fi

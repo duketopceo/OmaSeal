@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -189,7 +190,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		v, err := Resolve(a.Service, a.Account, true, false)
+		v, err := Resolve(context.Background(), a.Service, a.Account, true, false)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}

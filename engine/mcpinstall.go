@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,10 +26,6 @@ var mcpAgentConfig = map[string]struct {
 // canonical agents only; aliases share the same directory and should not
 // be double-written by install-all.
 var mcpCanonicalAgents = []string{"claude", "codex", "cursor", "devin", "agy", "hermes"}
-
-type mcpConfig struct {
-	MCPServers map[string]interface{} `json:"mcpServers"`
-}
 
 func handleMCPInstall() {
 	if len(os.Args) < 4 {
@@ -134,20 +131,41 @@ func installMCP(agent, dir string) (string, error) {
 	}
 
 	configPath := filepath.Join(agentDir, meta.file)
-	var cfg mcpConfig
+
+	// Preserve every top-level key we do not recognize (e.g. agent-specific
+	// settings). Surface JSON parse errors instead of silently overwriting.
+	rawConfig := map[string]json.RawMessage{}
 	if data, err := os.ReadFile(configPath); err == nil {
-		_ = json.Unmarshal(data, &cfg)
+		if len(bytes.TrimSpace(data)) > 0 {
+			if err := json.Unmarshal(data, &rawConfig); err != nil {
+				return "", fmt.Errorf("parse %s: %w", configPath, err)
+			}
+		}
 	}
-	if cfg.MCPServers == nil {
-		cfg.MCPServers = map[string]interface{}{}
+
+	servers := map[string]interface{}{}
+	if raw, ok := rawConfig["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return "", fmt.Errorf("parse %s mcpServers: %w", configPath, err)
+		}
 	}
-	cfg.MCPServers["omaseal"] = map[string]interface{}{
+	servers["omaseal"] = map[string]interface{}{
 		"type":    "stdio",
 		"command": self,
 		"args":    []string{"mcp"},
 	}
+	rawConfig["mcpServers"] = mustRawJSON(servers)
 
-	b, err := json.MarshalIndent(cfg, "", "  ")
+	out := map[string]interface{}{}
+	for k, v := range rawConfig {
+		if k == "mcpServers" {
+			out[k] = servers
+		} else {
+			out[k] = v
+		}
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal mcp config: %w", err)
 	}
@@ -155,4 +173,12 @@ func installMCP(agent, dir string) (string, error) {
 		return "", fmt.Errorf("write %s: %w", configPath, err)
 	}
 	return configPath, nil
+}
+
+func mustRawJSON(v interface{}) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(b)
 }
