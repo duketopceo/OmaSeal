@@ -14,7 +14,11 @@ System
 
 ## Tags
 
-keyring, secrets, security, 1password, bitwarden, mcp
+Security, Bar, Quickshell
+
+## Suggest a missing tag
+
+keyring
 
 ## Maintainer notes
 
