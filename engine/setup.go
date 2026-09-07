@@ -22,11 +22,6 @@ func runSetup() {
 	fmt.Fprintf(os.Stderr, "Run `omarchy-restart-shell` after enabling.\n")
 
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "=== BrowserOS / Omarchy apps ===")
-	fmt.Fprintf(os.Stderr, "BrowserOS resolves `omaseal://browseros/<provider>/<field>` references.\n")
-	fmt.Fprintf(os.Stderr, "Store provider API keys with the \"Store credentials in OmaSeal\" checkbox.\n")
-
-	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Agent MCP clients ===")
 	if isStdinTTY() {
 		reader := bufio.NewReader(os.Stdin)
@@ -59,9 +54,10 @@ func runSetup() {
 
 	bin, err := os.Executable()
 	if err != nil {
-		bin = "omaseal"
+		fmt.Fprintln(os.Stderr, "Cannot locate the running binary. Run `omaseal doctor` after installation.")
+	} else {
+		fmt.Fprintf(os.Stderr, "  export PATH=\"%s:$PATH\"\n", filepath.Dir(bin))
 	}
-	fmt.Fprintf(os.Stderr, "  export PATH=\"%s:$PATH\"\n", filepath.Dir(bin))
 
 	if runtime.GOOS == "linux" {
 		if _, err := exec.LookPath("fprintd-verify"); err == nil {

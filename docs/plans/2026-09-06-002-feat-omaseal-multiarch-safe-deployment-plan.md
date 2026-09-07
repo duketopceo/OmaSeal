@@ -47,7 +47,7 @@ Right now `omaseal` is built by hand with `go build` and copied into `~/.local/b
 ## Requirements
 
 ### R1. Multi-arch builds
-The project must produce a `linux/amd64` and `linux/arm64` static binary from a single `make build` or `go build` invocation.
+`make build` produces a static `linux/amd64` or `linux/arm64` binary for the host architecture. `make build-all` produces both `linux/amd64` and `linux/arm64` static binaries in a single invocation.
 
 ### R2. Verifiable releases
 Every release publishes:

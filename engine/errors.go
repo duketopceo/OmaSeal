@@ -29,7 +29,7 @@ func codeFromError(err error) string {
 	if errors.As(err, &oerr) {
 		return oerr.code
 	}
-	return ""
+	return "unknown_error"
 }
 
 func helpFromError(err error) string {
@@ -37,7 +37,7 @@ func helpFromError(err error) string {
 	if errors.As(err, &oerr) {
 		return oerr.help
 	}
-	return ""
+	return "omaseal doctor"
 }
 
 func printError(prefix string, err error) {

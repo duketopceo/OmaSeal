@@ -48,7 +48,19 @@ yay -S omaseal-bin
 From release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh | bash
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
+  aarch64) TAR=omaseal-linux-aarch64.tar.gz ;;
+  *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+esac
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/$TAR"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt.asc"
+sha256sum -c --ignore-missing sha256sums.txt
+gpg --verify sha256sums.txt.asc sha256sums.txt
+tar -xzf "$TAR"
+install -Dm755 omaseal-linux-"$ARCH"/omaseal ~/.local/bin/omaseal
 omarchy plugin add https://github.com/duketopceo/OmaSeal.git --enable
 ```
 

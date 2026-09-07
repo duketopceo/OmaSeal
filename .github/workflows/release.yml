@@ -12,7 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write   # actions/upload-artifact v4+ uses the Actions artifact API
+      # actions/upload-artifact v4+ authenticates via ACTIONS_RUNTIME_TOKEN,
+      # so no GITHUB_TOKEN write scope is required here.
     strategy:
       matrix:
         include:

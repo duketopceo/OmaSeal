@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+
+	"golang.org/x/term"
 )
 
 const appName = "omaseal"
@@ -35,7 +36,7 @@ Usage:
   omaseal setup                            onboarding guide and MCP config
 
 Examples:
-  printf 'sk-or-...' | omaseal set openrouter default
+  omaseal set openrouter default < secret.txt
   omaseal get openrouter default
   omaseal reveal openrouter default
   omaseal del openrouter default
@@ -271,12 +272,12 @@ func readSecret() (string, error) {
 	}
 
 	fmt.Fprint(os.Stderr, "Enter secret: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr) // ReadPassword does not echo the newline
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(line, "\n"), nil
+	return string(b), nil
 }
 
 func isStdinTTY() bool {

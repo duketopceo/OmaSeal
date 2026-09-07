@@ -11,8 +11,8 @@ GOARCH_aarch64 := arm64
 
 all: build
 
-build:
-	cd engine && CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o omaseal .
+# A single `make build` produces static linux/amd64 and linux/arm64 archives.
+build: build-all
 
 build-all: $(RELEASE_ARCHS)
 

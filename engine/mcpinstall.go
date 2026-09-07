@@ -139,12 +139,17 @@ func installMCP(agent, dir string) (string, error) {
 				return "", fmt.Errorf("parse %s: %w", configPath, err)
 			}
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read %s: %w", configPath, err)
 	}
 
 	servers := map[string]interface{}{}
-	if raw, ok := rawConfig["mcpServers"]; ok {
+	if raw, ok := rawConfig["mcpServers"]; ok && string(bytes.TrimSpace(raw)) != "null" {
 		if err := json.Unmarshal(raw, &servers); err != nil {
 			return "", fmt.Errorf("parse %s mcpServers: %w", configPath, err)
+		}
+		if servers == nil {
+			servers = map[string]interface{}{}
 		}
 	}
 	servers["omaseal"] = map[string]interface{}{

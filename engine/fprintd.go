@@ -73,7 +73,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	defer conn.Close()
 
 	var names []string
-	if err := conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+	if err := conn.BusObject().CallWithContext(verifyCtx, "org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
 		return nil
 	}
 	found := false
@@ -89,7 +89,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
-	if err := mgr.Call(fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
+	if err := mgr.CallWithContext(verifyCtx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
 		log.Printf("omaseal: fprintd not available, skipping biometric prompt (%v)", err)
 		return nil
 	}
@@ -98,25 +98,25 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	}
 
 	dev := conn.Object(fprintBusName, devicePath)
-	if err := dev.Call(fprintDeviceIface+".Claim", 0, "").Err; err != nil {
+	if err := dev.CallWithContext(verifyCtx, fprintDeviceIface+".Claim", 0, "").Err; err != nil {
 		return fmt.Errorf("fprintd Claim failed: %w", err)
 	}
-	defer dev.Call(fprintDeviceIface+".Release", 0)
+	defer dev.CallWithContext(context.Background(), fprintDeviceIface+".Release", 0)
 
 	matchRule := fmt.Sprintf("type='signal',interface='%s',member='VerifyStatus',path='%s'", fprintDeviceIface, devicePath)
-	if err := conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, matchRule).Err; err != nil {
+	if err := conn.BusObject().CallWithContext(verifyCtx, "org.freedesktop.DBus.AddMatch", 0, matchRule).Err; err != nil {
 		return fmt.Errorf("fprintd AddMatch failed: %w", err)
 	}
-	defer conn.BusObject().Call("org.freedesktop.DBus.RemoveMatch", 0, matchRule)
+	defer conn.BusObject().CallWithContext(context.Background(), "org.freedesktop.DBus.RemoveMatch", 0, matchRule)
 
 	ch := make(chan *dbus.Signal, 4)
 	conn.Signal(ch)
 	defer conn.RemoveSignal(ch)
 
-	if err := dev.Call(fprintDeviceIface+".VerifyStart", 0, "any").Err; err != nil {
+	if err := dev.CallWithContext(verifyCtx, fprintDeviceIface+".VerifyStart", 0, "any").Err; err != nil {
 		return fmt.Errorf("fprintd VerifyStart failed: %w", err)
 	}
-	defer dev.Call(fprintDeviceIface+".VerifyStop", 0)
+	defer dev.CallWithContext(context.Background(), fprintDeviceIface+".VerifyStop", 0)
 
 	for {
 		select {

@@ -9,6 +9,9 @@ license=('MIT')
 depends=('gnome-keyring' 'libsecret' 'fprintd')
 makedepends=('go')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v${pkgver}.tar.gz")
+# The source is the immutable git-tag tarball. The SHA-256 can only be computed
+# once the v${pkgver} tag is published; run `updpkgsums` after tagging each
+# release to pin the real hash. Do not publish this PKGBUILD with 'SKIP'.
 sha256sums=('SKIP')
 install=${pkgname}.install
 
@@ -22,8 +25,11 @@ build() {
 package() {
   cd "OmaSeal-${pkgver}"
   install -Dm755 "engine/omaseal" "${pkgdir}/usr/bin/omaseal"
-  install -Dm644 BarWidget.qml -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
-  install -Dm644 Panel.qml -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
-  install -Dm644 manifest.json -t "${pkgdir}/usr/share/omarchy/plugins/${pkgname}/"
+  # PluginRegistry scans ${OMARCHY_PATH}/shell/plugins (i.e. /usr/share/omarchy/shell/plugins)
+  # for first-party plugins; the directory must be the manifest ID.
+  local _plugindir="${pkgdir}/usr/share/omarchy/shell/plugins/io.github.duketopceo.omaseal"
+  install -Dm644 BarWidget.qml -t "${_plugindir}/"
+  install -Dm644 Panel.qml -t "${_plugindir}/"
+  install -Dm644 manifest.json -t "${_plugindir}/"
   install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}/"
 }

@@ -18,9 +18,9 @@ const (
 	appAttribute    = "app"
 	appAttributeVal = "oma-ring"
 
-	secretServiceName  = "org.freedesktop.secrets"
+	secretServiceName   = "org.freedesktop.secrets"
 	collectionInterface = "org.freedesktop.Secret.Collection"
-	itemInterface      = "org.freedesktop.Secret.Item"
+	itemInterface       = "org.freedesktop.Secret.Item"
 )
 
 // Item is metadata for a stored secret. It intentionally does not include the
@@ -173,7 +173,7 @@ func Delete(service, account string) error {
 	if err != nil {
 		return err
 	}
-	return svc.Delete(p)
+	return keyringError(svc.Delete(p))
 }
 
 // List returns metadata for all secrets stored by OmaSeal. If service is

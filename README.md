@@ -30,18 +30,25 @@ yay -S omaseal        # build from source
 yay -S omaseal-bin    # prebuilt multi-arch binary
 ```
 
-### From the install script
+### From a release tarball (verified)
+
+Download the tarball, checksums, and detached GPG signature for your
+architecture, then verify before installing:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh | bash
-```
-
-### From a release tarball
-
-```sh
-curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-x86_64.tar.gz
-tar -xzf omaseal-linux-x86_64.tar.gz
-install -Dm755 omaseal-linux-x86_64/omaseal ~/.local/bin/omaseal
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
+  aarch64) TAR=omaseal-linux-aarch64.tar.gz ;;
+  *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
+esac
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/$TAR"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt.asc"
+sha256sum -c --ignore-missing sha256sums.txt
+gpg --verify sha256sums.txt.asc sha256sums.txt
+tar -xzf "$TAR"
+install -Dm755 omaseal-linux-"$ARCH"/omaseal ~/.local/bin/omaseal
 ```
 
 ### Build from source
@@ -63,13 +70,13 @@ omaseal doctor    # check the environment
 omaseal setup     # print MCP / PATH / plugin config
 ```
 
-See [`docs/onboarding.md`](docs/onboarding.md) for wiring OmaSeal into agents, BrowserOS, and other Omarchy apps.
+See [`docs/onboarding.md`](docs/onboarding.md) for wiring OmaSeal into agents and other Omarchy apps.
 
 ## CLI
 
 ```sh
-# Store
-printf 'sk-or-...' | omaseal set openrouter default
+# Store (secret is read from a hidden prompt or a file; never pass it as an argument)
+omaseal set openrouter default
 
 # Retrieve (fast, local-only)
 omaseal get openrouter default
@@ -108,15 +115,15 @@ A `BarWidget` and `Panel` are included:
 - The copy button runs `reveal` and uses `wl-copy` with a 30-second clear.
 - `r` refreshes; `a` toggles the add form.
 
-## BrowserOS
+## BrowserOS (deferred)
 
-BrowserOS can store provider API keys in OmaSeal. Enable it per provider in
-**Settings → AI Providers** with the **Store credentials in OmaSeal** checkbox.
-The BrowserOS server keeps only an `omaseal://` reference and resolves the real
-secret just before each LLM request.
+BrowserOS integration is planned for a follow-up `omarchy-browser` PR and is not
+available in this release. When implemented, BrowserOS will be able to store
+provider API keys in OmaSeal, keep only an `omaseal://` reference, and resolve
+the real secret just before each outbound LLM request.
 
 See [`docs/integrations/browseros.md`](docs/integrations/browseros.md) for the
-service/account convention, migration steps, and troubleshooting.
+planned service/account convention and fail-closed troubleshooting guidance.
 
 ## Security model
 

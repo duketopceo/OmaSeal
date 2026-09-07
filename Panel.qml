@@ -23,6 +23,21 @@ Panel {
   property bool isAdding: false
   property int pendingDeleteIndex: -1
 
+  Component {
+    id: setProcComponent
+    Process {
+      stdinEnabled: true
+    }
+  }
+
+  Component {
+    id: copyProcComponent
+    Process {
+      stdinEnabled: true
+      command: ["wl-copy", "--sensitive", "--clear-after", "30"]
+    }
+  }
+
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
   readonly property color urgent: Color.urgent !== undefined ? Color.urgent : "#f38ba8"
@@ -88,11 +103,22 @@ Panel {
       return
     }
     root.notice = "Saving..."
-    setProc.command = ["omaseal", "set", service, account]
-    setProc.stdinEnabled = true
-    if (!setProc.running) setProc.running = true
-    setProc.write(secret)
-    setProc.stdinEnabled = false
+    var proc = setProcComponent.createObject(root)
+    proc.command = ["omaseal", "set", service, account]
+    proc.exited.connect(function(exitCode) {
+      if (exitCode === 0) {
+        root.notice = "Saved"
+        root.clearAddForm()
+        root.refresh()
+        root.statusChanged()
+      } else {
+        root.notice = "Save failed"
+      }
+      proc.destroy()
+    })
+    proc.running = true
+    proc.write(secret)
+    proc.stdinEnabled = false
   }
 
   function deleteSecret(index, service, account) {
@@ -152,11 +178,18 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        copyProc.stdinEnabled = true
-        if (!copyProc.running) copyProc.running = true
-        copyProc.write(text)
-        copyProc.stdinEnabled = false
-        root.notice = "Copied to clipboard (clears in 30s)"
+        var proc = copyProcComponent.createObject(root)
+        proc.exited.connect(function(exitCode) {
+          if (exitCode === 0) {
+            root.notice = "Copied to clipboard (clears in 30s)"
+          } else {
+            root.notice = "Copy failed"
+          }
+          proc.destroy()
+        })
+        proc.running = true
+        proc.write(text)
+        proc.stdinEnabled = false
       }
     }
     onExited: function(exitCode) {
@@ -164,11 +197,6 @@ Panel {
         root.notice = "Copy failed"
       }
     }
-  }
-
-  Process {
-    id: copyProc
-    command: ["wl-copy", "--sensitive", "--clear-after", "30"]
   }
 
   Process {
@@ -180,20 +208,6 @@ Panel {
         root.statusChanged()
       } else {
         root.notice = "Delete failed"
-      }
-    }
-  }
-
-  Process {
-    id: setProc
-    onExited: function(exitCode) {
-      if (exitCode === 0) {
-        root.notice = "Saved"
-        root.clearAddForm()
-        root.refresh()
-        root.statusChanged()
-      } else {
-        root.notice = "Save failed"
       }
     }
   }

@@ -66,8 +66,10 @@ The `BarWidget` runs `omaseal ping --json` on a timer. It does not access secret
 - `engine/main.go` (add `ping` subcommand)
 
 **Approach:**
-- `omaseal ping --json` checks: binary version, `gnome-keyring-daemon` process, `fprintd` service, `op`/`bw` presence, and `PATH`.
-- Output JSON: `{ "ok": false, "version": "dev", "commit": "...", "checks": [...], "help": "omaseal doctor" }`.
+- `omaseal ping --json` returns the version/commit and reports a small set of checks split into required and optional groups:
+  - **Required:** `gnome-keyring-daemon` (Secret Service) is reachable, and the `omaseal` binary is on `PATH`.
+  - **Optional:** `fprintd` service, `op` (1Password CLI), `bw` (Bitwarden CLI).
+- Output JSON: `{ "ok": false, "version": "dev", "commit": "...", "checks": [...], "degraded": false, "help": "omaseal doctor" }`. `ok` is true only when all required checks pass; optional failures set `degraded: true` and include a `help` command.
 - `omaseal doctor --json` prints the same JSON, but always returns the full checklist.
 - Use 2-second timeouts on all external commands to avoid hanging the probe.
 

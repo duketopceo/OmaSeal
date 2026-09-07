@@ -166,9 +166,10 @@ BrowserOS currently stores API keys, AWS credentials, and session tokens in its 
 1. Add `storeInKeyring?: boolean` to `UpsertProviderSchema`.
 2. In the `PUT /providers/:providerId` handler, if `storeInKeyring` is true and a credential field is non-empty and does not already start with `omaseal://`:
    - Compute `service = browseros`, `account = <providerId>/<field>`.
-   - Spawn `printf '%s' '<value>' | omaseal set <service> <account>` (never pass the secret as a CLI argument).
+   - Spawn `omaseal set <service> <account>` and write the credential value directly to the child process stdin (e.g. via `Bun.stdin` or a `ReadableStream`). Do not interpolate the secret into a shell command, pass it as a CLI argument, or invoke `sh -c`.
+   - Track each successful OmaSeal write. If a later field write fails, delete (best-effort rollback) the already-written OmaSeal entries before returning the error so the keyring does not contain orphaned credentials.
    - On success, replace the field value with `omaseal://browseros/<providerId>/<field>`.
-   - On failure, return `503 Service Unavailable` (or `400 Bad Request`) with a clear error and do not write anything.
+   - On failure, return `503 Service Unavailable` (or `400 Bad Request`) with a clear error and do not write the provider row or leave orphaned keyring entries.
 3. If `storeInKeyring` is false or the field is empty/undefined, keep the existing `providerStore` semantics (`withoutAbsentCredentials` preserves the stored value).
 4. `providerStore.upsert` stores the reference string in the existing text columns; `publicColumns` continues to expose only `hasApiKey` etc.
 
@@ -176,6 +177,7 @@ BrowserOS currently stores API keys, AWS credentials, and session tokens in its 
 - PUT with `storeInKeyring: true` and a real `apiKey` calls `omaseal set` and stores `omaseal://browseros/<id>/apiKey`.
 - PUT with `storeInKeyring: false` stores the plaintext key.
 - PUT with `storeInKeyring: true` but `omaseal` unavailable returns an error and does not touch the row.
+- A partial write (one field succeeds, a later field fails) rolls back the successful OmaSeal entries and does not update the provider row.
 - Public GET after an OmaSeal write returns `hasApiKey: true` and no secret.
 - `getWithCredentials` returns the reference; `resolveLLMConfig` (U2) resolves it for chat.
 
@@ -274,7 +276,7 @@ BrowserOS currently stores API keys, AWS credentials, and session tokens in its 
 ## Risks and Dependencies
 
 - **Runtime availability:** If `omaseal` is not on `PATH`, reads degrade to `null` (fail later in provider factory) and writes fail with `storeInKeyring: true`. Mitigated by U5 dev wiring and install docs.
-- **Bun `Bun.spawn` stdin handling:** `omaseal set` expects the secret on stdin. Use `printf '%s'` with no newline, or pipe through `Bun.stdin` / `ReadableStream`.
+- **Bun `Bun.spawn` stdin handling:** `omaseal set` expects the secret on stdin. Write the secret directly to the child process stdin (e.g. via `Bun.stdin` or a `ReadableStream`); do not interpolate it into a shell command.
 - **Secret logging:** Never log stdout, stderr, or command arguments. The resolver and writer must only log exit codes / spawn errors.
 - **UI state v1 limitation:** Without a `keySource` column, the extension cannot tell from a public read whether an existing key is OmaSeal-backed. The v1 checkbox defaults to unchecked on edit; a future schema change can improve this.
 - **Single-instance providers:** OAuth providers (`chatgpt-pro`, `github-copilot`, `qwen-code`) use server-side OAuth flows and do not pass through this keyring path. Defer.
@@ -283,7 +285,7 @@ BrowserOS currently stores API keys, AWS credentials, and session tokens in its 
 
 ## Verification Contract
 
-- `cd /home/lukedaduke/Documents/github/personal/OmaSeal/engine && go test ./...`
+- `cd engine && go test ./...` (run from the repository root)
 - `cd packages/browseros-agent && bun run lint && bun run typecheck && bun run test:main`
 - `cd packages/browseros-agent/apps/app && bun run typecheck && bun run test`
 - Manual end-to-end:

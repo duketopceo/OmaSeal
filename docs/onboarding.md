@@ -34,12 +34,15 @@ Add the MCP server to `~/.claude/mcp.json` or `~/.codex/mcp.json`:
 {
   "mcpServers": {
     "omaseal": {
-      "command": "/home/lukedaduke/.local/bin/omaseal",
+      "command": "</absolute/path/to/omaseal>",
       "args": ["mcp"]
     }
   }
 }
 ```
+
+Replace `</absolute/path/to/omaseal>` with the path to the installed binary
+(usually `~/.local/bin/omaseal` or `/usr/bin/omaseal`).
 
 Or let OmaSeal write the config for you:
 
@@ -57,7 +60,10 @@ Agents should:
 
 ## For BrowserOS and Omarchy apps
 
-BrowserOS stores provider API keys as `omaseal://browseros/<provider>/<field>` references. The real secret is resolved server-side just before each LLM request. Enable it per provider in **Settings → AI Providers** with the **Store credentials in OmaSeal** checkbox.
+BrowserOS integration is planned: it will store provider API keys as
+`omaseal://browseros/<provider>/<field>` references and resolve the real secret
+server-side before each outbound LLM request. It is not shipped in this
+release.
 
 Other apps can use the CLI or the JSON IPC surface:
 

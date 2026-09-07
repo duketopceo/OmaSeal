@@ -205,7 +205,8 @@ func checkBitwarden() checkResult {
 		name: "bitwarden (bw)",
 		ok:   false,
 		message: "`bw` CLI found but `BW_SESSION` is not set.\n" +
-			"  - Run `bw login` and `export BW_SESSION=...` to enable `omaseal resolve` / `import bitwarden`.",
+			"  - Run `bw login`, then use a command-scoped session:\n" +
+			"    `BW_SESSION=\"$(bw unlock --raw)\" omaseal resolve <service> <account>` or `omaseal import bitwarden`.",
 	}
 }
 
@@ -221,8 +222,8 @@ func checkPath() checkResult {
 		}
 	}
 	return checkResult{
-		name: "PATH",
-		ok:   false,
+		name:    "PATH",
+		ok:      false,
 		message: fmt.Sprintf("`%s` is not on your PATH.\n  - Add `export PATH=\"%s:$PATH\"` to your shell profile.", dir, dir),
 	}
 }

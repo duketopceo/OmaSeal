@@ -358,10 +358,13 @@ sequenceDiagram
 **Approach:**
 - When a provider's `api_key` is empty or set to `"omaseal:<service>:<account>"`, `dayflow` calls `omaseal get <service> <account>`.
 - Document the attribute convention: `service=dayflow`, `account=<provider-id>`.
-- Document migration: write the key to a temporary file, store it under the provider ID through stdin, then remove the file:
+- Document migration without staging the secret in an unprotected temporary file. Prefer to pipe the key directly from a secure source (for example, Dayflow's own secret handling) into `omaseal set`. If a temporary file is unavoidable, create it with `chmod 600` and a `trap` that removes it on exit, interruption, or termination:
   ```sh
-  omaseal set dayflow openrouter < /path/to/openrouter_key.txt
-  rm /path/to/openrouter_key.txt
+  tmp=$(mktemp)
+  chmod 600 "$tmp"
+  trap 'rm -f "$tmp"' EXIT INT TERM
+  # populate $tmp from the existing Dayflow secret source without passing the value on a command line
+  omaseal set dayflow openrouter < "$tmp"
   dayflow config set openrouter_api_key ""
   ```
 - Keep `dayflow` fallback: if `omaseal` is unavailable, fall back to `config.json` or fail cleanly.

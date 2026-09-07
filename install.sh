@@ -17,6 +17,10 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --prefix)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --prefix requires a directory argument" >&2
+        usage
+      fi
       PREFIX="$2"
       BIN_DIR="${PREFIX}/bin"
       shift 2

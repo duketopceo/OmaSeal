@@ -21,8 +21,14 @@ BarWidget {
   function toggle() { if (panelItem) panelItem.toggle() }
   function closeForPopoutSwitch() { if (panelItem) panelItem.closeForPopoutSwitch() }
 
+  property bool refreshPending: false
+
   function refresh() {
-    if (!countProc.running) countProc.running = true
+    if (countProc.running) {
+      refreshPending = true
+    } else {
+      countProc.running = true
+    }
   }
 
   function applyCount(raw) {
@@ -31,6 +37,13 @@ BarWidget {
       root.secretCount = d.length
     } catch (e) {
       root.secretCount = 0
+    }
+  }
+
+  function processRefreshQueue() {
+    if (refreshPending && !countProc.running) {
+      refreshPending = false
+      countProc.running = true
     }
   }
 
@@ -72,8 +85,12 @@ BarWidget {
     command: ["omaseal", "list", "--json"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.applyCount(text)
+      onStreamFinished: {
+        root.applyCount(text)
+        root.processRefreshQueue()
+      }
     }
+    onExited: function(exitCode) { root.processRefreshQueue() }
   }
 
   Connections {

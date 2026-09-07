@@ -74,7 +74,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		return secret, nil
 	}
 
-	return "", fmt.Errorf("no secret found for %s/%s", service, account)
+	return "", newError("not_found", "omaseal set", fmt.Errorf("no secret found for %s/%s", service, account))
 }
 
 // ImportOnePassword lists all 1Password items in the default vault and stores
@@ -122,8 +122,65 @@ func newOnePasswordProvider(ctx context.Context) (*onePasswordProvider, bool) {
 	return &onePasswordProvider{}, true
 }
 
+// errNoSecretField is a sentinel for items that exist but carry no
+// credential/password field; imports skip these without failing.
+var errNoSecretField = errors.New("op: no secret field found")
+
 func (p *onePasswordProvider) Get(ctx context.Context, service, account string) (string, error) {
-	return p.getItem(ctx, service, account)
+	id, err := p.findItemID(ctx, service, account)
+	if err != nil {
+		return "", err
+	}
+	return p.getItem(ctx, id, account)
+}
+
+// findItemID resolves a service title to a unique item ID. `op item get`
+// accepts titles, which is ambiguous when several items share a name, so the
+// title is resolved to an ID through `op item list` first.
+func (p *onePasswordProvider) findItemID(ctx context.Context, title, account string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
+	defer cancel()
+
+	args := []string{"item", "list", "--format=json"}
+	if p.vault != "" {
+		args = append(args, "--vault", p.vault)
+	}
+	out, err := exec.CommandContext(cctx, "op", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("op: %w", err)
+	}
+
+	var items []struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(out, &items); err != nil {
+		return "", err
+	}
+
+	var matches []string
+	for _, it := range items {
+		if strings.EqualFold(it.Title, title) {
+			matches = append(matches, it.ID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("op: no item titled %q", title)
+	case 1:
+		return matches[0], nil
+	}
+
+	// Disambiguate duplicate titles by username when an account is given.
+	if account != "" && account != "default" {
+		for _, id := range matches {
+			u, err := p.getUsername(ctx, id)
+			if err == nil && strings.EqualFold(u, account) {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("op: %d items titled %q; specify an account or use a unique title", len(matches), title)
 }
 
 func (p *onePasswordProvider) getItem(ctx context.Context, id, account string) (string, error) {
@@ -162,7 +219,7 @@ func (p *onePasswordProvider) getItem(ctx context.Context, id, account string) (
 	}
 
 	if secret == "" {
-		return "", errors.New("op: no secret field found")
+		return "", errNoSecretField
 	}
 	if account != "" && account != "default" && username != "" && !strings.EqualFold(username, account) {
 		return "", errors.New("op: username mismatch")
@@ -210,9 +267,23 @@ func (p *onePasswordProvider) Import(ctx context.Context) error {
 	for _, it := range items {
 		secret, err := p.getItem(ctx, it.ID, "")
 		if err != nil {
+			// Skip items that simply carry no credential; keep the first
+			// real lookup or parse failure to report after the loop.
+			if errors.Is(err, errNoSecretField) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
-		username, _ := p.getUsername(ctx, it.ID)
+		username, err := p.getUsername(ctx, it.ID)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("op: username lookup for %q: %w", it.Title, err)
+			}
+			continue
+		}
 		account := username
 		if account == "" {
 			account = "default"
