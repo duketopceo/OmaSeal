@@ -1,0 +1,33 @@
+# Maintainer: Luke Kimball <kimballluke@gmail.com>
+pkgname=omaseal-bin
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="First-party Omarchy keyring manager (prebuilt binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/duketopceo/OmaSeal"
+license=('MIT')
+depends=('gnome-keyring' 'libsecret' 'fprintd')
+# These names match the tarballs published by .github/workflows/release.yml
+# (omaseal-linux-x86_64.tar.gz / omaseal-linux-aarch64.tar.gz).
+source_x86_64=("omaseal-linux-x86_64-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-x86_64.tar.gz")
+source_aarch64=("omaseal-linux-aarch64-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-aarch64.tar.gz")
+# Release archives are built in CI, so hashes cannot be known before the release
+# is published. Run `updpkgsums` after each release to pin the real SHA-256
+# values. Do not publish this PKGBUILD with 'SKIP'.
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+install=${pkgname}.install
+
+package() {
+  # The release tarball extracts to omaseal-linux-<arch>/ containing the binary
+  # and plugin assets; enter it before installing.
+  cd "omaseal-linux-${CARCH}"
+  install -Dm755 omaseal "${pkgdir}/usr/bin/omaseal"
+  # PluginRegistry scans ${OMARCHY_PATH}/shell/plugins (i.e. /usr/share/omarchy/shell/plugins)
+  # for first-party plugins; the directory must be the manifest ID.
+  local _plugindir="${pkgdir}/usr/share/omarchy/shell/plugins/io.github.duketopceo.omaseal"
+  install -Dm644 BarWidget.qml -t "${_plugindir}/"
+  install -Dm644 Panel.qml -t "${_plugindir}/"
+  install -Dm644 manifest.json -t "${_plugindir}/"
+  install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}/"
+}

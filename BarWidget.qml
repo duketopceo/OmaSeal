@@ -1,25 +1,65 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Ui
+import qs.Commons
 
 BarWidget {
   id: root
-  moduleName: "io.github.duketopceo.oma-ring"
+  moduleName: "io.github.duketopceo.omaseal"
 
-  property bool available: true
   property int secretCount: 0
 
-  visible: available
+  readonly property var panelItem: panelLoader.item
+  readonly property bool opened: panelItem ? panelItem.opened === true : false
+  readonly property bool popoutSwitchClosing: panelItem
+    ? panelItem.popoutSwitchClosing === true
+    : false
+
+  function open() { if (panelItem) panelItem.open() }
+  function close() { if (panelItem) panelItem.close() }
+  function toggle() { if (panelItem) panelItem.toggle() }
+  function closeForPopoutSwitch() { if (panelItem) panelItem.closeForPopoutSwitch() }
+
+  property bool refreshPending: false
+
+  function refresh() {
+    if (countProc.running) {
+      refreshPending = true
+    } else {
+      countProc.running = true
+    }
+  }
+
+  function applyCount(raw) {
+    try {
+      var d = JSON.parse(raw)
+      root.secretCount = d.length
+    } catch (e) {
+      root.secretCount = 0
+    }
+  }
+
+  function processRefreshQueue() {
+    if (refreshPending && !countProc.running) {
+      refreshPending = false
+      countProc.running = true
+    }
+  }
+
+  function injectPanel() {
+    if (!panelItem) return
+    if ("bar" in panelItem) panelItem.bar = root.bar
+    if ("settings" in panelItem) panelItem.settings = root.settings
+    if ("anchorItem" in panelItem) panelItem.anchorItem = button
+    if ("hostWidget" in panelItem) panelItem.hostWidget = root
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function open() {
-    if (panelLoader.item) panelLoader.item.open()
-  }
-
-  function toggle() {
-    if (panelLoader.item) panelLoader.item.toggle()
-  }
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
 
   Loader {
     id: panelLoader
@@ -27,20 +67,44 @@ BarWidget {
     source: Qt.resolvedUrl("Panel.qml")
     visible: false
     onLoaded: {
-      if (item) {
-        item.bar = root.bar
-        item.anchorItem = button
-        item.hostWidget = root
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
+    }
+  }
+
+  Timer {
+    interval: 30000
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.refresh()
+  }
+
+  Process {
+    id: countProc
+    command: ["omaseal", "list", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.applyCount(text)
+        root.processRefreshQueue()
       }
     }
+    onExited: function(exitCode) { root.processRefreshQueue() }
+  }
+
+  Connections {
+    target: panelLoader.item
+    ignoreUnknownSignals: true
+    function onStatusChanged() { root.refresh() }
   }
 
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "O"
-    tooltipText: "Oma Ring — system keyring"
+    text: "󰌋" + (root.secretCount > 0 ? " " + root.secretCount : "")
+    tooltipText: "OmaSeal — " + root.secretCount + " secrets"
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()
     }

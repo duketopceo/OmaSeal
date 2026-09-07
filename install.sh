@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DRY_RUN=false
+PREFIX="${HOME}/.local"
+BIN_DIR="${PREFIX}/bin"
+
+usage() {
+  echo "Usage: $0 [--dry-run] [--prefix <dir>]"
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --prefix)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --prefix requires a directory argument" >&2
+        usage
+      fi
+      PREFIX="$2"
+      BIN_DIR="${PREFIX}/bin"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      ;;
+  esac
+done
+
+OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}"
+OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
+
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)
+    ARCH_NAME=x86_64
+    ;;
+  aarch64|arm64)
+    ARCH_NAME=aarch64
+    ;;
+  *)
+    echo "Unsupported architecture: $ARCH" >&2
+    exit 1
+    ;;
+esac
+
+TARBALL="omaseal-linux-${ARCH_NAME}.tar.gz"
+DOWNLOAD_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/${TARBALL}"
+SUMS_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt"
+SIG_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt.asc"
+
+echo "Downloading OmaSeal for ${ARCH_NAME}..."
+echo "  URL: ${DOWNLOAD_URL}"
+
+if [[ "$DRY_RUN" == true ]]; then
+  echo "[dry-run] Would download: ${TARBALL} and sha256sums.txt"
+  echo "[dry-run] Would extract ${TARBALL} -> ${BIN_DIR}/omaseal.new"
+  echo "[dry-run] Would run ${BIN_DIR}/omaseal.new --version"
+  echo "[dry-run] Would rename ${BIN_DIR}/omaseal -> ${BIN_DIR}/omaseal.previous"
+  echo "[dry-run] Would move ${BIN_DIR}/omaseal.new -> ${BIN_DIR}/omaseal"
+  exit 0
+fi
+
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+curl -fsSL -o "${TMPDIR}/${TARBALL}" "$DOWNLOAD_URL" || {
+  echo "Download failed: ${DOWNLOAD_URL}" >&2
+  exit 1
+}
+curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
+  echo "Checksum file not found: ${SUMS_URL}" >&2
+  exit 1
+}
+
+(cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
+  echo "Checksum verification failed." >&2
+  exit 1
+}
+
+if command -v gpg >/dev/null 2>&1; then
+  if curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" 2>/dev/null; then
+    if [ -z "$OMASEAL_SIGNING_FINGERPRINT" ]; then
+      echo "A GPG signature is present, but OMASEAL_SIGNING_FINGERPRINT is not set." >&2
+      echo "Set it to the release signing key fingerprint before trusting a signature." >&2
+      exit 1
+    fi
+    GNUPGHOME="$TMPDIR/omaseal-gnupg"
+    mkdir -p "$GNUPGHOME"
+    chmod 700 "$GNUPGHOME"
+    export GNUPGHOME
+    KEYRING="$TMPDIR/omaseal.gpg"
+    if ! gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --keyserver "$OMASEAL_KEYSERVER" --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1; then
+      echo "Unable to fetch the OmaSeal release signing key from ${OMASEAL_KEYSERVER}." >&2
+      exit 1
+    fi
+    if gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" >/dev/null 2>&1; then
+      echo "GPG signature verified (fingerprint: $OMASEAL_SIGNING_FINGERPRINT)."
+    else
+      echo "GPG signature verification failed: signature is not from the pinned OmaSeal signer." >&2
+      exit 1
+    fi
+  fi
+fi
+
+mkdir -p "$BIN_DIR"
+tar -xzf "${TMPDIR}/${TARBALL}" -C "$TMPDIR"
+
+NEW_BIN="${BIN_DIR}/omaseal.new"
+PREV_BIN="${BIN_DIR}/omaseal.previous"
+OLD_BIN="${BIN_DIR}/omaseal"
+
+cp "${TMPDIR}/omaseal-linux-${ARCH_NAME}/omaseal" "$NEW_BIN"
+chmod +x "$NEW_BIN"
+
+if ! "$NEW_BIN" --version >/dev/null; then
+  echo "New binary failed --version check. Aborting upgrade." >&2
+  rm -f "$NEW_BIN"
+  exit 1
+fi
+
+if [[ -f "$OLD_BIN" ]]; then
+  cp -f "$OLD_BIN" "$PREV_BIN"
+fi
+
+mv -f "$NEW_BIN" "$OLD_BIN"
+echo "OmaSeal installed to ${OLD_BIN}"
+echo "Previous binary kept at ${PREV_BIN} for rollback."
+
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
+  echo ""
+  echo "NOTE: ${BIN_DIR} is not on your PATH. Add it to your shell profile:"
+  echo "  export PATH=\"${BIN_DIR}:\$PATH\""
+fi

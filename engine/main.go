@@ -1,31 +1,50 @@
-// oma-ring — system keyring CLI for Omarchy.
-// Built on gnome-keyring / libsecret via zalando/go-keyring.
 package main
 
 import (
-	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 
-	"github.com/zalando/go-keyring"
+	"golang.org/x/term"
 )
 
-const appName = "oma-ring"
+const appName = "omaseal"
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `oma-ring — system keyring for Omarchy
+	fmt.Fprint(os.Stderr, `omaseal — system keyring for Omarchy
 
 Usage:
-  oma-ring set <service> <account>          store secret from stdin
-  oma-ring get <service> <account>          print stored secret
-  oma-ring del <service> <account>          delete stored secret
+  omaseal set <service> <account>          store secret from stdin
+  omaseal get <service> <account>          print stored secret
+  omaseal reveal <service> <account>       print secret after fprintd gate
+  omaseal del <service> <account>          delete stored secret
+  omaseal list [service] [--json]          list stored secrets
+  omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
+  omaseal import 1password [vault]         import all 1Password items
+  omaseal import bitwarden                 import all Bitwarden items
+  omaseal mcp                              start MCP stdio server
+  omaseal mcp install <claude|codex|cursor|devin|agy|hermes> [--dir <path>]
+                                           write mcp config for an agent
+  omaseal mcp install-all [path]            write mcp config for every known agent
+  omaseal ipc <method> <json-args>         JSON IPC for other plugins
+  omaseal ping                             health check (json with --json)
+  omaseal doctor                           check the environment and dependencies
+  omaseal setup                            onboarding guide and MCP config
 
 Examples:
-  printf 'sk-or-...' | oma-ring set openrouter default
-  oma-ring get openrouter default
-  oma-ring del openrouter default
+  omaseal set openrouter default < secret.txt
+  omaseal get openrouter default
+  omaseal reveal openrouter default
+  omaseal del openrouter default
+  omaseal list
+  omaseal resolve openrouter default
+  omaseal import 1password pace-dev
+  omaseal ipc ping '{}'
+  omaseal ipc get '{"service":"openrouter","account":"default"}'
 `)
 }
 
@@ -36,62 +55,210 @@ func main() {
 	}
 
 	cmd := os.Args[1]
-	args := os.Args[2:]
 
 	switch cmd {
+	case "version", "--version", "-v":
+		printVersion()
+		return
 	case "set":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
-		}
-		service, account := args[0], args[1]
-		secret, err := readSecret()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error reading secret:", err)
-			os.Exit(1)
-		}
-		if secret == "" {
-			fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
-			os.Exit(1)
-		}
-		if err := keyring.Set(service, account, secret); err != nil {
-			fmt.Fprintln(os.Stderr, "error storing secret:", err)
-			os.Exit(1)
-		}
-		fmt.Println("ok")
-
+		handleSet()
 	case "get":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
-		}
-		service, account := args[0], args[1]
-		secret, err := keyring.Get(service, account)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error retrieving secret:", err)
-			os.Exit(1)
-		}
-		fmt.Print(secret)
-
+		handleGet()
+	case "reveal":
+		handleReveal()
 	case "del", "delete":
-		if len(args) != 2 {
-			usage()
-			os.Exit(1)
+		handleDel()
+	case "list":
+		handleList()
+	case "resolve":
+		handleResolve()
+	case "import":
+		handleImport()
+	case "mcp":
+		if len(os.Args) >= 3 && os.Args[2] == "install" {
+			handleMCPInstall()
+		} else if len(os.Args) >= 3 && os.Args[2] == "install-all" {
+			handleMCPInstallAll()
+		} else {
+			runMCP()
 		}
-		service, account := args[0], args[1]
-		if err := keyring.Delete(service, account); err != nil {
-			fmt.Fprintln(os.Stderr, "error deleting secret:", err)
-			os.Exit(1)
-		}
-		fmt.Println("ok")
-
+	case "ipc":
+		handleIPC()
+	case "ping":
+		handlePing()
+	case "doctor":
+		handleDoctor()
+	case "setup":
+		runSetup()
 	case "help", "-h", "--help":
 		usage()
-
 	default:
 		usage()
 		os.Exit(1)
 	}
+}
+
+func handleSet() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	secret, err := readSecret()
+	if err != nil {
+		printError("reading secret: ", err)
+		os.Exit(1)
+	}
+	if secret == "" {
+		fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
+		os.Exit(1)
+	}
+	if err := Set(service, account, secret); err != nil {
+		printError("storing secret: ", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
+}
+
+func handleGet() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	secret, err := Get(service, account)
+	if err != nil {
+		printError("retrieving secret: ", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
+}
+
+func handleDel() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	service, account := os.Args[2], os.Args[3]
+	if err := Delete(service, account); err != nil {
+		printError("deleting secret: ", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
+}
+
+func handleList() {
+	jsonOut := hasFlag(os.Args, "--json")
+
+	var service string
+	serviceSet := false
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--json" {
+			continue
+		}
+		if strings.HasPrefix(os.Args[i], "-") {
+			fmt.Fprintln(os.Stderr, "error: unknown flag:", os.Args[i])
+			os.Exit(1)
+		}
+		if serviceSet {
+			fmt.Fprintln(os.Stderr, "error: list accepts at most one service argument")
+			os.Exit(1)
+		}
+		service = os.Args[i]
+		serviceSet = true
+	}
+
+	items, err := List(service)
+	if err != nil {
+		printError("listing secrets: ", err)
+		os.Exit(1)
+	}
+
+	if jsonOut {
+		b, _ := json.Marshal(items)
+		fmt.Println(string(b))
+		return
+	}
+
+	if len(items) == 0 {
+		fmt.Println("No secrets stored.")
+		return
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tACCOUNT\tLABEL")
+	for _, it := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", it.Service, it.Account, it.Label)
+	}
+	w.Flush()
+}
+
+func handleReveal() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", os.Args[2], os.Args[3])); err != nil {
+		printError("fingerprint gate: ", err)
+		os.Exit(1)
+	}
+	secret, err := Get(os.Args[2], os.Args[3])
+	if err != nil {
+		printError("getting secret: ", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
+}
+
+func handleIPC() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	method := os.Args[2]
+	jsonArgs := os.Args[3]
+	runIPC(method, jsonArgs)
+}
+
+func handleResolve() {
+	if len(os.Args) != 4 {
+		usage()
+		os.Exit(1)
+	}
+	secret, err := Resolve(context.Background(), os.Args[2], os.Args[3], true, true)
+	if err != nil {
+		printError("resolving secret: ", err)
+		os.Exit(1)
+	}
+	fmt.Print(secret)
+}
+
+func handleImport() {
+	if len(os.Args) < 3 {
+		usage()
+		os.Exit(1)
+	}
+	source := os.Args[2]
+	var err error
+	ctx := context.Background()
+	switch source {
+	case "1password", "op":
+		vault := ""
+		if len(os.Args) >= 4 {
+			vault = os.Args[3]
+		}
+		err = ImportOnePassword(ctx, vault)
+	case "bitwarden", "bw":
+		err = ImportBitwarden(ctx)
+	default:
+		usage()
+		os.Exit(1)
+	}
+	if err != nil {
+		printError("importing: ", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok")
 }
 
 // readSecret reads a secret from stdin without a trailing newline.
@@ -105,12 +272,12 @@ func readSecret() (string, error) {
 	}
 
 	fmt.Fprint(os.Stderr, "Enter secret: ")
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr) // ReadPassword does not echo the newline
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(line, "\n"), nil
+	return string(b), nil
 }
 
 func isStdinTTY() bool {
@@ -119,4 +286,13 @@ func isStdinTTY() bool {
 		return false
 	}
 	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args[1:] {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
