@@ -227,7 +227,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		var a struct {
 			Service string `json:"service"`
 		}
-		_ = json.Unmarshal(req.Arguments, &a)
+		if len(req.Arguments) > 0 {
+			if err := json.Unmarshal(req.Arguments, &a); err != nil {
+				return errResp(req, err)
+			}
+		}
 		items, err := List(a.Service)
 		if err != nil {
 			return toolErrorResp(req, err)

@@ -31,16 +31,22 @@ Dayflow's current `~/.config/dayflow/config.json` key (`openrouter_api_key`)
 should be migrated on first run:
 
 1. Read the current key.
-2. If not already in OmaSeal:
-   - `printf '<key>' | omaseal set openrouter default`
-3. Mask the key in `config.json` with a sentinel such as `<omaring:openrouter/default>`.
+2. If not already in OmaSeal, store it through stdin without putting it on the
+   command line:
+   ```sh
+   omaseal set openrouter default < /path/to/openrouter_api_key.txt
+   rm /path/to/openrouter_api_key.txt
+   ```
+   The key file should be removed immediately after import.
+3. Remove the plaintext key from `config.json` or replace it with a non-secret
+   sentinel such as `<omaseal:openrouter/default>` that Dayflow ignores.
 4. On every summarization call, resolve the key via `omaseal resolve`.
 
 ## Failure behavior
 
-If `omaseal resolve` fails and the user has not configured a fallback, Dayflow
-falls back to the old `config.json` value for one release cycle, then errors
-cleanly. No API key is ever embedded in process arguments or shell history.
+If `omaseal resolve` fails, Dayflow must error cleanly and not call the
+provider. Do not fall back to a plaintext copy in `config.json`. No API key is
+embedded in process arguments or shell history.
 
 ## Security notes
 

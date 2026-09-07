@@ -37,10 +37,10 @@ OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)
-    ARCH_NAME=amd64
+    ARCH_NAME=x86_64
     ;;
   aarch64|arm64)
-    ARCH_NAME=arm64
+    ARCH_NAME=aarch64
     ;;
   *)
     echo "Unsupported architecture: $ARCH" >&2

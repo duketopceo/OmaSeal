@@ -105,7 +105,7 @@ func handleSet() {
 	service, account := os.Args[2], os.Args[3]
 	secret, err := readSecret()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error reading secret:", err)
+		printError("reading secret: ", err)
 		os.Exit(1)
 	}
 	if secret == "" {
@@ -140,7 +140,7 @@ func handleDel() {
 	}
 	service, account := os.Args[2], os.Args[3]
 	if err := Delete(service, account); err != nil {
-		fmt.Fprintln(os.Stderr, "error deleting secret:", err)
+		printError("deleting secret: ", err)
 		os.Exit(1)
 	}
 	fmt.Println("ok")
@@ -156,7 +156,7 @@ func handleList() {
 			continue
 		}
 		if strings.HasPrefix(os.Args[i], "-") {
-			fmt.Fprintln(os.Stderr, "unknown flag:", os.Args[i])
+			fmt.Fprintln(os.Stderr, "error: unknown flag:", os.Args[i])
 			os.Exit(1)
 		}
 		if serviceSet {
@@ -169,7 +169,7 @@ func handleList() {
 
 	items, err := List(service)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error listing secrets:", err)
+		printError("listing secrets: ", err)
 		os.Exit(1)
 	}
 
@@ -198,12 +198,12 @@ func handleReveal() {
 		os.Exit(1)
 	}
 	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", os.Args[2], os.Args[3])); err != nil {
-		fmt.Fprintln(os.Stderr, "fingerprint gate:", err)
+		printError("fingerprint gate: ", err)
 		os.Exit(1)
 	}
 	secret, err := Get(os.Args[2], os.Args[3])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error getting secret:", err)
+		printError("getting secret: ", err)
 		os.Exit(1)
 	}
 	fmt.Print(secret)
@@ -226,7 +226,7 @@ func handleResolve() {
 	}
 	secret, err := Resolve(context.Background(), os.Args[2], os.Args[3], true, true)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error resolving secret:", err)
+		printError("resolving secret: ", err)
 		os.Exit(1)
 	}
 	fmt.Print(secret)
@@ -254,7 +254,7 @@ func handleImport() {
 		os.Exit(1)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error importing:", err)
+		printError("importing: ", err)
 		os.Exit(1)
 	}
 	fmt.Println("ok")

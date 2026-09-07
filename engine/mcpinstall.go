@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var mcpAgentConfig = map[string]struct {
@@ -34,28 +35,28 @@ func handleMCPInstall() {
 	}
 
 	agent := os.Args[3]
-	fs := flag.NewFlagSet("mcp-install", flag.ExitOnError)
+	fs := flag.NewFlagSet("mcp-install", flag.ContinueOnError)
 	dir := fs.String("dir", "", "Install .<agent>/mcp.json in this directory instead of the home directory")
 	if err := fs.Parse(os.Args[4:]); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		printError("install: ", err)
 		mcpInstallUsage()
 		os.Exit(1)
 	}
 
 	installedPath, err := installMCP(agent, *dir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		printError("install: ", err)
 		os.Exit(1)
 	}
 	fmt.Printf("OmaSeal MCP installed for %s at %s.\n", agent, installedPath)
 }
 
 func handleMCPInstallAll() {
-	fs := flag.NewFlagSet("mcp-install-all", flag.ExitOnError)
+	fs := flag.NewFlagSet("mcp-install-all", flag.ContinueOnError)
 	dir := fs.String("dir", "", "Install .<agent>/mcp.json directories in this path instead of the home directory")
 	// accept positional path too: `mcp install-all [path]`
 	if err := fs.Parse(os.Args[3:]); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		printError("install-all: ", err)
 		mcpInstallAllUsage()
 		os.Exit(1)
 	}
@@ -79,10 +80,7 @@ func handleMCPInstallAll() {
 		fmt.Println("installed:", p)
 	}
 	if len(errs) > 0 {
-		fmt.Fprintln(os.Stderr, "errors:")
-		for _, e := range errs {
-			fmt.Fprintln(os.Stderr, " -", e)
-		}
+		printError("install-all: ", errors.New(strings.Join(errs, "; ")))
 		os.Exit(1)
 	}
 }

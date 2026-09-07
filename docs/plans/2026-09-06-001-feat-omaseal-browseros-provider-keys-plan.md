@@ -99,18 +99,19 @@ BrowserOS currently stores API keys, AWS credentials, and session tokens in its 
 - `packages/browseros-agent/apps/server/tests/lib/secrets/omaseal.test.ts` (new)
 
 **Approach:**
-1. Export `resolveOmaseal(service: string, account: string, opts?: { timeoutMs?: number }): Promise<string | null>`.
+1. Export `resolveOmaseal(service: string, account: string, opts?: { timeoutMs?: number }): Promise<string | null>` with a default `timeoutMs` of 30 seconds.
 2. Spawn `omaseal resolve <service> <account>` with `Bun.spawn` or `child_process`, capturing stdout.
 3. If the binary is missing, exit code is non-zero, or stdout is empty, return `null` and log only the exit code / error message (never stdout/stderr).
-4. Trim the resolved secret before returning.
-5. Optionally expose `isOmasealAvailable(): Promise<boolean>` by probing `which omaseal` / `command -v omaseal` so callers can fail fast.
+4. On timeout, terminate the `omaseal` child process, await its exit, and close stdout/stderr pipes on every path.
+5. Preserve arbitrary leading and trailing whitespace from the resolved secret. Remove only the single trailing newline that `omaseal` appends for line-based shell output, if present.
+6. Optionally expose `isOmasealAvailable(): Promise<boolean>` by probing `which omaseal` / `command -v omaseal` so callers can fail fast.
 
 **Test scenarios:**
-- Happy path: resolver returns the trimmed secret from `omaseal` stdout.
+- Happy path: resolver returns the secret from `omaseal` stdout, preserving internal and trailing whitespace except the single trailing newline added by the CLI.
 - Missing binary: returns `null` and logs a single diagnostic.
 - Non-zero exit code: returns `null`.
 - Empty stdout: returns `null`.
-- Timeout: returns `null` without leaking the process.
+- Timeout: returns `null`, the child process is terminated, and no pipes leak.
 
 **Verification:** `cd packages/browseros-agent/apps/server && bun test lib/secrets/omaseal` passes with mocked `Bun.spawn`.
 

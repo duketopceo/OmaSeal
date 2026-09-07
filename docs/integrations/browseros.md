@@ -60,7 +60,7 @@ omaseal resolve browseros openrouter-work/apiKey
 ## Troubleshooting
 
 - **"Failed to store credentials in OmaSeal"** — the server could not find or execute `omaseal`. Verify it is installed and on `PATH`, or set `OMASEAL_PATH` to the binary.
-- **Chat fails after enabling** — `resolveLLMConfig` resolves references before the outbound request. If resolution fails, the request continues with the reference string and the provider returns an authentication error. Check `omaseal list` and ensure the secret exists.
+- **Chat fails after enabling** — `resolveLLMConfig` resolves references before the outbound request. If resolution fails, the request is aborted and a local configuration error is returned before contacting the provider. Check `omaseal list` and ensure the secret exists.
 - **UI does not show the checkbox** — it is hidden for OAuth and other credentialless providers.
 
 ## Deferred work

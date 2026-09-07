@@ -41,10 +41,12 @@ func helpFromError(err error) string {
 }
 
 func printError(prefix string, err error) {
+	code := "unknown_error"
+	help := "omaseal doctor"
 	var oerr *omasealError
 	if errors.As(err, &oerr) {
-		fmt.Fprintf(os.Stderr, "error: %s (code: %s, help: %s)\n", prefix+err.Error(), oerr.code, oerr.help)
-		return
+		code = oerr.code
+		help = oerr.help
 	}
-	fmt.Fprintln(os.Stderr, "error:", prefix+err.Error())
+	fmt.Fprintf(os.Stderr, "error: %s (code: %s, help: %s)\n", prefix+err.Error(), code, help)
 }

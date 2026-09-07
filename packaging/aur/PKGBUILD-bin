@@ -11,6 +11,7 @@ source_x86_64=("https://github.com/duketopceo/OmaSeal/releases/download/v${pkgve
 source_aarch64=("https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-aarch64.tar.gz")
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
+# Update sha256sums with `updpkgsums` after publishing the release.
 install=${pkgname}.install
 
 package() {

@@ -12,10 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write   # actions/upload-artifact v4+ uses the actions API
+      actions: write   # actions/upload-artifact v4+ uses the Actions artifact API
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - goarch: amd64
+            release_name: x86_64
+          - goarch: arm64
+            release_name: aarch64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -23,21 +27,21 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: engine/go.mod
-      - name: Build linux/${{ matrix.arch }}
+      - name: Build linux/${{ matrix.goarch }} (${{ matrix.release_name }})
         run: |
-          mkdir -p dist/omaseal-linux-${{ matrix.arch }}
+          mkdir -p dist/omaseal-linux-${{ matrix.release_name }}
           cd engine
-          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build \
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build \
             -ldflags "-X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA::7}" \
             -o omaseal .
           cd ..
-          cp engine/omaseal dist/omaseal-linux-${{ matrix.arch }}/omaseal
-          cp BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/omaseal-linux-${{ matrix.arch }}/
-          tar -czf dist/omaseal-linux-${{ matrix.arch }}.tar.gz -C dist omaseal-linux-${{ matrix.arch }}
+          cp engine/omaseal dist/omaseal-linux-${{ matrix.release_name }}/omaseal
+          cp BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/omaseal-linux-${{ matrix.release_name }}/
+          tar -czf dist/omaseal-linux-${{ matrix.release_name }}.tar.gz -C dist omaseal-linux-${{ matrix.release_name }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: omaseal-linux-${{ matrix.arch }}
-          path: dist/omaseal-linux-${{ matrix.arch }}.tar.gz
+          name: omaseal-linux-${{ matrix.release_name }}
+          path: dist/omaseal-linux-${{ matrix.release_name }}.tar.gz
 
   release:
     needs: build
@@ -58,11 +62,18 @@ jobs:
           cd dist
           sha256sum *.tar.gz > sha256sums.txt
       - name: Sign checksums
-        if: env.GPG_KEY_ID != ''
         env:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
+          if [ -z "$GPG_KEY_ID" ]; then
+            echo "GPG_KEY_ID secret is required for signed releases." >&2
+            exit 1
+          fi
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "GPG_PRIVATE_KEY secret is required for signed releases." >&2
+            exit 1
+          fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           cd dist
           gpg --batch --yes --armor --detach-sign --default-key "$GPG_KEY_ID" -o sha256sums.txt.asc sha256sums.txt

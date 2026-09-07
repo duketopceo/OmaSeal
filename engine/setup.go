@@ -1,12 +1,13 @@
 package main
 
 import (
-	"encoding/json"
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 func runSetup() {
@@ -14,11 +15,6 @@ func runSetup() {
 	results := doctorChecks()
 	printDoctorResults(results)
 	fmt.Fprintln(os.Stderr, "")
-
-	bin, err := os.Executable()
-	if err != nil {
-		bin = "omaseal"
-	}
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Omarchy / Quickshell ===")
@@ -30,23 +26,41 @@ func runSetup() {
 	fmt.Fprintf(os.Stderr, "BrowserOS resolves `omaseal://browseros/<provider>/<field>` references.\n")
 	fmt.Fprintf(os.Stderr, "Store provider API keys with the \"Store credentials in OmaSeal\" checkbox.\n")
 
-	mcp := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"omaseal": map[string]interface{}{
-				"command": bin,
-				"args":    []string{"mcp"},
-			},
-		},
-	}
-	b, _ := json.MarshalIndent(mcp, "", "  ")
-
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "=== Claude / Codex / MCP clients ===")
-	fmt.Fprintf(os.Stderr, "Add this to your MCP config (e.g. `~/.claude/mcp.json` or `~/.codex/mcp.json`):\n%s\n", string(b))
+	fmt.Fprintln(os.Stderr, "=== Agent MCP clients ===")
+	if isStdinTTY() {
+		reader := bufio.NewReader(os.Stdin)
+		for _, agent := range mcpCanonicalAgents {
+			fmt.Fprintf(os.Stderr, "Install MCP config for %s? [y/N] ", agent)
+			text, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  could not read response: %v\n", err)
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(text)) != "y" {
+				continue
+			}
+			path, err := installMCP(agent, "")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  error installing %s: %v\n", agent, err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "  installed: %s\n", path)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Run `omaseal mcp install <agent>` for each agent you want to enable.")
+		fmt.Fprintln(os.Stderr, "Or run `omaseal mcp install-all` to enable all supported agents.")
+		fmt.Fprintln(os.Stderr, "Supported agents: claude, codex, cursor, devin, agy, hermes")
+	}
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Shell alias ===")
 	fmt.Fprintf(os.Stderr, "Add to `~/.bashrc` or `~/.zshrc` if `~/.local/bin` is not on PATH:\n")
+
+	bin, err := os.Executable()
+	if err != nil {
+		bin = "omaseal"
+	}
 	fmt.Fprintf(os.Stderr, "  export PATH=\"%s:$PATH\"\n", filepath.Dir(bin))
 
 	if runtime.GOOS == "linux" {

@@ -148,20 +148,20 @@ func checkFprintd() checkResult {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 
-	if err := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err == nil {
-		return checkResult{name: "fprintd", ok: true, message: "fprintd.service is active"}
+	if err := fprintdAvailable(ctx); err != nil {
+		return checkResult{
+			name: "fprintd",
+			ok:   false,
+			message: err.Error() + "\n" +
+				"  - `reveal` will fall through without a fingerprint gate.\n" +
+				"  - Start `fprintd.service`, run `fprintd-enroll`, and try again.",
+		}
 	}
 
-	return checkResult{
-		name: "fprintd",
-		ok:   false,
-		message: "`fprintd` is installed but the service is not active.\n" +
-			"  - Start it with `systemctl start fprintd.service --user` or `sudo systemctl start fprintd`.\n" +
-			"  - Run `fprintd-enroll` after it is active.",
-	}
+	return checkResult{name: "fprintd", ok: true, message: "fprintd is available and has an enrolled device"}
 }
 
 func checkOnePassword() checkResult {

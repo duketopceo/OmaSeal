@@ -39,9 +39,9 @@ curl -fsSL https://raw.githubusercontent.com/duketopceo/OmaSeal/main/install.sh 
 ### From a release tarball
 
 ```sh
-curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-amd64.tar.gz
-tar -xzf omaseal-linux-amd64.tar.gz
-install -Dm755 omaseal-linux-amd64/omaseal ~/.local/bin/omaseal
+curl -fsSL -O https://github.com/duketopceo/OmaSeal/releases/latest/download/omaseal-linux-x86_64.tar.gz
+tar -xzf omaseal-linux-x86_64.tar.gz
+install -Dm755 omaseal-linux-x86_64/omaseal ~/.local/bin/omaseal
 ```
 
 ### Build from source
@@ -123,7 +123,8 @@ service/account convention, migration steps, and troubleshooting.
 - Secrets live in the Secret Service default/login collection, encrypted at
   rest by `gnome-keyring`.
 - OmaSeal only ever sees secrets in memory; it never writes them to files,
-  logs, argv, or the panel state.
+  logs, argv, or persists them in the panel state. The secret is held only by
+  the active input field until `set` completes and is then cleared.
 - `list` returns metadata only.
 - `reveal` triggers the `fprintd` gate when a reader is enrolled; on systems
   without one it falls through to the local secret.
@@ -136,12 +137,15 @@ service/account convention, migration steps, and troubleshooting.
 {
   "mcpServers": {
     "omaseal": {
-      "command": "/home/lukedaduke/.local/bin/omaseal",
+      "command": "</absolute/path/to/omaseal>",
       "args": ["mcp"]
     }
   }
 }
 ```
+
+Replace `</absolute/path/to/omaseal>` with the path to the installed binary
+(usually `~/.local/bin/omaseal` or `/usr/bin/omaseal`).
 
 Tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`,
 `omaseal_delete`, `omaseal_list`.

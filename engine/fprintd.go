@@ -58,8 +58,11 @@ func fprintdAvailable(ctx context.Context) error {
 func FprintdVerify(ctx context.Context, reason string) error {
 	_ = reason
 
+	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
+	defer verifyCancel()
+
 	// Quick active check; skip the whole D-Bus dance if the daemon isn't running.
-	if err := exec.Command("systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
+	if err := exec.CommandContext(verifyCtx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
 		return nil
 	}
 
@@ -114,9 +117,6 @@ func FprintdVerify(ctx context.Context, reason string) error {
 		return fmt.Errorf("fprintd VerifyStart failed: %w", err)
 	}
 	defer dev.Call(fprintDeviceIface+".VerifyStop", 0)
-
-	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
-	defer verifyCancel()
 
 	for {
 		select {
