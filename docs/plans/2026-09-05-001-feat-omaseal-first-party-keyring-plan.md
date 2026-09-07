@@ -358,9 +358,9 @@ sequenceDiagram
 **Approach:**
 - When a provider's `api_key` is empty or set to `"omaseal:<service>:<account>"`, `dayflow` calls `omaseal get <service> <account>`.
 - Document the attribute convention: `service=dayflow`, `account=<provider-id>`.
-- Document migration: write the key to a temporary file, store it through stdin, then remove the file:
+- Document migration: write the key to a temporary file, store it under the provider ID through stdin, then remove the file:
   ```sh
-  omaseal set dayflow default < /path/to/openrouter_key.txt
+  omaseal set dayflow openrouter < /path/to/openrouter_key.txt
   rm /path/to/openrouter_key.txt
   dayflow config set openrouter_api_key ""
   ```
