@@ -20,6 +20,7 @@ Panel {
   property string searchFilter: ""
   property string notice: ""
   property string logText: ""
+  property bool showLogs: false
   property int selectedIndex: 0
   property bool isAdding: false
   property int pendingDeleteIndex: -1
@@ -74,7 +75,6 @@ Panel {
     root.pendingDeleteIndex = -1
     listProc.command = ["omaseal", "list", "--json"]
     if (!listProc.running) listProc.running = true
-    root.refreshLog()
   }
 
   function refreshLog() {
@@ -234,10 +234,14 @@ Panel {
 
   Timer {
     id: logTimer
-    interval: 5000
+    interval: 3000
     repeat: true
-    running: root.opened
+    running: root.showLogs && root.opened
     onTriggered: root.refreshLog()
+  }
+
+  onShowLogsChanged: {
+    if (root.showLogs) root.refreshLog()
   }
 
   ListModel {
@@ -252,7 +256,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(headerCol.implicitHeight + listFlickable.height + (root.notice !== "" ? noticeText.implicitHeight + Style.space(10) : 0) + Style.space(28), 640)
+    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, 640)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -317,6 +321,12 @@ Panel {
               text: root.isAdding ? "Cancel" : "+ Add"
               bordered: true
               onClicked: root.isAdding = !root.isAdding
+            }
+
+            Button {
+              text: "Logs"
+              bordered: true
+              onClicked: root.showLogs = !root.showLogs
             }
 
             PanelActionButton {
@@ -506,19 +516,6 @@ Panel {
           }
         }
 
-        // Live Log Feed
-        Text {
-          id: logFeed
-          visible: root.logText !== ""
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          text: root.logText
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-          opacity: 0.85
-        }
-
         // Status Notice Banner
         Text {
           id: noticeText
@@ -529,6 +526,48 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
+        }
+
+        // Click-to-open Log View
+        Column {
+          id: logView
+          visible: root.showLogs
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          spacing: Style.space(6)
+
+          PanelSectionHeader {
+            text: "LOGS"
+            foreground: root.fg
+          }
+
+          Flickable {
+            width: parent.width
+            height: Style.space(180)
+            contentWidth: parent.width
+            contentHeight: logDisplay.implicitHeight
+            clip: true
+
+            Text {
+              id: logDisplay
+              width: parent.width
+              text: root.logText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              opacity: 0.85
+            }
+          }
+
+          RowLayout {
+            width: parent.width
+            Item { Layout.fillWidth: true }
+            Button {
+              text: "Hide Logs"
+              bordered: true
+              onClicked: root.showLogs = false
+            }
+          }
         }
       }
     }
