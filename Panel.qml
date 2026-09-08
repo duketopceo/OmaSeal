@@ -224,7 +224,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, 680)
+    contentHeight: panel.fittedContentHeight(headerCol.implicitHeight + listFlickable.height + (root.notice !== "" ? noticeText.implicitHeight + Style.space(10) : 0) + Style.space(28), 640)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -265,82 +265,37 @@ Panel {
         bottomPadding: Style.space(14)
         spacing: Style.space(10)
 
-        // Header
-        RowLayout {
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          spacing: Style.space(8)
-
-          Text {
-            text: "󰌋 OmaSeal"
-            color: root.fg
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.heading
-            font.bold: true
-          }
-
-          Item { Layout.fillWidth: true }
-
-          Button {
-            text: root.isAdding ? "Cancel" : "+ Add"
-            bordered: true
-            onClicked: root.isAdding = !root.isAdding
-          }
-
-          PanelActionButton {
-            iconText: "󰑐"
-            tooltipText: "Refresh secrets (r)"
-            foreground: root.fg
-            onClicked: root.refresh()
-          }
-        }
-
-        PanelSeparator {
-          foreground: root.fg
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-        }
-
-        // Add Secret Form Collapsible
+        // Static header area
         Column {
+          id: headerCol
           width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          spacing: Style.space(8)
-          visible: root.isAdding
-
-          PanelSectionHeader {
-            text: "STORE NEW SECRET"
-            foreground: root.fg
-          }
-
-          TextField {
-            id: serviceField
-            width: parent.width
-            placeholderText: "Service (e.g. openrouter, github)"
-            foreground: root.fg
-          }
-
-          TextField {
-            id: accountField
-            width: parent.width
-            placeholderText: "Account (e.g. default, personal)"
-            foreground: root.fg
-          }
-
-          TextField {
-            id: secretField
-            width: parent.width
-            password: true
-            placeholderText: "Secret payload"
-            foreground: root.fg
-            Keys.onReturnPressed: root.saveSecret()
-          }
+          spacing: Style.space(10)
 
           RowLayout {
             width: parent.width
+            spacing: Style.space(8)
+
+            Text {
+              text: "󰌋 OmaSeal"
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.heading
+              font.bold: true
+            }
+
             Item { Layout.fillWidth: true }
+
             Button {
-              text: "Save Secret"
+              text: root.isAdding ? "Cancel" : "+ Add"
               bordered: true
-              accent: root.accent
-              onClicked: root.saveSecret()
+              onClicked: root.isAdding = !root.isAdding
+            }
+
+            PanelActionButton {
+              iconText: "󰑐"
+              tooltipText: "Refresh secrets (r)"
+              foreground: root.fg
+              onClicked: root.refresh()
             }
           }
 
@@ -348,108 +303,175 @@ Panel {
             foreground: root.fg
             width: parent.width
           }
-        }
 
-        // Secret List Section
-        PanelSectionHeader {
-          text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  enter copy  ·  x del"
-          foreground: root.fg
-        }
+          // Add Secret Form Collapsible
+          Column {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.isAdding
 
-        // Empty State
-        Text {
-          visible: secretsModel.count === 0
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          text: "No secrets stored in keyring."
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          horizontalAlignment: Text.AlignHCenter
-          topPadding: Style.space(12)
-          bottomPadding: Style.space(12)
-        }
+            PanelSectionHeader {
+              text: "STORE NEW SECRET"
+              foreground: root.fg
+            }
 
-        // Secrets Repeater
-        Repeater {
-          model: secretsModel
-          delegate: BorderSurface {
-            required property int index
-            required property string service
-            required property string account
-            required property string label
-            width: contentColumn.width - contentColumn.leftPadding - contentColumn.rightPadding
-            implicitHeight: Style.space(42)
-            radius: Style.cornerRadius
-            color: index === root.selectedIndex ? Style.selectedFillFor(root.fg, root.accent) : Style.controlFill(false, rowMouse.containsMouse, root.fg, root.accent)
-            borderSpec: Border.controlSpec(index === root.selectedIndex ? "selected" : (rowMouse.containsMouse ? "hover-cursor" : "normal"), root.fg, root.accent)
+            TextField {
+              id: serviceField
+              width: parent.width
+              placeholderText: "Service (e.g. openrouter, github)"
+              foreground: root.fg
+            }
 
-            MouseArea {
-              id: rowMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              onEntered: {
-                if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
-                  root.pendingDeleteIndex = -1
-                  deleteConfirmTimer.stop()
-                }
-                root.selectedIndex = index
-              }
-              onClicked: root.copySecret(service, account)
+            TextField {
+              id: accountField
+              width: parent.width
+              placeholderText: "Account (e.g. default, personal)"
+              foreground: root.fg
+            }
+
+            TextField {
+              id: secretField
+              width: parent.width
+              password: true
+              placeholderText: "Secret payload"
+              foreground: root.fg
+              Keys.onReturnPressed: root.saveSecret()
             }
 
             RowLayout {
-              anchors.fill: parent
-              anchors.leftMargin: Style.space(10)
-              anchors.rightMargin: Style.space(8)
-              spacing: Style.space(8)
-
-              Text {
-                text: "󰌋"
-                color: index === root.selectedIndex ? root.accent : root.dim
-                font.pixelSize: Style.font.bodySmall
+              width: parent.width
+              Item { Layout.fillWidth: true }
+              Button {
+                text: "Save Secret"
+                bordered: true
+                accent: root.accent
+                onClicked: root.saveSecret()
               }
+            }
 
-              Column {
-                Layout.fillWidth: true
-                spacing: Style.space(2)
+            PanelSeparator {
+              foreground: root.fg
+              width: parent.width
+            }
+          }
 
-                Text {
-                  width: parent.width
-                  text: service + " / " + account
-                  color: root.fg
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
+          // Secret List Section Header
+          PanelSectionHeader {
+            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  enter copy  ·  x del"
+            foreground: root.fg
+          }
+        }
 
-                Text {
-                  width: parent.width
-                  text: label || ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                  visible: text !== ""
-                }
-              }
+        // Scrollable secrets list
+        Flickable {
+          id: listFlickable
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          implicitHeight: Math.min(secretsCol.implicitHeight, Style.space(420))
+          height: implicitHeight
+          contentHeight: secretsCol.implicitHeight
+          clip: true
 
-              Row {
-                spacing: Style.space(4)
+          Column {
+            id: secretsCol
+            width: parent.width
+            spacing: Style.space(6)
 
-                PanelActionButton {
-                  iconText: "󰆏"
-                  tooltipText: "Copy to clipboard (sensitive)"
-                  foreground: root.fg
+            // Empty State
+            Text {
+              visible: secretsModel.count === 0
+              width: parent.width
+              text: "No secrets stored in keyring."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              horizontalAlignment: Text.AlignHCenter
+              topPadding: Style.space(12)
+              bottomPadding: Style.space(12)
+            }
+
+            // Secrets Repeater
+            Repeater {
+              model: secretsModel
+              delegate: BorderSurface {
+                required property int index
+                required property string service
+                required property string account
+                required property string label
+                width: secretsCol.width
+                implicitHeight: Style.space(42)
+                radius: Style.cornerRadius
+                color: index === root.selectedIndex ? Style.selectedFillFor(root.fg, root.accent) : Style.controlFill(false, rowMouse.containsMouse, root.fg, root.accent)
+                borderSpec: Border.controlSpec(index === root.selectedIndex ? "selected" : (rowMouse.containsMouse ? "hover-cursor" : "normal"), root.fg, root.accent)
+
+                MouseArea {
+                  id: rowMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  onEntered: {
+                    if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
+                      root.pendingDeleteIndex = -1
+                      deleteConfirmTimer.stop()
+                    }
+                    root.selectedIndex = index
+                  }
                   onClicked: root.copySecret(service, account)
                 }
 
-                PanelActionButton {
-                  iconText: "󰆴"
-                  tooltipText: "Delete secret"
-                  hoverColor: root.urgent
-                  foreground: root.fg
-                  onClicked: root.deleteSecret(index, service, account)
+                RowLayout {
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  Text {
+                    text: "󰌋"
+                    color: index === root.selectedIndex ? root.accent : root.dim
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  Column {
+                    Layout.fillWidth: true
+                    spacing: Style.space(2)
+
+                    Text {
+                      width: parent.width
+                      text: service + " / " + account
+                      color: root.fg
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                      elide: Text.ElideRight
+                    }
+
+                    Text {
+                      width: parent.width
+                      text: label || ""
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      visible: text !== ""
+                    }
+                  }
+
+                  Row {
+                    spacing: Style.space(4)
+
+                    PanelActionButton {
+                      iconText: "󰆏"
+                      tooltipText: "Copy to clipboard (sensitive)"
+                      foreground: root.fg
+                      onClicked: root.copySecret(service, account)
+                    }
+
+                    PanelActionButton {
+                      iconText: "󰆴"
+                      tooltipText: "Delete secret"
+                      hoverColor: root.urgent
+                      foreground: root.fg
+                      onClicked: root.deleteSecret(index, service, account)
+                    }
+                  }
                 }
               }
             }
@@ -458,6 +480,7 @@ Panel {
 
         // Status Notice Banner
         Text {
+          id: noticeText
           visible: root.notice !== ""
           width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
           text: root.notice
