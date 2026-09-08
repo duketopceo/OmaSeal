@@ -68,3 +68,28 @@ omaseal mcp
 - **Use `reveal` only when the user asks for a visible or clipboard copy.** It
   may require a fingerprint.
 - **Do not export or share secret values.** The keyring is local-first.
+
+## Agent access control (OmaSeal 0.2.1+)
+
+Users can gate MCP access with `omaseal agent`:
+
+```sh
+omaseal agent mode open   # agents may read/write secrets
+omaseal agent mode ask    # agents must unlock before each session
+omaseal agent mode lock   # agents cannot access secrets
+omaseal agent unlock      # biometric/best-effort session unlock
+omaseal agent lock        # revoke the active session
+omaseal agent status      # show mode and session state
+```
+
+In `ask` mode, the user must run `omaseal agent unlock` before an agent can
+use any MCP tool that touches the keyring. `unlock` uses `fprintd` when a
+fingerprint reader is enrolled; otherwise it authorizes the session with a
+warning. The session lasts 15 minutes by default and is stored in the user's
+runtime directory so it is cleared at logout.
+
+Rules for agents:
+
+- Respect `agent_unauthorized` errors: stop and ask the user to `omaseal agent unlock`.
+- Do not attempt to bypass the gate by writing the session file directly.
+- In `ask` mode, still prefer `resolve` over `get` and `set` only when asked.

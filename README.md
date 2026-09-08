@@ -68,6 +68,10 @@ omarchy-restart-shell
 ```sh
 omaseal doctor    # check the environment
 omaseal setup     # print MCP / PATH / plugin config
+omaseal agent mode <open|ask|lock> [min]  # set agent/MCP trust mode
+omaseal agent unlock                      # biometric unlock for ask mode
+omaseal agent lock                        # revoke agent session
+omaseal agent status                      # show agent policy and session
 ```
 
 See [`docs/onboarding.md`](docs/onboarding.md) for wiring OmaSeal into agents and other Omarchy apps.

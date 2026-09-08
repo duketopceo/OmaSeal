@@ -34,6 +34,10 @@ Usage:
   omaseal ping                             health check (json with --json)
   omaseal doctor                           check the environment and dependencies
   omaseal setup                            onboarding guide and MCP config
+  omaseal agent mode <open|ask|lock> [min] set agent/MCP trust mode
+  omaseal agent unlock                     biometric unlock for ask mode
+  omaseal agent lock                       revoke agent session
+  omaseal agent status                     show agent policy and session
 
 Examples:
   omaseal set openrouter default < secret.txt
@@ -90,6 +94,8 @@ func main() {
 		handleDoctor()
 	case "setup":
 		runSetup()
+	case "agent":
+		handleAgent()
 	case "help", "-h", "--help":
 		usage()
 	default:

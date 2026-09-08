@@ -165,8 +165,32 @@ type mcpToolCallResponse struct {
 	IsError bool             `json:"isError,omitempty"`
 }
 
+func toolOperation(name string) string {
+	switch name {
+	case "omaseal_get":
+		return "get"
+	case "omaseal_resolve":
+		return "resolve"
+	case "omaseal_set":
+		return "set"
+	case "omaseal_delete":
+		return "delete"
+	case "omaseal_list":
+		return "list"
+	}
+	return ""
+}
+
 func callMCPTool(req mcpToolCall) *mcpResponse {
 	r := mcpToolCallResponse{Content: []map[string]any{}}
+
+	op := toolOperation(req.Name)
+	if op != "" {
+		if err := CheckAgentOperation(op); err != nil {
+			return toolErrorResp(req, err)
+		}
+	}
+
 	switch req.Name {
 	case "omaseal_get":
 		var a struct {
