@@ -52,6 +52,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
       - name: Build linux/${{ matrix.goarch }} (${{ matrix.release_name }})
         run: |
           mkdir -p dist/omaseal-linux-${{ matrix.release_name }}
