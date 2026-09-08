@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -33,6 +34,7 @@ Usage:
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
   omaseal ping                             health check (json with --json)
   omaseal doctor                           check the environment and dependencies
+  omaseal logs [n]                         show recent non-secret log lines
   omaseal setup                            onboarding guide and MCP config
   omaseal agent mode <open|ask|lock> [min] set agent/MCP trust mode
   omaseal agent unlock                     biometric unlock for ask mode
@@ -53,12 +55,15 @@ Examples:
 }
 
 func main() {
+	SetLogOutput()
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
 	}
 
 	cmd := os.Args[1]
+	WriteLog("omaseal %s: command %s", version, cmd)
 
 	switch cmd {
 	case "version", "--version", "-v":
@@ -92,6 +97,8 @@ func main() {
 		handlePing()
 	case "doctor":
 		handleDoctor()
+	case "logs":
+		handleLogs()
 	case "setup":
 		runSetup()
 	case "agent":
@@ -265,6 +272,23 @@ func handleImport() {
 		os.Exit(1)
 	}
 	fmt.Println("ok")
+}
+
+func handleLogs() {
+	n := 50
+	if len(os.Args) >= 3 {
+		if v, err := strconv.Atoi(os.Args[2]); err == nil && v > 0 {
+			n = v
+		}
+	}
+	lines, err := ReadLog(n)
+	if err != nil {
+		printError("reading log: ", err)
+		os.Exit(1)
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
 }
 
 // readSecret reads a secret from stdin without a trailing newline.

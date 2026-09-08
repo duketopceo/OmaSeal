@@ -14,7 +14,7 @@ import (
 // safe operations of the keyring as tools that agents can call. Secrets are
 // never logged to stdout; stdout is reserved for JSON-RPC traffic.
 func runMCP() {
-	log.SetOutput(os.Stderr)
+	// stdout is reserved for JSON-RPC; logging already goes to stderr + file.
 	scanner := bufio.NewScanner(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {

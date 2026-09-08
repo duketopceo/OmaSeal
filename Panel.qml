@@ -19,6 +19,7 @@ Panel {
 
   property string searchFilter: ""
   property string notice: ""
+  property string logText: ""
   property int selectedIndex: 0
   property bool isAdding: false
   property int pendingDeleteIndex: -1
@@ -73,6 +74,12 @@ Panel {
     root.pendingDeleteIndex = -1
     listProc.command = ["omaseal", "list", "--json"]
     if (!listProc.running) listProc.running = true
+    root.refreshLog()
+  }
+
+  function refreshLog() {
+    logProc.command = ["omaseal", "logs", "25"]
+    if (!logProc.running) logProc.running = true
   }
 
   function applyList(raw) {
@@ -210,6 +217,27 @@ Panel {
         root.notice = "Delete failed"
       }
     }
+  }
+
+  Process {
+    id: logProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.logText = String(text || "").trim()
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.logText = ""
+      }
+    }
+  }
+
+  Timer {
+    id: logTimer
+    interval: 5000
+    repeat: true
+    running: root.opened
+    onTriggered: root.refreshLog()
   }
 
   ListModel {
@@ -476,6 +504,19 @@ Panel {
               }
             }
           }
+        }
+
+        // Live Log Feed
+        Text {
+          id: logFeed
+          visible: root.logText !== ""
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          text: root.logText
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+          opacity: 0.85
         }
 
         // Status Notice Banner
