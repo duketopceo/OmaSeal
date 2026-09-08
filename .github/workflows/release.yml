@@ -67,13 +67,9 @@ jobs:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          if [ -z "$GPG_KEY_ID" ]; then
-            echo "GPG_KEY_ID secret is required for signed releases." >&2
-            exit 1
-          fi
-          if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "GPG_PRIVATE_KEY secret is required for signed releases." >&2
-            exit 1
+          if [ -z "$GPG_KEY_ID" ] || [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "GPG signing skipped: add GPG_KEY_ID and GPG_PRIVATE_KEY secrets for signed releases." >&2
+            exit 0
           fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           cd dist
@@ -83,6 +79,5 @@ jobs:
         with:
           files: |
             dist/*.tar.gz
-            dist/sha256sums.txt
-            dist/sha256sums.txt.asc
+            dist/sha256sums*
           generate_release_notes: true

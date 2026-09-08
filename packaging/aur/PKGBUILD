@@ -1,6 +1,6 @@
 # Maintainer: Luke Kimball <kimballluke@gmail.com>
 pkgname=omaseal
-pkgver=0.2.1
+pkgver=0.2.2
 pkgrel=1
 pkgdesc="First-party Omarchy keyring manager"
 arch=('x86_64' 'aarch64')

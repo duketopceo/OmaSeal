@@ -16,6 +16,9 @@ dist/
 # Local testing
 local/
 
+# Agent access guide — kept locally, never shipped in plugin tree
+/AGENTS.md
+
 # Agent MCP configs (per-repo omaseal wiring)
 /.claude/mcp.json
 /.codex/mcp.json
