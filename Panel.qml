@@ -256,7 +256,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, 640)
+    contentHeight: panel.fittedContentHeight(headerCol.implicitHeight + listFlickable.height + (root.notice !== "" ? noticeText.implicitHeight + Style.space(10) : 0) + (root.showLogs ? logView.implicitHeight + Style.space(10) : 0) + Style.space(28), 640)
 
     PanelKeyCatcher {
       id: keyCatcher
