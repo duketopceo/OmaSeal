@@ -261,17 +261,20 @@ func handleAgent() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		WriteLog("agent mode set to %s (%dm)", mode, mins)
 		fmt.Printf("Agent mode set to %s.\n", mode)
 	case "unlock":
 		if err := UnlockAgent(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		WriteLog("agent unlocked")
 	case "lock":
 		if err := LockAgent(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		WriteLog("agent locked")
 	case "status":
 		PrintAgentStatus()
 	default:

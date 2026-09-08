@@ -130,6 +130,7 @@ func handleSet() {
 		printError("storing secret: ", err)
 		os.Exit(1)
 	}
+	WriteLog("set %s/%s", service, account)
 	fmt.Println("ok")
 }
 
@@ -144,6 +145,7 @@ func handleGet() {
 		printError("retrieving secret: ", err)
 		os.Exit(1)
 	}
+	WriteLog("get %s/%s", service, account)
 	fmt.Print(secret)
 }
 
@@ -157,6 +159,7 @@ func handleDel() {
 		printError("deleting secret: ", err)
 		os.Exit(1)
 	}
+	WriteLog("del %s/%s", service, account)
 	fmt.Println("ok")
 }
 
@@ -186,6 +189,7 @@ func handleList() {
 		printError("listing secrets: ", err)
 		os.Exit(1)
 	}
+	WriteLog("list: %d secrets", len(items))
 
 	if jsonOut {
 		b, _ := json.Marshal(items)
@@ -220,6 +224,7 @@ func handleReveal() {
 		printError("getting secret: ", err)
 		os.Exit(1)
 	}
+	WriteLog("reveal %s/%s", os.Args[2], os.Args[3])
 	fmt.Print(secret)
 }
 
@@ -230,6 +235,7 @@ func handleIPC() {
 	}
 	method := os.Args[2]
 	jsonArgs := os.Args[3]
+	WriteLog("ipc %s", method)
 	runIPC(method, jsonArgs)
 }
 
@@ -243,6 +249,7 @@ func handleResolve() {
 		printError("resolving secret: ", err)
 		os.Exit(1)
 	}
+	WriteLog("resolve %s/%s", os.Args[2], os.Args[3])
 	fmt.Print(secret)
 }
 
@@ -271,6 +278,7 @@ func handleImport() {
 		printError("importing: ", err)
 		os.Exit(1)
 	}
+	WriteLog("import %s", source)
 	fmt.Println("ok")
 }
 

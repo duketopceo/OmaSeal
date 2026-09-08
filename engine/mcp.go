@@ -80,6 +80,12 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 		if err := json.Unmarshal(msg.Params, &req); err != nil {
 			return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Error: newMCPError(-32602, "invalid params: "+err.Error())}
 		}
+		var p struct {
+			Service string `json:"service"`
+			Account string `json:"account"`
+		}
+		_ = json.Unmarshal(req.Arguments, &p)
+		WriteLog("mcp tool: %s %s/%s", req.Name, p.Service, p.Account)
 		resp := callMCPTool(req)
 		resp.ID = msg.ID
 		return resp

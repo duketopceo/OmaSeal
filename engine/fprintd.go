@@ -56,7 +56,7 @@ func fprintdAvailable(ctx context.Context) error {
 // The secret is only released when the user explicitly matches or when no
 // biometric hardware is present at all.
 func FprintdVerify(ctx context.Context, reason string) error {
-	_ = reason
+	WriteLog("fprintd: verify for %s", reason)
 
 	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
 	defer verifyCancel()
@@ -136,15 +136,18 @@ func FprintdVerify(ctx context.Context, reason string) error {
 			done, _ := sig.Body[1].(bool)
 			switch result {
 			case "verify-match":
+				WriteLog("fprintd: matched for %s", reason)
 				return nil
 			case "verify-no-match", "verify-disconnected", "verify-unknown-error":
 				if done {
+					WriteLog("fprintd: %s for %s", result, reason)
 					return fmt.Errorf("fingerprint verification failed: %s", result)
 				}
 			case "verify-retry-scan", "verify-swipe-too-short", "verify-finger-not-centered", "verify-remove-and-retry":
 				// transient; wait for another signal
 			default:
 				if done {
+					WriteLog("fprintd: %s for %s", result, reason)
 					return fmt.Errorf("fingerprint verification ended: %s", result)
 				}
 			}
