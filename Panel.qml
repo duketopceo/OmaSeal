@@ -78,7 +78,7 @@ Panel {
   }
 
   function refreshLog() {
-    logProc.command = ["omaseal", "logs", "25"]
+    logProc.command = ["omaseal", "logs", "25", "--json"]
     if (!logProc.running) logProc.running = true
   }
 
@@ -98,6 +98,22 @@ Panel {
       }
     } catch (e) {
       root.notice = "Failed to parse secret list"
+    }
+  }
+
+  function applyLogs(raw) {
+    try {
+      var d = JSON.parse(raw)
+      logModel.clear()
+      for (var i = 0; i < d.length; i++) {
+        logModel.append({
+          time: d[i].time || "",
+          source: d[i].source || "",
+          message: d[i].message || ""
+        })
+      }
+    } catch (e) {
+      logModel.clear()
     }
   }
 
@@ -223,12 +239,7 @@ Panel {
     id: logProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.logText = String(text || "").trim()
-    }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) {
-        root.logText = ""
-      }
+      onStreamFinished: root.applyLogs(text)
     }
   }
 
@@ -248,6 +259,105 @@ Panel {
     id: secretsModel
   }
 
+  ListModel {
+    id: logModel
+  }
+
+  Component {
+    id: logsComponent
+
+    Column {
+      width: parent.width
+      leftPadding: Style.space(14)
+      rightPadding: Style.space(14)
+      topPadding: Style.space(14)
+      bottomPadding: Style.space(14)
+      spacing: Style.space(10)
+
+      RowLayout {
+        width: parent.width - parent.leftPadding - parent.rightPadding
+        spacing: Style.space(8)
+
+        Text {
+          text: "󰌋 OmaSeal"
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.heading
+          font.bold: true
+        }
+
+        Item { Layout.fillWidth: true }
+
+        Button {
+          text: "Back"
+          bordered: true
+          onClicked: root.showLogs = false
+        }
+      }
+
+      PanelSectionHeader {
+        text: "LOGS"
+        foreground: root.fg
+      }
+
+      ListView {
+        width: parent.width - parent.leftPadding - parent.rightPadding
+        height: Style.space(240)
+        clip: true
+        model: logModel
+
+        delegate: Column {
+          width: ListView.view.width
+          spacing: Style.space(2)
+
+          Row {
+            spacing: Style.space(8)
+
+            Text {
+              text: model.time
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              text: model.source
+              color: root.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: model.message
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
+
+          Rectangle {
+            width: parent.width
+            height: Style.space(1)
+            color: root.dim
+            opacity: 0.2
+          }
+        }
+      }
+
+      RowLayout {
+        width: parent.width - parent.leftPadding - parent.rightPadding
+        Item { Layout.fillWidth: true }
+        Button {
+          text: "Refresh"
+          bordered: true
+          onClicked: root.refreshLog()
+        }
+      }
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -256,7 +366,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(headerCol.implicitHeight + listFlickable.height + (root.notice !== "" ? noticeText.implicitHeight + Style.space(10) : 0) + (root.showLogs ? logView.implicitHeight + Style.space(10) : 0) + Style.space(28), 640)
+    contentHeight: panel.fittedContentHeight(root.showLogs ? (logLoader.item ? logLoader.item.implicitHeight + Style.space(28) : Style.space(28)) : contentColumn.implicitHeight, 640)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -291,6 +401,7 @@ Panel {
       Column {
         id: contentColumn
         width: parent.width
+        visible: !root.showLogs
         leftPadding: Style.space(14)
         rightPadding: Style.space(14)
         topPadding: Style.space(14)
@@ -528,47 +639,15 @@ Panel {
           wrapMode: Text.WordWrap
         }
 
-        // Click-to-open Log View
-        Column {
-          id: logView
-          visible: root.showLogs
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          spacing: Style.space(6)
+      }
 
-          PanelSectionHeader {
-            text: "LOGS"
-            foreground: root.fg
-          }
-
-          Flickable {
-            width: parent.width
-            height: Style.space(180)
-            contentWidth: parent.width
-            contentHeight: logDisplay.implicitHeight
-            clip: true
-
-            Text {
-              id: logDisplay
-              width: parent.width
-              text: root.logText
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-              opacity: 0.85
-            }
-          }
-
-          RowLayout {
-            width: parent.width
-            Item { Layout.fillWidth: true }
-            Button {
-              text: "Hide Logs"
-              bordered: true
-              onClicked: root.showLogs = false
-            }
-          }
-        }
+      Loader {
+        id: logLoader
+        active: root.showLogs
+        visible: root.showLogs
+        anchors.fill: parent
+        sourceComponent: logsComponent
+        onLoaded: root.refreshLog()
       }
     }
   }

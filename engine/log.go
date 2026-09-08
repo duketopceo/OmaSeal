@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 )
 
@@ -108,4 +109,31 @@ func ReadLog(n int) ([]string, error) {
 		return nil, err
 	}
 	return lines, nil
+}
+
+// LogLine is a structured log entry for the panel UI.
+type LogLine struct {
+	Time    string `json:"time"`
+	Source  string `json:"source"`
+	Message string `json:"message"`
+}
+
+var logLineRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(.+?):\s+(.*)$`)
+
+// ReadLogJSON returns the last n log lines as structured objects.
+func ReadLogJSON(n int) ([]LogLine, error) {
+	lines, err := ReadLog(n)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LogLine, 0, len(lines))
+	for _, l := range lines {
+		m := logLineRe.FindStringSubmatch(l)
+		if m == nil {
+			out = append(out, LogLine{Message: l})
+			continue
+		}
+		out = append(out, LogLine{Time: m[1], Source: m[2], Message: m[3]})
+	}
+	return out, nil
 }

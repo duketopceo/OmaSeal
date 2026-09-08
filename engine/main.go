@@ -276,10 +276,25 @@ func handleImport() {
 
 func handleLogs() {
 	n := 50
-	if len(os.Args) >= 3 {
-		if v, err := strconv.Atoi(os.Args[2]); err == nil && v > 0 {
+	jsonOut := false
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--json" {
+			jsonOut = true
+			continue
+		}
+		if v, err := strconv.Atoi(os.Args[i]); err == nil && v > 0 {
 			n = v
 		}
+	}
+	if jsonOut {
+		lines, err := ReadLogJSON(n)
+		if err != nil {
+			printError("reading log: ", err)
+			os.Exit(1)
+		}
+		b, _ := json.Marshal(lines)
+		fmt.Println(string(b))
+		return
 	}
 	lines, err := ReadLog(n)
 	if err != nil {
