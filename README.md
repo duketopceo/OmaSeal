@@ -12,6 +12,8 @@ storage in `~/.config/<app>/config.json`, `.env` files, or worse, commit API
 keys to dotfiles. OmaSeal is the one standard interface for secrets: ask for
 `service / account`, get back the secret, and never worry about where it lives.
 
+![OmaSeal Quickshell panel](screenshot.png)
+
 ## What it uses
 
 - `gnome-keyring-daemon` — Secret Service backend (already on Omarchy).
