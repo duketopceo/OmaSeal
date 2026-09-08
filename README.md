@@ -1,9 +1,24 @@
 # OmaSeal
 
-A first-party keyring for [Omarchy](https://omarchy.org). It layers a
-macOS-Keychain-style secret store over the existing `gnome-keyring` /
-`libsecret` stack so every Omarchy plugin can read and store secrets the same
-way.
+> One keyring for your Omarchy desktop, agents, and plugins.
+
+![OmaSeal Quickshell panel](screenshot.png)
+
+OmaSeal stores API keys and other secrets in the `gnome-keyring` you already
+have, then gives every agent and plugin a single `service / account` interface
+to get them back.
+
+No more `.env` files, no more `~/.config/<app>/config.json` secrets, no more
+copy-pasting API keys into dotfiles. Store once. Use everywhere.
+
+## What you get
+
+- **Quickshell panel** — browse, add, copy, and delete secrets from the bar.
+- **CLI** — `set`, `get`, `del`, `list`, `resolve`, and `reveal` with `fprintd`.
+- **JSON IPC** — for other Omarchy plugins to ask for secrets safely.
+- **MCP server** — so Claude, Codex, Cursor, and other agents can use it.
+- **1Password / Bitwarden fallback** — import and resolve when the local
+  keyring does not have a secret yet.
 
 ## Why
 
@@ -11,8 +26,6 @@ Linux has had `gnome-keyring` for years. Omarchy plugins currently reinvent
 storage in `~/.config/<app>/config.json`, `.env` files, or worse, commit API
 keys to dotfiles. OmaSeal is the one standard interface for secrets: ask for
 `service / account`, get back the secret, and never worry about where it lives.
-
-![OmaSeal Quickshell panel](screenshot.png)
 
 ## What it uses
 
