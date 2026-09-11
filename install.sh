@@ -35,6 +35,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Pinned release — bump on each release. Immutable tag + embedded checksums
+# bind this installer to the reviewed snapshot. Override with env only if you
+# accept that the new version's checksums are fetched (not embedded).
+OMASEAL_VERSION="${OMASEAL_VERSION:-v0.2.2}"
 OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}"
 OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
 
@@ -42,9 +46,11 @@ ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)
     ARCH_NAME=x86_64
+    EXPECTED_SHA256="c189f0c84f72048842efe91644721b4d9121834b108eea04e7687441cb61e4d8"
     ;;
   aarch64|arm64)
     ARCH_NAME=aarch64
+    EXPECTED_SHA256="366a5e440f592644e9563e44d8eea49c6401c077f78f1e0dcf96bb35c5a06333"
     ;;
   *)
     echo "Unsupported architecture: $ARCH" >&2
@@ -53,9 +59,15 @@ case "$ARCH" in
 esac
 
 TARBALL="omaseal-linux-${ARCH_NAME}.tar.gz"
-DOWNLOAD_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/${TARBALL}"
-SUMS_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt"
-SIG_URL="https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt.asc"
+RELEASE_BASE="https://github.com/duketopceo/OmaSeal/releases/download/${OMASEAL_VERSION}"
+DOWNLOAD_URL="${RELEASE_BASE}/${TARBALL}"
+SUMS_URL="${RELEASE_BASE}/sha256sums.txt"
+SIG_URL="${RELEASE_BASE}/sha256sums.txt.asc"
+
+# Embedded checksums only apply to the pinned version.
+if [[ "$OMASEAL_VERSION" != "v0.2.2" ]]; then
+  EXPECTED_SHA256=""
+fi
 
 echo "Downloading OmaSeal for ${ARCH_NAME}..."
 echo "  URL: ${DOWNLOAD_URL}"
@@ -76,18 +88,29 @@ curl -fsSL -o "${TMPDIR}/${TARBALL}" "$DOWNLOAD_URL" || {
   echo "Download failed: ${DOWNLOAD_URL}" >&2
   exit 1
 }
-curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
-  echo "Checksum file not found: ${SUMS_URL}" >&2
-  exit 1
-}
 
-(cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
-  echo "Checksum verification failed." >&2
-  exit 1
-}
+if [[ -n "$EXPECTED_SHA256" ]]; then
+  echo "${EXPECTED_SHA256}  ${TMPDIR}/${TARBALL}" | sha256sum -c - || {
+    echo "Checksum verification failed against the pinned digest for ${OMASEAL_VERSION}." >&2
+    exit 1
+  }
+  echo "Checksum verified against pinned digest (${OMASEAL_VERSION})."
+else
+  curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
+    echo "Checksum file not found: ${SUMS_URL}" >&2
+    exit 1
+  }
+  (cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
+    echo "Checksum verification failed." >&2
+    exit 1
+  }
+fi
 
 if command -v gpg >/dev/null 2>&1; then
   if curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" 2>/dev/null; then
+    if [[ ! -f "${TMPDIR}/sha256sums.txt" ]]; then
+      curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL"
+    fi
     if [ -z "$OMASEAL_SIGNING_FINGERPRINT" ]; then
       echo "A GPG signature is present, but OMASEAL_SIGNING_FINGERPRINT is not set." >&2
       echo "Set it to the release signing key fingerprint before trusting a signature." >&2

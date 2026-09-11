@@ -47,19 +47,30 @@ yay -S omaseal-bin    # prebuilt multi-arch binary
 
 ### From a release tarball (verified)
 
-Download the tarball, checksums, and detached GPG signature for your
-architecture, then verify before installing:
+`install.sh` pins an immutable release tag (`OMASEAL_VERSION`, default
+`v0.2.2`) and verifies the tarball against a checksum embedded in the
+script — it never follows `latest`:
 
 ```sh
+./install.sh            # pinned v0.2.2, embedded sha256 verify
+./install.sh --dry-run
+```
+
+Manual equivalent — download the tarball, checksums, and detached GPG
+signature for your architecture from the pinned tag, then verify before
+installing:
+
+```sh
+VER=v0.2.2
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
   aarch64) TAR=omaseal-linux-aarch64.tar.gz ;;
   *) echo "Unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
-curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/$TAR"
-curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt"
-curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/latest/download/sha256sums.txt.asc"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/$TAR"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/sha256sums.txt"
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/sha256sums.txt.asc"
 sha256sum -c --ignore-missing sha256sums.txt
 gpg --verify sha256sums.txt.asc sha256sums.txt
 tar -xzf "$TAR"
