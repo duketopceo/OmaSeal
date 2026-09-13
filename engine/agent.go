@@ -21,11 +21,18 @@ const (
 // mode:
 //   - "open"  : agents can read and write secrets freely.
 //   - "ask"   : agents must run `omaseal agent unlock` (biometric if available)
-//               before any MCP tool that touches secrets.
+//     before any MCP tool that touches secrets.
 //   - "lock"  : agents cannot access secrets at all.
+//
+// primary_agent is the user's main agent; agents lists the assigned defaults.
+// Both are used by `omaseal mcp install-detected` and `omaseal setup` so the
+// agents the user actually runs are wired to OmaSeal automatically.
 type AgentPolicy struct {
-	Mode           string `json:"mode"`
-	SessionMinutes int    `json:"session_minutes"`
+	Mode           string   `json:"mode"`
+	SessionMinutes int      `json:"session_minutes"`
+	KeepAlive      bool     `json:"keep_alive,omitempty"`
+	PrimaryAgent   string   `json:"primary_agent,omitempty"`
+	Agents         []string `json:"agents,omitempty"`
 }
 
 func defaultAgentPolicy() AgentPolicy {
@@ -155,6 +162,11 @@ func CheckAgentOperation(op string) error {
 	case "ask":
 		expiry, ok := readSessionExpiry()
 		if ok && time.Now().UTC().Before(expiry) {
+			if p.KeepAlive {
+				// Sliding window: each authorized op renews the session for
+				// another SessionMinutes; it lapses after that much inactivity.
+				_ = writeSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
+			}
 			return nil
 		}
 		return newError("agent_unauthorized", "omaseal agent unlock", fmt.Errorf("agent must unlock before %s", op))
@@ -162,15 +174,21 @@ func CheckAgentOperation(op string) error {
 	return nil
 }
 
-// SetAgentMode changes the persistent agent policy.
+// SetAgentMode changes the persistent agent policy, preserving keep-alive,
+// primary, and default-agent assignments.
 func SetAgentMode(mode string, sessionMinutes int) error {
 	if !isValidMode(mode) {
 		return fmt.Errorf("invalid mode %q; use open, ask, or lock", mode)
 	}
-	if sessionMinutes <= 0 {
-		sessionMinutes = defaultAgentPolicy().SessionMinutes
+	p, err := loadAgentPolicy()
+	if err != nil {
+		return err
 	}
-	return saveAgentPolicy(AgentPolicy{Mode: mode, SessionMinutes: sessionMinutes})
+	p.Mode = mode
+	if sessionMinutes > 0 {
+		p.SessionMinutes = sessionMinutes
+	}
+	return saveAgentPolicy(p)
 }
 
 // UnlockAgent creates a time-bounded session after a best-effort biometric gate.
@@ -180,7 +198,7 @@ func UnlockAgent() error {
 		return err
 	}
 	if p.Mode == "open" {
-		return fmt.Errorf("agent mode is already open; locking is not needed")
+		return fmt.Errorf("agent mode is already open; unlocking is not needed")
 	}
 
 	// FprintdVerify returns nil when no biometric hardware is present, but
@@ -224,6 +242,22 @@ func PrintAgentStatus() {
 	}
 	fmt.Fprintf(os.Stderr, "agent mode:       %s\n", p.Mode)
 	fmt.Fprintf(os.Stderr, "session minutes:  %d\n", p.SessionMinutes)
+	fmt.Fprintf(os.Stderr, "keep-alive:       %s\n", yesNo(p.KeepAlive))
+	if p.PrimaryAgent != "" {
+		fmt.Fprintf(os.Stderr, "primary agent:    %s\n", p.PrimaryAgent)
+	}
+	if len(p.Agents) > 0 {
+		fmt.Fprintf(os.Stderr, "default agents:   %s\n", strings.Join(p.Agents, ", "))
+	}
+	if p.Mode == "ask" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := fprintdAvailable(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "fingerprint:      not available (unlock is ungated)")
+		} else {
+			fmt.Fprintln(os.Stderr, "fingerprint:      available")
+		}
+	}
 	expiry, ok := readSessionExpiry()
 	if ok && time.Now().UTC().Before(expiry) {
 		fmt.Fprintf(os.Stderr, "session:          active until %s\n", expiry.Format(time.RFC3339))
@@ -232,12 +266,95 @@ func PrintAgentStatus() {
 	}
 }
 
+// agentStatusJSON returns the policy and session state as a JSON object for
+// panels, plugins, and scripts.
+func agentStatusJSON() (string, error) {
+	p, err := loadAgentPolicy()
+	if err != nil {
+		return "", err
+	}
+	out := map[string]any{
+		"mode":            p.Mode,
+		"session_minutes": p.SessionMinutes,
+		"keep_alive":      p.KeepAlive,
+		"session_active":  false,
+		"primary_agent":   p.PrimaryAgent,
+		"agents":          p.Agents,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out["fprintd_available"] = fprintdAvailable(ctx) == nil
+	if expiry, ok := readSessionExpiry(); ok && time.Now().UTC().Before(expiry) {
+		out["session_active"] = true
+		out["session_expires"] = expiry.Format(time.RFC3339)
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// SetPrimaryAgent records the user's main agent.
+func SetPrimaryAgent(name string) error {
+	if _, ok := findAgentSpec(name); !ok {
+		return fmt.Errorf("unknown agent %q; try %s", name, strings.Join(canonicalAgentNames(), ", "))
+	}
+	p, err := loadAgentPolicy()
+	if err != nil {
+		return err
+	}
+	if canonical, ok := agentAliases[name]; ok {
+		name = canonical
+	}
+	p.PrimaryAgent = name
+	return saveAgentPolicy(p)
+}
+
+// SetDefaultAgents replaces the assigned default agent list. An empty list
+// clears it. Names are validated against the known agent specs.
+func SetDefaultAgents(names []string) error {
+	clean := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, n := range names {
+		spec, ok := findAgentSpec(n)
+		if !ok {
+			return fmt.Errorf("unknown agent %q; try %s", n, strings.Join(canonicalAgentNames(), ", "))
+		}
+		if !seen[spec.name] {
+			seen[spec.name] = true
+			clean = append(clean, spec.name)
+		}
+	}
+	p, err := loadAgentPolicy()
+	if err != nil {
+		return err
+	}
+	p.Agents = clean
+	return saveAgentPolicy(p)
+}
+
+// SetKeepAlive toggles the sliding session window for ask mode. When on, each
+// authorized agent operation renews the session; it expires after
+// SessionMinutes of inactivity. When off, the expiry set at unlock is fixed.
+func SetKeepAlive(on bool) error {
+	p, err := loadAgentPolicy()
+	if err != nil {
+		return err
+	}
+	p.KeepAlive = on
+	return saveAgentPolicy(p)
+}
+
 func handleAgent() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: omaseal agent mode <open|ask|lock> [session-minutes]")
 		fmt.Fprintln(os.Stderr, "       omaseal agent unlock")
 		fmt.Fprintln(os.Stderr, "       omaseal agent lock")
-		fmt.Fprintln(os.Stderr, "       omaseal agent status")
+		fmt.Fprintln(os.Stderr, "       omaseal agent status [--json]")
+		fmt.Fprintln(os.Stderr, "       omaseal agent keepalive [on|off]  (no arg = show current)")
+		fmt.Fprintf(os.Stderr, "       omaseal agent primary <%s>\n", strings.Join(canonicalAgentNames(), "|"))
+		fmt.Fprintln(os.Stderr, "       omaseal agent defaults [names...]  (no names = show current)")
 		os.Exit(1)
 	}
 	sub := os.Args[2]
@@ -276,7 +393,73 @@ func handleAgent() {
 		}
 		WriteLog("agent locked")
 	case "status":
-		PrintAgentStatus()
+		if hasFlag(os.Args, "--json") {
+			s, err := agentStatusJSON()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(s)
+		} else {
+			PrintAgentStatus()
+		}
+	case "keepalive", "keep-alive":
+		if len(os.Args) < 4 {
+			p, _ := loadAgentPolicy()
+			fmt.Println("keep-alive:", yesNo(p.KeepAlive))
+			return
+		}
+		var on bool
+		switch strings.ToLower(os.Args[3]) {
+		case "on", "true", "1", "yes":
+			on = true
+		case "off", "false", "0", "no":
+			on = false
+		default:
+			fmt.Fprintf(os.Stderr, "error: invalid keepalive value %q; use on or off\n", os.Args[3])
+			os.Exit(1)
+		}
+		if err := SetKeepAlive(on); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		WriteLog("agent keep-alive set to %v", on)
+		fmt.Printf("Agent session keep-alive %s.\n", map[bool]string{true: "enabled — sessions renew on activity", false: "disabled — unlock expiry is fixed"}[on])
+	case "primary":
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "error: missing agent name")
+			os.Exit(1)
+		}
+		if err := SetPrimaryAgent(os.Args[3]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		WriteLog("primary agent set to %s", os.Args[3])
+		fmt.Printf("Primary agent set to %s.\n", os.Args[3])
+	case "defaults":
+		if len(os.Args) < 4 {
+			p, _ := loadAgentPolicy()
+			if len(p.Agents) == 0 {
+				fmt.Println("No default agents assigned.")
+			} else {
+				fmt.Println(strings.Join(p.Agents, ", "))
+			}
+			return
+		}
+		names := os.Args[3:]
+		if len(names) == 1 && names[0] == "--clear" {
+			names = nil
+		}
+		if err := SetDefaultAgents(names); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		WriteLog("default agents set to %v", names)
+		if len(names) == 0 {
+			fmt.Println("Default agents cleared.")
+		} else {
+			fmt.Printf("Default agents set to %s.\n", strings.Join(names, ", "))
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown agent subcommand %q\n", sub)
 		os.Exit(1)

@@ -92,12 +92,19 @@ omarchy-restart-shell
 ## Onboarding
 
 ```sh
-omaseal doctor    # check the environment
-omaseal setup     # print MCP / PATH / plugin config
+omaseal doctor          # check the environment (optional extras warn, never fail)
+omaseal setup           # guided onboarding: doctor + wire detected agents
+omaseal setup --yes     # non-interactive: auto-wire every detected agent
+omaseal selftest        # set/get/delete round-trip against the live keyring
+omaseal mcp status      # which agents are detected and already wired
 omaseal agent mode <open|ask|lock> [min]  # set agent/MCP trust mode
 omaseal agent unlock                      # biometric unlock for ask mode
 omaseal agent lock                        # revoke agent session
 omaseal agent status                      # show agent policy and session
+omaseal agent keepalive on                # session renews on activity, lapses
+                                          # after <min> minutes idle (ask mode)
+omaseal agent primary claude              # set your main agent
+omaseal agent defaults claude devin       # assign default agents to auto-wire
 ```
 
 See [`docs/onboarding.md`](docs/onboarding.md) for wiring OmaSeal into agents and other Omarchy apps.
@@ -130,6 +137,7 @@ omaseal import bitwarden
 
 # IPC for other plugins
 omaseal ipc resolve '{"service":"openrouter","account":"default"}'
+omaseal ipc set '{"service":"myapp","account":"api"}' < secret.txt
 
 # MCP stdio server for agents
 omaseal mcp
@@ -140,9 +148,13 @@ omaseal mcp
 A `BarWidget` and `Panel` are included:
 
 - Click the **O** in the bar.
-- Browse stored secrets.
+- Browse stored secrets; `/` focuses the Keychain-style search field.
 - `+ Add` creates a new `service / account / secret`.
 - The copy button runs `reveal` and uses `wl-copy` with a 30-second clear.
+- The agent trust mode (`open` / `ask` / `lock`) is shown in the header with
+  an Unlock button when a session is required, the session expiry time while
+  unlocked, a `·KA` marker when keep-alive is on, and a notice when no
+  fingerprint reader is present.
 - `r` refreshes; `a` toggles the add form.
 
 ## BrowserOS (deferred)
@@ -170,22 +182,31 @@ planned service/account convention and fail-closed troubleshooting guidance.
 
 ## Agent / MCP
 
-```json
-{
-  "mcpServers": {
-    "omaseal": {
-      "command": "</absolute/path/to/omaseal>",
-      "args": ["mcp"]
-    }
-  }
-}
+```sh
+omaseal mcp install-detected   # wire every agent found on this machine
+omaseal mcp status             # see detected / installed / config path per agent
+omaseal mcp install claude     # or wire one agent by name
 ```
 
-Replace `</absolute/path/to/omaseal>` with the path to the installed binary
-(usually `~/.local/bin/omaseal` or `/usr/bin/omaseal`).
+Supported agents and the config each one actually reads:
+
+| Agent | User config | Project config (`--dir`) |
+| --- | --- | --- |
+| `claude` | `~/.claude.json` | `.mcp.json` |
+| `codex` | `~/.codex/config.toml` | `.codex/config.toml` |
+| `cursor` | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
+| `devin` | `~/.config/devin/mcp_config.json` | `.devin/mcp_config.json` |
+| `opencode` | `~/.config/opencode/opencode.json` | `opencode.json` |
+| `agy` (`antigravity`) | `~/.agy/mcp.json` | `.agy/mcp.json` |
+| `hermes` | `~/.hermes/mcp.json` | `.hermes/mcp.json` |
+
+Existing servers and unrelated top-level keys are preserved; `install-*`
+commands only add or replace the `omaseal` entry.
 
 Tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`,
-`omaseal_delete`, `omaseal_list`.
+`omaseal_delete`, `omaseal_list`. The server also returns `instructions` at
+`initialize` time, so connected agents automatically know to resolve secrets
+through OmaSeal instead of asking for pastes or reading `.env` files.
 
 ## License
 

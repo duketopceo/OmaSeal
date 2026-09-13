@@ -18,12 +18,18 @@ Panel {
   property bool popoutSwitchClosing: false
 
   property string searchFilter: ""
+  property var allSecrets: []
   property string notice: ""
   property string logText: ""
   property bool showLogs: false
   property int selectedIndex: 0
   property bool isAdding: false
   property int pendingDeleteIndex: -1
+  property string agentMode: ""
+  property bool agentSessionActive: false
+  property string agentSessionExpires: ""
+  property bool agentKeepAlive: false
+  property bool fprintdAvailable: true
 
   Component {
     id: setProcComponent
@@ -49,6 +55,7 @@ Panel {
   function open() {
     root.controller.show()
     root.refresh()
+    root.refreshAgentStatus()
   }
 
   function close() {
@@ -85,20 +92,52 @@ Panel {
   function applyList(raw) {
     try {
       var d = JSON.parse(raw)
-      secretsModel.clear()
-      for (var i = 0; i < d.length; i++) {
-        secretsModel.append({
-          service: d[i].service || "",
-          account: d[i].account || "",
-          label: d[i].label || ""
-        })
-      }
-      if (root.selectedIndex >= secretsModel.count) {
-        root.selectedIndex = Math.max(0, secretsModel.count - 1)
-      }
+      root.allSecrets = d
+      root.rebuildModel()
     } catch (e) {
       root.notice = "Failed to parse secret list"
     }
+  }
+
+  function rebuildModel() {
+    var f = root.searchFilter.trim().toLowerCase()
+    secretsModel.clear()
+    for (var i = 0; i < root.allSecrets.length; i++) {
+      var it = root.allSecrets[i]
+      if (f !== "") {
+        var hay = ((it.service || "") + "/" + (it.account || "") + " " + (it.label || "")).toLowerCase()
+        if (hay.indexOf(f) === -1) continue
+      }
+      secretsModel.append({
+        service: it.service || "",
+        account: it.account || "",
+        label: it.label || ""
+      })
+    }
+    if (root.selectedIndex >= secretsModel.count) {
+      root.selectedIndex = Math.max(0, secretsModel.count - 1)
+    }
+  }
+
+  function refreshAgentStatus() {
+    if (!agentProc.running) agentProc.running = true
+  }
+
+  function applyAgentStatus(raw) {
+    try {
+      var d = JSON.parse(raw)
+      root.agentMode = d.mode || ""
+      root.agentSessionActive = d.session_active === true
+      root.agentSessionExpires = d.session_expires || ""
+      root.agentKeepAlive = d.keep_alive === true
+      root.fprintdAvailable = d.fprintd_available !== false
+    } catch (e) {
+      root.agentMode = ""
+    }
+  }
+
+  function unlockAgent() {
+    if (!unlockProc.running) unlockProc.running = true
   }
 
   function applyLogs(raw) {
@@ -243,6 +282,21 @@ Panel {
     }
   }
 
+  Process {
+    id: agentProc
+    command: ["omaseal", "agent", "status", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyAgentStatus(text)
+    }
+  }
+
+  Process {
+    id: unlockProc
+    command: ["omaseal", "agent", "unlock"]
+    onExited: function(exitCode) { root.refreshAgentStatus() }
+  }
+
   Timer {
     id: logTimer
     interval: 3000
@@ -371,7 +425,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus
+      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus || searchField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
@@ -396,6 +450,7 @@ Panel {
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
         else if (t === "a" || t === "A") root.isAdding = !root.isAdding
+        else if (t === "/" && searchField.visible) searchField.forceActiveFocus()
       }
 
       Column {
@@ -504,9 +559,58 @@ Panel {
             }
           }
 
+          // Agent trust status — the Keychain-style lock indicator.
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.agentMode !== ""
+
+            Text {
+              text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
+                    (root.agentKeepAlive ? "·KA" : "") +
+                    (root.agentMode === "ask" && root.agentSessionActive
+                      ? " · UNLOCKED" + (root.agentSessionExpires
+                          ? " " + Qt.formatTime(new Date(root.agentSessionExpires), "HH:mm")
+                          : "")
+                      : "")
+              color: (root.agentMode === "open" || root.agentSessionActive) ? root.accent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+              visible: root.agentMode === "ask" && !root.agentSessionActive
+              text: "Unlock"
+              bordered: true
+              onClicked: root.unlockAgent()
+            }
+          }
+
+          // fprintd availability notice — only relevant when ask mode gates on it.
+          Text {
+            visible: root.agentMode === "ask" && !root.fprintdAvailable
+            width: parent.width
+            text: "no fingerprint reader — unlock is ungated"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          // Search field — Keychain Access style filtering.
+          TextField {
+            id: searchField
+            width: parent.width
+            placeholderText: "Search secrets  (press /)"
+            foreground: root.fg
+            visible: root.allSecrets.length > 0
+            Keys.onReleased: root.searchFilter = searchField.text
+          }
+
           // Secret List Section Header
           PanelSectionHeader {
-            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  enter copy  ·  x del"
+            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  / search  ·  enter copy  ·  x del"
             foreground: root.fg
           }
         }
@@ -529,7 +633,7 @@ Panel {
             Text {
               visible: secretsModel.count === 0
               width: parent.width
-              text: "No secrets stored in keyring."
+              text: root.allSecrets.length > 0 ? "No matches." : "No secrets stored in keyring."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
