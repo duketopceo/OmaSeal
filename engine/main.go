@@ -380,11 +380,11 @@ func readSecret() (string, error) {
 }
 
 func isStdinTTY() bool {
-	stat, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (stat.Mode() & os.ModeCharDevice) != 0
+	return isTerminal(os.Stdin)
+}
+
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func hasFlag(args []string, name string) bool {
