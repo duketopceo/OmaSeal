@@ -26,9 +26,14 @@
 
 ## v0.5.0 — BrowserOS and plugin ecosystem
 
-- `omaseal://service/account` reference format for BrowserOS providers.
-- BrowserOS resolves the real secret at request time, stores only the reference.
-- Shared `service/account` namespace guide for Omarchy plugin authors.
+- [x] `omaseal://service/account` reference format — accepted by every CLI
+  command; account may span `/`.
+- [ ] BrowserOS resolves the real secret at request time, stores only the
+  reference. (Deferred: pending `omarchy-browser` checkout.)
+- [x] Shared `service/account` namespace guide — `docs/namespaces.md`
+  (provisional until exercised by a real consumer).
+- [x] Masked graphical prompt for `resolve` in GUI sessions without a TTY
+  (pinentry/zenity, `OMASEAL_GUI_PROMPT` override).
 
 ## v0.6.0 — Marketplace stable
 

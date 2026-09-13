@@ -135,6 +135,10 @@ omaseal list openrouter --json
 omaseal import 1password pace-dev
 omaseal import bitwarden
 
+# Everywhere <service> <account> works, an omaseal:// reference works too
+omaseal get omaseal://openrouter/default
+omaseal resolve omaseal://browseros/openrouter-work/apiKey
+
 # IPC for other plugins
 omaseal ipc resolve '{"service":"openrouter","account":"default"}'
 omaseal ipc set '{"service":"myapp","account":"api"}' < secret.txt
@@ -165,7 +169,9 @@ provider API keys in OmaSeal, keep only an `omaseal://` reference, and resolve
 the real secret just before each outbound LLM request.
 
 See [`docs/integrations/browseros.md`](docs/integrations/browseros.md) for the
-planned service/account convention and fail-closed troubleshooting guidance.
+planned service/account convention and fail-closed troubleshooting guidance,
+and [`docs/namespaces.md`](docs/namespaces.md) for the shared namespace rules
+and `omaseal://` reference grammar every consumer should follow.
 
 ## Security model
 
@@ -179,6 +185,10 @@ planned service/account convention and fail-closed troubleshooting guidance.
   without one it falls through to the local secret.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault.
+- When `resolve` needs to prompt, it uses the TTY when one exists; in a
+  graphical session with no TTY it opens a masked pinentry or zenity dialog
+  instead. `OMASEAL_GUI_PROMPT=pinentry|zenity|off` controls the prompter;
+  `omaseal doctor` reports which one is effective.
 
 ## Agent / MCP
 
