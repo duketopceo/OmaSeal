@@ -63,6 +63,7 @@ func doctorChecks() []checkResult {
 		checkFprintd(),
 		checkOnePassword(),
 		checkBitwarden(),
+		checkGUIPrompt(),
 		checkPath(),
 	}
 }
@@ -220,6 +221,35 @@ func checkBitwarden() checkResult {
 			"  - Run `bw login`, then use a command-scoped session:\n" +
 			"    `BW_SESSION=\"$(bw unlock --raw)\" omaseal resolve <service> <account>` or `omaseal import bitwarden`.",
 	}
+}
+
+// checkGUIPrompt reports the effective masked graphical prompter so a headless
+// `omaseal resolve` has somewhere to ask. It is optional: no prompter only
+// limits prompting, never the keyring itself.
+func checkGUIPrompt() checkResult {
+	if !graphicalSession() {
+		return checkResult{
+			name:     "gui-prompt",
+			ok:       false,
+			optional: true,
+			message: "No graphical session (WAYLAND_DISPLAY/DISPLAY unset).\n" +
+				"  - Headless `omaseal resolve` prompts need a TTY or a graphical session.",
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	p, err := selectGUIPrompter(ctx)
+	if err != nil {
+		return checkResult{
+			name:     "gui-prompt",
+			ok:       false,
+			optional: true,
+			message: "No usable masked graphical prompter found.\n" +
+				"  - Install `pinentry` with a GUI backend or `zenity` for headless `omaseal resolve` prompts.\n" +
+				"  - `OMASEAL_GUI_PROMPT=pinentry|zenity|off` overrides prompter selection.",
+		}
+	}
+	return checkResult{name: "gui-prompt", ok: true, optional: true, message: "graphical prompt via " + p.name()}
 }
 
 func checkPath() checkResult {

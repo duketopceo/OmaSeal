@@ -74,6 +74,30 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		return secret, nil
 	}
 
+	// 5. Masked GUI prompt when a graphical session exists but no TTY does.
+	// IPC and MCP callers pass prompt=false and never reach this.
+	if prompt && graphicalSession() {
+		secret, gerr := guiPromptSecret(ctx, service, account)
+		if gerr == nil {
+			if secret == "" {
+				return "", errors.New("secret cannot be empty")
+			}
+			if cache {
+				if serr := Set(service, account, secret); serr != nil {
+					return "", serr
+				}
+			}
+			return secret, nil
+		}
+		if errors.Is(gerr, errPromptCancelled) {
+			return "", fmt.Errorf("no secret for %s/%s: %w", service, account, gerr)
+		}
+		if !errors.Is(gerr, errNoGUIPrompter) {
+			return "", gerr
+		}
+		// No usable prompter: fall through to the generic not_found error.
+	}
+
 	return "", newError("not_found", "omaseal set", fmt.Errorf("no secret found for %s/%s", service, account))
 }
 
