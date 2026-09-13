@@ -18,6 +18,7 @@ Panel {
   property bool popoutSwitchClosing: false
 
   property string searchFilter: ""
+  onSearchFilterChanged: root.rebuildModel()
   property var allSecrets: []
   property string notice: ""
   property string logText: ""
@@ -133,6 +134,10 @@ Panel {
       root.fprintdAvailable = d.fprintd_available !== false
     } catch (e) {
       root.agentMode = ""
+      root.agentSessionActive = false
+      root.agentSessionExpires = ""
+      root.agentKeepAlive = false
+      root.fprintdAvailable = true
     }
   }
 
@@ -294,7 +299,7 @@ Panel {
   Process {
     id: unlockProc
     command: ["omaseal", "agent", "unlock"]
-    onExited: function(exitCode) { root.refreshAgentStatus() }
+    onExited: function(exitCode) { if (exitCode === 0) root.refreshAgentStatus() }
   }
 
   Timer {
@@ -567,7 +572,7 @@ Panel {
 
             Text {
               text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
-                    (root.agentKeepAlive ? "·KA" : "") +
+                    (root.agentKeepAlive ? " · KA" : "") +
                     (root.agentMode === "ask" && root.agentSessionActive
                       ? " · UNLOCKED" + (root.agentSessionExpires
                           ? " " + Qt.formatTime(new Date(root.agentSessionExpires), "HH:mm")
@@ -606,6 +611,7 @@ Panel {
             foreground: root.fg
             visible: root.allSecrets.length > 0
             Keys.onReleased: root.searchFilter = searchField.text
+            Keys.onEscapePressed: searchField.focus = false
           }
 
           // Secret List Section Header

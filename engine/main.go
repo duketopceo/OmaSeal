@@ -45,7 +45,7 @@ Usage:
   omaseal agent status [--json]            show agent policy and session
   omaseal agent keepalive [on|off]         session renews on activity (ask mode)
   omaseal agent primary <name>             set your main agent
-  omaseal agent defaults [names...]        set assigned default agents
+  omaseal agent defaults [names...|--clear] set assigned default agents
 
 References:
   Everywhere <service> <account> is accepted, a single omaseal://<service>/<account>

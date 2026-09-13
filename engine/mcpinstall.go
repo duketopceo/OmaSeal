@@ -6,12 +6,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
+)
+
+// Config merge strategies for agentSpec.format.
+const (
+	formatJSON      = "json"
+	formatCodexTOML = "toml-codex"
 )
 
 // agentSpec describes where one agent reads its MCP server configuration and
@@ -29,8 +36,8 @@ type agentSpec struct {
 	// projectPath is the --dir-relative config file written for repo-local MCP.
 	// Empty means the agent has no repo-local config surface.
 	projectPath string
-	// format selects the merge strategy: "json" merges a servers object,
-	// "toml-codex" appends a [mcpServers.omaseal] table.
+	// format selects the merge strategy: formatJSON merges a servers object,
+	// formatCodexTOML appends a [mcpServers.omaseal] table.
 	format string
 	// serversKey is the top-level JSON key holding the server map.
 	serversKey string
@@ -70,7 +77,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"claude"},
 		globalPath:  ".claude.json",
 		projectPath: ".mcp.json",
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
 	},
@@ -80,7 +87,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"codex"},
 		globalPath:  filepath.Join(".codex", "config.toml"),
 		projectPath: filepath.Join(".codex", "config.toml"),
-		format:      "toml-codex",
+		format:      formatCodexTOML,
 	},
 	{
 		name:        "cursor",
@@ -88,7 +95,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"cursor"},
 		globalPath:  filepath.Join(".cursor", "mcp.json"),
 		projectPath: filepath.Join(".cursor", "mcp.json"),
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
 	},
@@ -98,7 +105,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"devin"},
 		globalPath:  filepath.Join(".config", "devin", "mcp_config.json"),
 		projectPath: filepath.Join(".devin", "mcp_config.json"),
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       transportEntry,
 	},
@@ -108,7 +115,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"opencode"},
 		globalPath:  filepath.Join(".config", "opencode", "opencode.json"),
 		projectPath: "opencode.json",
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcp",
 		entry:       opencodeEntry,
 	},
@@ -118,7 +125,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"agy", "antigravity"},
 		globalPath:  filepath.Join(".agy", "mcp.json"),
 		projectPath: filepath.Join(".agy", "mcp.json"),
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
 	},
@@ -128,7 +135,7 @@ var agentSpecs = []agentSpec{
 		bins:        []string{"hermes"},
 		globalPath:  filepath.Join(".hermes", "mcp.json"),
 		projectPath: filepath.Join(".hermes", "mcp.json"),
-		format:      "json",
+		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
 	},
@@ -175,7 +182,7 @@ func agentDetected(s agentSpec, home string) bool {
 		}
 	}
 	for _, b := range s.bins {
-		if _, err := exec.LookPath(b); err == nil {
+		if commandExists(b) {
 			return true
 		}
 	}
@@ -256,6 +263,7 @@ func handleMCPInstallDetected() {
 	dir := fs.String("dir", "", "Install project-level MCP configs in this path instead of user configs")
 	if err := fs.Parse(os.Args[3:]); err != nil {
 		printError("install-detected: ", err)
+		mcpInstallAllUsage()
 		os.Exit(1)
 	}
 
@@ -277,12 +285,7 @@ func handleMCPInstallDetected() {
 		return
 	}
 
-	names := make([]string, 0, len(targets))
-	for n := range targets {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	installForAgents(names, flagDir(fs, dir))
+	installForAgents(slices.Sorted(maps.Keys(targets)), flagDir(fs, dir))
 }
 
 func flagDir(fs *flag.FlagSet, dir *string) string {
@@ -319,8 +322,11 @@ type mcpAgentStatus struct {
 	Default   bool   `json:"default,omitempty"`
 }
 
-func agentStatusRows() []mcpAgentStatus {
-	home, _ := os.UserHomeDir()
+func mcpStatusRows() []mcpAgentStatus {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil // relative spec paths would stat against CWD and false-positive
+	}
 	p, _ := loadAgentPolicy()
 	defaults := map[string]bool{}
 	for _, n := range p.Agents {
@@ -345,7 +351,7 @@ func agentStatusRows() []mcpAgentStatus {
 }
 
 func handleMCPStatus() {
-	rows := agentStatusRows()
+	rows := mcpStatusRows()
 	if hasFlag(os.Args, "--json") {
 		b, _ := json.MarshalIndent(rows, "", "  ")
 		fmt.Println(string(b))
@@ -377,7 +383,7 @@ func mcpInstalledAt(s agentSpec, path string) bool {
 	if err != nil {
 		return false
 	}
-	if s.format == "toml-codex" {
+	if s.format == formatCodexTOML {
 		return codexMCPRe.MatchString(string(data))
 	}
 	var cfg map[string]json.RawMessage
@@ -399,7 +405,7 @@ func mcpInstalledAt(s agentSpec, path string) bool {
 func installMCP(agent, dir string) (string, error) {
 	spec, ok := findAgentSpec(agent)
 	if !ok {
-		return "", fmt.Errorf("unknown agent %q; try %s", agent, strings.Join(canonicalAgentNames(), ", "))
+		return "", unknownAgentError(agent)
 	}
 
 	self, err := os.Executable()
@@ -412,7 +418,7 @@ func installMCP(agent, dir string) (string, error) {
 		return "", err
 	}
 
-	if spec.format == "toml-codex" {
+	if spec.format == formatCodexTOML {
 		if err := mergeCodexTOML(configPath, self); err != nil {
 			return "", err
 		}
@@ -425,22 +431,50 @@ func installMCP(agent, dir string) (string, error) {
 	return configPath, nil
 }
 
+// readConfigPreservingMode returns the file's contents and permission bits in
+// one open. A missing file yields nil data and 0644 so callers can write fresh.
+func readConfigPreservingMode(path string) (data []byte, mode os.FileMode, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, 0o644, nil
+		}
+		return nil, 0, fmt.Errorf("read %s: %w", path, err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, 0, fmt.Errorf("read %s: %w", path, err)
+	}
+	data, err = io.ReadAll(f)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read %s: %w", path, err)
+	}
+	return data, st.Mode().Perm(), nil
+}
+
+func writeFileMode(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
 // mergeJSONConfig inserts (or replaces) the omaseal server entry while
 // preserving every other top-level key and server in the file.
 func mergeJSONConfig(configPath string, spec agentSpec, bin string) error {
+	data, mode, err := readConfigPreservingMode(configPath)
+	if err != nil {
+		return err
+	}
 	rawConfig := map[string]json.RawMessage{}
-	var mode os.FileMode = 0644
-	if data, err := os.ReadFile(configPath); err == nil {
-		if st, serr := os.Stat(configPath); serr == nil {
-			mode = st.Mode().Perm()
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &rawConfig); err != nil {
+			return fmt.Errorf("parse %s: %w", configPath, err)
 		}
-		if len(bytes.TrimSpace(data)) > 0 {
-			if err := json.Unmarshal(data, &rawConfig); err != nil {
-				return fmt.Errorf("parse %s: %w", configPath, err)
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read %s: %w", configPath, err)
 	}
 
 	servers := map[string]any{}
@@ -470,13 +504,7 @@ func mergeJSONConfig(configPath string, spec agentSpec, bin string) error {
 	if err != nil {
 		return fmt.Errorf("marshal mcp config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(configPath), err)
-	}
-	if err := os.WriteFile(configPath, b, mode); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-	return nil
+	return writeFileMode(configPath, b, mode)
 }
 
 // codexMCPRe matches an existing [mcpServers.omaseal] table header in TOML.
@@ -486,16 +514,11 @@ var codexMCPRe = regexp.MustCompile(`(?m)^\s*\[\s*mcpServers\.omaseal\s*\]`)
 // [mcpServers.omaseal] table, replacing any previous omaseal table and
 // preserving all other content.
 func mergeCodexTOML(configPath, bin string) error {
-	var mode os.FileMode = 0644
-	var existing string
-	if data, err := os.ReadFile(configPath); err == nil {
-		if st, serr := os.Stat(configPath); serr == nil {
-			mode = st.Mode().Perm()
-		}
-		existing = string(data)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read %s: %w", configPath, err)
+	data, mode, err := readConfigPreservingMode(configPath)
+	if err != nil {
+		return err
 	}
+	existing := string(data)
 
 	// Cut a previous [mcpServers.omaseal] table: from its header line to the
 	// next table header or EOF.
@@ -523,13 +546,7 @@ func mergeCodexTOML(configPath, bin string) error {
 		out = cleaned + "\n\n" + block
 	}
 
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(configPath), err)
-	}
-	if err := os.WriteFile(configPath, []byte(out), mode); err != nil {
-		return fmt.Errorf("write %s: %w", configPath, err)
-	}
-	return nil
+	return writeFileMode(configPath, []byte(out), mode)
 }
 
 func mcpInstallUsage() {

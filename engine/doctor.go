@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,7 +33,57 @@ func handleDoctor() {
 }
 
 func runDoctorJSON() {
-	results := doctorChecks()
+	emitCheckJSON(doctorChecks(), "omaseal setup")
+}
+
+// emitCheckJSON renders check results in the shared ping/doctor JSON shape.
+func emitCheckJSON(results []checkResult, help string) {
+	checks, ok := toPingChecks(results)
+	res := pingResult{
+		Version: version,
+		Commit:  commit,
+		Target:  target(),
+		Ok:      ok,
+		Checks:  checks,
+		Help:    help,
+	}
+	b, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error marshaling check result:", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(b))
+}
+
+// doctorChecks runs every check concurrently — each is an independent probe
+// and several spawn subprocesses with multi-second timeouts, so serial runs
+// cost the sum of all timeouts instead of the slowest one.
+func doctorChecks() []checkResult {
+	checks := []func() checkResult{
+		checkBinary,
+		checkSecretService,
+		checkFprintd,
+		checkOnePassword,
+		checkBitwarden,
+		checkGUIPrompt,
+		checkPath,
+	}
+	results := make([]checkResult, len(checks))
+	var wg sync.WaitGroup
+	for i, c := range checks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = c()
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// toPingChecks converts check results to the JSON shape and reports whether
+// all required (non-optional) checks passed.
+func toPingChecks(results []checkResult) ([]pingCheck, bool) {
 	checks := make([]pingCheck, len(results))
 	ok := true
 	for i, r := range results {
@@ -40,32 +92,7 @@ func runDoctorJSON() {
 			ok = false
 		}
 	}
-	res := pingResult{
-		Version: version,
-		Commit:  commit,
-		Target:  target(),
-		Ok:      ok,
-		Checks:  checks,
-		Help:    "omaseal setup",
-	}
-	b, err := json.MarshalIndent(res, "", "  ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error marshaling doctor result:", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(b))
-}
-
-func doctorChecks() []checkResult {
-	return []checkResult{
-		checkBinary(),
-		checkSecretService(),
-		checkFprintd(),
-		checkOnePassword(),
-		checkBitwarden(),
-		checkGUIPrompt(),
-		checkPath(),
-	}
+	return checks, ok
 }
 
 func printDoctorResults(results []checkResult) bool {
@@ -239,6 +266,9 @@ func checkGUIPrompt() checkResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	p, err := selectGUIPrompter(ctx)
+	if errors.Is(err, errGUIDisabled) {
+		return checkResult{name: "gui-prompt", ok: true, optional: true, message: "disabled by OMASEAL_GUI_PROMPT=off"}
+	}
 	if err != nil {
 		return checkResult{
 			name:     "gui-prompt",
@@ -258,16 +288,24 @@ func checkPath() checkResult {
 		return checkResult{name: "PATH", ok: false, message: "Cannot locate the running binary"}
 	}
 	dir := filepath.Dir(self)
-	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
-		if p == dir {
-			return checkResult{name: "PATH", ok: true, message: fmt.Sprintf("`%s` is on PATH", dir)}
-		}
+	if dirOnPATH(dir) {
+		return checkResult{name: "PATH", ok: true, message: fmt.Sprintf("`%s` is on PATH", dir)}
 	}
 	return checkResult{
 		name:    "PATH",
 		ok:      false,
 		message: fmt.Sprintf("`%s` is not on your PATH.\n  - Add `export PATH=\"%s:$PATH\"` to your shell profile.", dir, dir),
 	}
+}
+
+// dirOnPATH reports whether dir appears verbatim in PATH.
+func dirOnPATH(dir string) bool {
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		if p == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func commandExists(name string) bool {

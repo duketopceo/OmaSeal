@@ -26,6 +26,8 @@ var (
 	errPromptCancelled = errors.New("prompt cancelled")
 	// errNoGUIPrompter means no usable masked graphical prompter was found.
 	errNoGUIPrompter = errors.New("no usable graphical prompter")
+	// errGUIDisabled means the user set OMASEAL_GUI_PROMPT=off.
+	errGUIDisabled = errors.New("graphical prompting disabled by OMASEAL_GUI_PROMPT=off")
 )
 
 // graphicalSession reports whether a display server is reachable for prompts.
@@ -35,13 +37,48 @@ func graphicalSession() bool {
 
 // guiPromptSecret asks for a secret in a masked graphical dialog. It only runs
 // where a TTY prompt cannot, and returns errPromptCancelled or errNoGUIPrompter
-// rather than ever treating a failed prompt as an empty secret.
+// rather than ever treating a failed prompt as an empty secret. Probing and
+// prompting share one process spawn per prompter.
 func guiPromptSecret(ctx context.Context, service, account string) (string, error) {
-	p, err := selectGUIPrompter(ctx)
+	order, err := guiPrompterOrder()
 	if err != nil {
 		return "", err
 	}
-	return p.prompt(ctx, service, account)
+	if len(order) == 0 {
+		return "", errGUIDisabled
+	}
+	var lastErr error
+	for _, kind := range order {
+		secret, err := prompterFor(kind).prompt(ctx, service, account)
+		switch {
+		case err == nil:
+			return secret, nil
+		case errors.Is(err, errPromptCancelled):
+			return "", err // the user dismissed the dialog; don't re-ask elsewhere
+		default:
+			lastErr = err // unusable prompter — fall through to the next
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("%w (install pinentry with a GUI backend or zenity)", errNoGUIPrompter)
+}
+
+func prompterFor(kind string) guiPrompter {
+	if kind == "pinentry" {
+		return &pinentryPrompter{}
+	}
+	return &zenityPrompter{}
+}
+
+// withPromptDeadline adds the default prompt deadline when the caller's
+// context has none.
+func withPromptDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, guiPromptTimeout)
 }
 
 type guiPrompter interface {
@@ -67,19 +104,18 @@ func guiPrompterOrder() ([]string, error) {
 	}
 }
 
+// selectGUIPrompter probes for the effective prompter without prompting — the
+// doctor/status path. The prompt path itself uses guiPromptSecret.
 func selectGUIPrompter(ctx context.Context) (guiPrompter, error) {
 	order, err := guiPrompterOrder()
 	if err != nil {
 		return nil, err
 	}
+	if len(order) == 0 {
+		return nil, errGUIDisabled
+	}
 	for _, kind := range order {
-		var p guiPrompter
-		switch kind {
-		case "pinentry":
-			p = &pinentryPrompter{}
-		case "zenity":
-			p = &zenityPrompter{}
-		}
+		p := prompterFor(kind)
 		if p.available(ctx) {
 			return p, nil
 		}
@@ -128,12 +164,8 @@ func (p *pinentryPrompter) name() string {
 func (p *pinentryPrompter) available(ctx context.Context) bool {
 	for _, path := range pinentryCandidatePaths() {
 		flavor, err := pinentryFlavor(ctx, path)
-		if err != nil {
+		if err != nil || isNonGUIFlavor(flavor) {
 			continue
-		}
-		switch flavor {
-		case "curses", "tty", "emacs":
-			continue // not a graphical prompt
 		}
 		p.path, p.flavor = path, flavor
 		return true
@@ -141,11 +173,31 @@ func (p *pinentryPrompter) available(ctx context.Context) bool {
 	return false
 }
 
-func (p *pinentryPrompter) prompt(ctx context.Context, service, account string) (string, error) {
-	if p.path == "" {
-		return "", errNoGUIPrompter
+func isNonGUIFlavor(flavor string) bool {
+	switch flavor {
+	case "curses", "tty", "emacs":
+		return true // terminal/UI-in-process backends are not graphical prompts
 	}
-	return promptPinentry(ctx, p.path, service, account)
+	return false
+}
+
+func (p *pinentryPrompter) prompt(ctx context.Context, service, account string) (string, error) {
+	var lastErr error
+	for _, path := range pinentryCandidatePaths() {
+		secret, err := promptPinentry(ctx, path, service, account)
+		switch {
+		case err == nil:
+			return secret, nil
+		case errors.Is(err, errPromptCancelled):
+			return "", err
+		default:
+			lastErr = err // candidate unusable — try the next
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", errNoGUIPrompter
 }
 
 // assuanError is an ERR reply from an Assuan server.
@@ -174,8 +226,8 @@ type assuanConn struct {
 	lines chan assuanLine
 }
 
-func dialAssuan(ctx context.Context, path string, args ...string) (*assuanConn, error) {
-	cmd := exec.CommandContext(ctx, path, args...)
+func dialAssuan(ctx context.Context, path string) (*assuanConn, error) {
+	cmd := exec.CommandContext(ctx, path)
 	cmd.WaitDelay = 3 * time.Second // bound Wait when a child holds pipes open
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -313,14 +365,7 @@ func assuanUnescape(s string) ([]byte, error) {
 	return out, nil
 }
 
-func pinentryFlavor(ctx context.Context, path string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	conn, err := dialAssuan(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	defer conn.close()
+func connFlavor(ctx context.Context, conn *assuanConn) (string, error) {
 	if err := conn.command("GETINFO flavor"); err != nil {
 		return "", err
 	}
@@ -331,23 +376,41 @@ func pinentryFlavor(ctx context.Context, path string) (string, error) {
 	return strings.ToLower(strings.TrimSpace(string(data))), nil
 }
 
-func promptPinentry(ctx context.Context, path, service, account string) (string, error) {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, guiPromptTimeout)
-		defer cancel()
+func pinentryFlavor(ctx context.Context, path string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := dialAssuan(ctx, path)
+	if err != nil {
+		return "", err
 	}
+	defer conn.close()
+	return connFlavor(ctx, conn)
+}
+
+func promptPinentry(ctx context.Context, path, service, account string) (string, error) {
+	ctx, cancel := withPromptDeadline(ctx)
+	defer cancel()
 	conn, err := dialAssuan(ctx, path)
 	if err != nil {
 		return "", err
 	}
 	defer conn.close()
 
+	// One conn carries probe and prompt: check the resolved backend flavor
+	// before asking, so a curses/tty dispatcher never reaches GETPIN.
+	flavor, err := connFlavor(ctx, conn)
+	if err != nil {
+		return "", err
+	}
+	if isNonGUIFlavor(flavor) {
+		return "", fmt.Errorf("%w: pinentry resolved to %s", errNoGUIPrompter, flavor)
+	}
+
 	for _, cmd := range []string{
 		"SETTITLE OmaSeal",
 		"SETPROMPT Secret:",
 		"SETDESC " + assuanEscape(fmt.Sprintf("Enter secret for %s/%s (OmaSeal)", service, account)),
-		"SETTIMEOUT 300",
+		fmt.Sprintf("SETTIMEOUT %d", int(guiPromptTimeout.Seconds())),
 	} {
 		if err := conn.command(cmd); err != nil {
 			return "", err
@@ -385,16 +448,21 @@ type zenityPrompter struct {
 func (p *zenityPrompter) name() string { return "zenity" }
 
 func (p *zenityPrompter) available(context.Context) bool {
-	for _, path := range zenityCandidatePaths() {
-		p.path = path
-		return true
+	paths := zenityCandidatePaths()
+	if len(paths) == 0 {
+		return false
 	}
-	return false
+	p.path = paths[0]
+	return true
 }
 
 func (p *zenityPrompter) prompt(ctx context.Context, service, account string) (string, error) {
 	if p.path == "" {
-		return "", errNoGUIPrompter
+		paths := zenityCandidatePaths()
+		if len(paths) == 0 {
+			return "", errNoGUIPrompter
+		}
+		p.path = paths[0]
 	}
 	return promptZenity(ctx, p.path, service, account)
 }
@@ -403,16 +471,13 @@ func (p *zenityPrompter) prompt(ctx context.Context, service, account string) (s
 // returns on stdout. Stderr is discarded so dialog chatter cannot contaminate
 // the secret or leak it.
 func promptZenity(ctx context.Context, path, service, account string) (string, error) {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, guiPromptTimeout)
-		defer cancel()
-	}
+	ctx, cancel := withPromptDeadline(ctx)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, path,
 		"--password",
 		"--title=OmaSeal",
 		"--text=Enter secret for "+service+"/"+account,
-		"--timeout=300",
+		fmt.Sprintf("--timeout=%d", int(guiPromptTimeout.Seconds())),
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out

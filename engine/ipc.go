@@ -141,7 +141,7 @@ func runIPC(method string, jsonArgs string) {
 	default:
 		resp.Error = "unknown method: " + method
 		resp.Code = "unknown_method"
-		resp.Help = "omaseal ipc ping|get|del|list|resolve"
+		resp.Help = "omaseal ipc ping|get|set|del|list|resolve"
 		writeJSON(resp)
 		os.Exit(1)
 	}

@@ -63,15 +63,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		if rerr != nil {
 			return "", rerr
 		}
-		if secret == "" {
-			return "", errors.New("secret cannot be empty")
-		}
-		if cache {
-			if serr := Set(service, account, secret); serr != nil {
-				return "", serr
-			}
-		}
-		return secret, nil
+		return cachePromptedSecret(service, account, secret, cache)
 	}
 
 	// 5. Masked GUI prompt when a graphical session exists but no TTY does.
@@ -79,26 +71,32 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 	if prompt && graphicalSession() {
 		secret, gerr := guiPromptSecret(ctx, service, account)
 		if gerr == nil {
-			if secret == "" {
-				return "", errors.New("secret cannot be empty")
-			}
-			if cache {
-				if serr := Set(service, account, secret); serr != nil {
-					return "", serr
-				}
-			}
-			return secret, nil
+			return cachePromptedSecret(service, account, secret, cache)
 		}
 		if errors.Is(gerr, errPromptCancelled) {
 			return "", fmt.Errorf("no secret for %s/%s: %w", service, account, gerr)
 		}
-		if !errors.Is(gerr, errNoGUIPrompter) {
+		if !errors.Is(gerr, errNoGUIPrompter) && !errors.Is(gerr, errGUIDisabled) {
 			return "", gerr
 		}
-		// No usable prompter: fall through to the generic not_found error.
+		// No usable prompter (or disabled): fall through to not_found.
 	}
 
 	return "", newError("not_found", "omaseal set", fmt.Errorf("no secret found for %s/%s", service, account))
+}
+
+// cachePromptedSecret validates an interactively-entered secret and stores it
+// in the local keyring when caching is enabled.
+func cachePromptedSecret(service, account, secret string, cache bool) (string, error) {
+	if secret == "" {
+		return "", errors.New("secret cannot be empty")
+	}
+	if cache {
+		if err := Set(service, account, secret); err != nil {
+			return "", err
+		}
+	}
+	return secret, nil
 }
 
 // ImportOnePassword lists all 1Password items in the default vault and stores

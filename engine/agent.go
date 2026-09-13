@@ -242,7 +242,11 @@ func PrintAgentStatus() {
 	}
 	fmt.Fprintf(os.Stderr, "agent mode:       %s\n", p.Mode)
 	fmt.Fprintf(os.Stderr, "session minutes:  %d\n", p.SessionMinutes)
-	fmt.Fprintf(os.Stderr, "keep-alive:       %s\n", yesNo(p.KeepAlive))
+	keepAlive := "off"
+	if p.KeepAlive {
+		keepAlive = "on"
+	}
+	fmt.Fprintf(os.Stderr, "keep-alive:       %s\n", keepAlive)
 	if p.PrimaryAgent != "" {
 		fmt.Fprintf(os.Stderr, "primary agent:    %s\n", p.PrimaryAgent)
 	}
@@ -250,12 +254,10 @@ func PrintAgentStatus() {
 		fmt.Fprintf(os.Stderr, "default agents:   %s\n", strings.Join(p.Agents, ", "))
 	}
 	if p.Mode == "ask" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := fprintdAvailable(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "fingerprint:      not available (unlock is ungated)")
-		} else {
+		if fprintdProbeOK() {
 			fmt.Fprintln(os.Stderr, "fingerprint:      available")
+		} else {
+			fmt.Fprintln(os.Stderr, "fingerprint:      not available (unlock is ungated)")
 		}
 	}
 	expiry, ok := readSessionExpiry()
@@ -281,9 +283,10 @@ func agentStatusJSON() (string, error) {
 		"primary_agent":   p.PrimaryAgent,
 		"agents":          p.Agents,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out["fprintd_available"] = fprintdAvailable(ctx) == nil
+	// The fprintd probe spawns subprocesses; only ask mode consumes the field.
+	if p.Mode == "ask" {
+		out["fprintd_available"] = fprintdProbeOK()
+	}
 	if expiry, ok := readSessionExpiry(); ok && time.Now().UTC().Before(expiry) {
 		out["session_active"] = true
 		out["session_expires"] = expiry.Format(time.RFC3339)
@@ -295,19 +298,29 @@ func agentStatusJSON() (string, error) {
 	return string(b), nil
 }
 
+// fprintdProbeOK reports whether a usable fingerprint reader is enrolled,
+// bounded so status paths stay fast when fprintd is absent.
+func fprintdProbeOK() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return fprintdAvailable(ctx) == nil
+}
+
+func unknownAgentError(name string) error {
+	return fmt.Errorf("unknown agent %q; try %s", name, strings.Join(canonicalAgentNames(), ", "))
+}
+
 // SetPrimaryAgent records the user's main agent.
 func SetPrimaryAgent(name string) error {
-	if _, ok := findAgentSpec(name); !ok {
-		return fmt.Errorf("unknown agent %q; try %s", name, strings.Join(canonicalAgentNames(), ", "))
+	spec, ok := findAgentSpec(name)
+	if !ok {
+		return unknownAgentError(name)
 	}
 	p, err := loadAgentPolicy()
 	if err != nil {
 		return err
 	}
-	if canonical, ok := agentAliases[name]; ok {
-		name = canonical
-	}
-	p.PrimaryAgent = name
+	p.PrimaryAgent = spec.name
 	return saveAgentPolicy(p)
 }
 
@@ -319,7 +332,7 @@ func SetDefaultAgents(names []string) error {
 	for _, n := range names {
 		spec, ok := findAgentSpec(n)
 		if !ok {
-			return fmt.Errorf("unknown agent %q; try %s", n, strings.Join(canonicalAgentNames(), ", "))
+			return unknownAgentError(n)
 		}
 		if !seen[spec.name] {
 			seen[spec.name] = true
@@ -406,7 +419,11 @@ func handleAgent() {
 	case "keepalive", "keep-alive":
 		if len(os.Args) < 4 {
 			p, _ := loadAgentPolicy()
-			fmt.Println("keep-alive:", yesNo(p.KeepAlive))
+			if p.KeepAlive {
+				fmt.Println("keep-alive: on")
+			} else {
+				fmt.Println("keep-alive: off")
+			}
 			return
 		}
 		var on bool
@@ -424,7 +441,11 @@ func handleAgent() {
 			os.Exit(1)
 		}
 		WriteLog("agent keep-alive set to %v", on)
-		fmt.Printf("Agent session keep-alive %s.\n", map[bool]string{true: "enabled — sessions renew on activity", false: "disabled — unlock expiry is fixed"}[on])
+		if on {
+			fmt.Println("Agent session keep-alive enabled — sessions renew on activity.")
+		} else {
+			fmt.Println("Agent session keep-alive disabled — unlock expiry is fixed.")
+		}
 	case "primary":
 		if len(os.Args) < 4 {
 			fmt.Fprintln(os.Stderr, "error: missing agent name")

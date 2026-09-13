@@ -20,11 +20,10 @@ func runSetup() {
 	fmt.Fprintln(os.Stderr, "Running doctor first...")
 	results := doctorChecks()
 	printDoctorResults(results)
-	fmt.Fprintln(os.Stderr)
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Agents ===")
-	rows := agentStatusRows()
+	rows := mcpStatusRows()
 	detected := []mcpAgentStatus{}
 	for _, r := range rows {
 		fmt.Fprintf(os.Stderr, "  %-10s detected:%-4s installed:%-4s %s\n",
@@ -47,7 +46,7 @@ func runSetup() {
 
 	if isStdinTTY() || yes {
 		maybeInstallDetected(detected, yes)
-		maybeSetPrimary(rows, yes)
+		maybeSetPrimary(rows, p, yes)
 	} else {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Run `omaseal setup --yes` to auto-wire every detected agent,")
@@ -66,14 +65,7 @@ func runSetup() {
 		fmt.Fprintln(os.Stderr, "Cannot locate the running binary. Run `omaseal doctor` after installation.")
 	} else {
 		dir := filepath.Dir(bin)
-		onPath := false
-		for _, p := range filepath.SplitList(os.Getenv("PATH")) {
-			if p == dir {
-				onPath = true
-				break
-			}
-		}
-		if onPath {
+		if dirOnPATH(dir) {
 			fmt.Fprintf(os.Stderr, "%s is on PATH.\n", dir)
 		} else {
 			fmt.Fprintf(os.Stderr, "Add to `~/.bashrc` or `~/.zshrc`:\n  export PATH=\"%s:$PATH\"\n", dir)
@@ -108,26 +100,30 @@ func maybeInstallDetected(detected []mcpAgentStatus, yes bool) {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	if !yes {
-		fmt.Fprintf(os.Stderr, "Install OmaSeal MCP for detected agents (%s)? [Y/n] ", strings.Join(todo, ", "))
-		reader := bufio.NewReader(os.Stdin)
-		text, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  could not read response: %v\n", err)
-			return
-		}
-		answer := strings.ToLower(strings.TrimSpace(text))
-		if answer != "" && answer != "y" && answer != "yes" {
-			return
-		}
+	if !yes && !confirm(fmt.Sprintf("Install OmaSeal MCP for detected agents (%s)? [Y/n] ", strings.Join(todo, ", "))) {
+		return
 	}
 	installForAgents(todo, "")
 }
 
+// confirm asks once on stdin; empty, y, and yes accept, anything else declines.
+func confirm(prompt string) bool {
+	fmt.Fprint(os.Stderr, prompt)
+	text, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  could not read response: %v\n", err)
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "", "y", "yes":
+		return true
+	}
+	return false
+}
+
 // maybeSetPrimary suggests a primary agent when none is configured. On a TTY
 // it asks once; with --yes it picks the first detected agent automatically.
-func maybeSetPrimary(rows []mcpAgentStatus, yes bool) {
-	p, _ := loadAgentPolicy()
+func maybeSetPrimary(rows []mcpAgentStatus, p AgentPolicy, yes bool) {
 	if p.PrimaryAgent != "" {
 		return
 	}
@@ -143,15 +139,8 @@ func maybeSetPrimary(rows []mcpAgentStatus, yes bool) {
 	}
 
 	fmt.Fprintln(os.Stderr)
-	if !yes && isStdinTTY() {
-		fmt.Fprintf(os.Stderr, "Set %s as your primary agent? [Y/n] ", firstDetected)
-		reader := bufio.NewReader(os.Stdin)
-		text, err := reader.ReadString('\n')
-		if err != nil || (strings.ToLower(strings.TrimSpace(text)) != "" &&
-			strings.ToLower(strings.TrimSpace(text)) != "y" &&
-			strings.ToLower(strings.TrimSpace(text)) != "yes") {
-			return
-		}
+	if !yes && !confirm(fmt.Sprintf("Set %s as your primary agent? [Y/n] ", firstDetected)) {
+		return
 	}
 	if err := SetPrimaryAgent(firstDetected); err != nil {
 		fmt.Fprintf(os.Stderr, "  could not set primary agent: %v\n", err)

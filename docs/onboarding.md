@@ -16,40 +16,31 @@ This checks:
 - the `gnome-keyring-daemon` Secret Service backend
 - `fprintd` for biometric `reveal`
 - `op` (1Password) and `bw` (Bitwarden) CLI availability
+- a graphical prompter (GUI pinentry or zenity) for `resolve` without a TTY
 - whether `~/.local/bin/omaseal` is on `PATH`
 
 ## First-time setup
 
 ```sh
-omaseal setup
+omaseal setup          # interactive; --yes to auto-accept
 ```
 
-`setup` runs `doctor`, then prints the exact MCP config and shell `PATH` line to paste into the right files.
+`setup` runs `doctor`, installs the OmaSeal MCP server into every detected
+agent's config (preserving unrelated entries), and offers to set your primary
+agent. It prints a `PATH` hint if `~/.local/bin` is missing from it.
 
 ## For agents (Claude, Codex, MCP clients)
 
-Add the MCP server to `~/.claude/mcp.json` or `~/.codex/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "omaseal": {
-      "command": "</absolute/path/to/omaseal>",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Replace `</absolute/path/to/omaseal>` with the path to the installed binary
-(usually `~/.local/bin/omaseal` or `/usr/bin/omaseal`).
-
-Or let OmaSeal write the config for you:
+Let OmaSeal wire itself into every agent it detects:
 
 ```sh
-omaseal mcp install claude
-omaseal mcp install codex
+omaseal mcp install-detected
+omaseal mcp status          # who is detected / installed
+omaseal mcp install claude  # a single agent
 ```
+
+Each agent's real config path is used (for example `~/.agents/mcp/mcp.json` or
+Codex's `~/.codex/config.toml`); existing keys in those files are preserved.
 
 Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`.
 
@@ -57,6 +48,7 @@ Agents should:
 - call `omaseal_set` or `omaseal_resolve` rather than reading dotfiles
 - never put a real secret in a command argument
 - prefer `omaseal_resolve` because it falls back to `op` / `bw` and caches locally
+- store and pass `omaseal://<service>/<account>` references verbatim — see `docs/namespaces.md` for the shared service/account conventions
 
 ## For BrowserOS and Omarchy apps
 
