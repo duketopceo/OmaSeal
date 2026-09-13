@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -28,18 +29,23 @@ Usage:
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
-  omaseal mcp install <claude|codex|cursor|devin|agy|hermes> [--dir <path>]
-                                           write mcp config for an agent
-  omaseal mcp install-all [path]            write mcp config for every known agent
+  omaseal mcp install <agent> [--dir .]    write mcp config for one agent
+  omaseal mcp install-detected             wire every detected + assigned agent
+  omaseal mcp install-all                  write mcp config for every known agent
+  omaseal mcp status [--json]              show detected/installed agent configs
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
   omaseal ping                             health check (json with --json)
+  omaseal selftest                         keyring round-trip test
   omaseal doctor                           check the environment and dependencies
   omaseal logs [n]                         show recent non-secret log lines
-  omaseal setup                            onboarding guide and MCP config
+  omaseal setup [--yes]                    onboarding: doctor + agent wiring
   omaseal agent mode <open|ask|lock> [min] set agent/MCP trust mode
   omaseal agent unlock                     biometric unlock for ask mode
   omaseal agent lock                       revoke agent session
-  omaseal agent status                     show agent policy and session
+  omaseal agent status [--json]            show agent policy and session
+  omaseal agent keepalive [on|off]         session renews on activity (ask mode)
+  omaseal agent primary <name>             set your main agent
+  omaseal agent defaults [names...]        set assigned default agents
 
 Examples:
   omaseal set openrouter default < secret.txt
@@ -88,6 +94,10 @@ func main() {
 			handleMCPInstall()
 		} else if len(os.Args) >= 3 && os.Args[2] == "install-all" {
 			handleMCPInstallAll()
+		} else if len(os.Args) >= 3 && os.Args[2] == "install-detected" {
+			handleMCPInstallDetected()
+		} else if len(os.Args) >= 3 && os.Args[2] == "status" {
+			handleMCPStatus()
 		} else {
 			runMCP()
 		}
@@ -95,6 +105,8 @@ func main() {
 		handleIPC()
 	case "ping":
 		handlePing()
+	case "selftest":
+		handleSelfTest()
 	case "doctor":
 		handleDoctor()
 	case "logs":
@@ -312,6 +324,40 @@ func handleLogs() {
 	for _, l := range lines {
 		fmt.Println(l)
 	}
+}
+
+// handleSelfTest runs a set/get/delete round-trip against the live keyring.
+// Agents and users can call it to verify the whole stack end to end.
+func handleSelfTest() {
+	service := "omaseal-selftest"
+	account := fmt.Sprintf("selftest-%d", os.Getpid())
+	secret := fmt.Sprintf("omaseal-selftest-%d", time.Now().UnixNano())
+
+	fail := func(step string, err error) {
+		printError("selftest "+step+": ", err)
+		os.Exit(1)
+	}
+
+	if err := Set(service, account, secret); err != nil {
+		fail("set", err)
+	}
+	got, err := Get(service, account)
+	if err != nil {
+		_ = Delete(service, account)
+		fail("get", err)
+	}
+	if got != secret {
+		_ = Delete(service, account)
+		fail("compare", fmt.Errorf("round-trip mismatch"))
+	}
+	if err := Delete(service, account); err != nil {
+		fail("delete", err)
+	}
+	if _, err := Get(service, account); err == nil {
+		fail("verify-delete", fmt.Errorf("secret still readable after delete"))
+	}
+	WriteLog("selftest passed")
+	fmt.Println("selftest ok: set/get/delete round-trip passed")
 }
 
 // readSecret reads a secret from stdin without a trailing newline.

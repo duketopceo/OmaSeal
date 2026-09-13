@@ -16,6 +16,8 @@ import (
 func runMCP() {
 	// stdout is reserved for JSON-RPC; logging already goes to stderr + file.
 	scanner := bufio.NewScanner(os.Stdin)
+	// Secrets (PEM bundles, service-account JSON) can exceed the 64KB default.
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	enc := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -73,6 +75,8 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: initMCPResult()}
 	case "notifications/initialized":
 		return nil
+	case "ping":
+		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{}}
 	case "tools/list":
 		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: mcpToolsResult}
 	case "tools/call":
@@ -94,6 +98,18 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 	}
 }
 
+// mcpInstructions tells every connecting agent how OmaSeal should be used.
+// It is returned in the initialize result so agents pick up the convention
+// automatically, without the user having to write rules files.
+const mcpInstructions = `OmaSeal is the system keyring on this Omarchy machine — think macOS Keychain for agents. ` +
+	`When you need an API key, token, password, or other credential, call omaseal_resolve or omaseal_get with a ` +
+	`service and account name (for example service="openrouter", account="default") instead of asking the user to ` +
+	`paste secrets, reading .env files, or grepping dotfiles. When the user gives you a new credential to keep, ` +
+	`store it with omaseal_set — never write secrets to files, dotfiles, shell arguments, or logs. ` +
+	`omaseal_list returns service/account metadata only (no values) and is safe for discovering what is stored. ` +
+	`If a call fails with code agent_unauthorized, tell the user to run "omaseal agent unlock"; ` +
+	`for not_found, suggest "omaseal set <service> <account>" or omaseal_set.`
+
 func initMCPResult() map[string]any {
 	return map[string]any{
 		"protocolVersion": "2024-11-05",
@@ -104,6 +120,7 @@ func initMCPResult() map[string]any {
 			"name":    "omaseal",
 			"version": version,
 		},
+		"instructions": mcpInstructions,
 	}
 }
 

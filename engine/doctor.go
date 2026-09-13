@@ -16,6 +16,8 @@ type checkResult struct {
 	name    string
 	ok      bool
 	message string
+	// optional checks degrade to a warning instead of failing the doctor run.
+	optional bool
 }
 
 func handleDoctor() {
@@ -33,8 +35,8 @@ func runDoctorJSON() {
 	checks := make([]pingCheck, len(results))
 	ok := true
 	for i, r := range results {
-		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Message: r.message}
-		if !r.ok {
+		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Optional: r.optional, Message: r.message}
+		if !r.ok && !r.optional {
 			ok = false
 		}
 	}
@@ -70,8 +72,12 @@ func printDoctorResults(results []checkResult) bool {
 	for _, r := range results {
 		mark := "ok"
 		if !r.ok {
-			mark = "FAIL"
-			ok = false
+			if r.optional {
+				mark = "warn"
+			} else {
+				mark = "FAIL"
+				ok = false
+			}
 		}
 		fmt.Fprintf(os.Stderr, "%-18s %s\n", mark, r.name)
 		if r.message != "" {
@@ -87,10 +93,10 @@ func runDoctor() {
 	results := doctorChecks()
 	ok := printDoctorResults(results)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "\nSome checks failed. Run `omaseal setup` for next steps.")
+		fmt.Fprintln(os.Stderr, "\nSome required checks failed. Run `omaseal setup` for next steps.")
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "\nAll checks passed. OmaSeal is ready to use.")
+	fmt.Fprintln(os.Stderr, "\nAll required checks passed. OmaSeal is ready to use.")
 }
 
 func checkBinary() checkResult {
@@ -140,8 +146,9 @@ func containsLine(text, needle string) bool {
 func checkFprintd() checkResult {
 	if !commandExists("fprintd") {
 		return checkResult{
-			name: "fprintd",
-			ok:   false,
+			name:     "fprintd",
+			ok:       false,
+			optional: true,
 			message: "`fprintd` is not installed.\n" +
 				"  - `reveal` will fall through without a fingerprint gate.\n" +
 				"  - Install and enable `fprintd` and run `fprintd-enroll` to enable biometric gating.",
@@ -153,8 +160,9 @@ func checkFprintd() checkResult {
 
 	if err := fprintdAvailable(ctx); err != nil {
 		return checkResult{
-			name: "fprintd",
-			ok:   false,
+			name:     "fprintd",
+			ok:       false,
+			optional: true,
 			message: err.Error() + "\n" +
 				"  - `reveal` will fall through without a fingerprint gate.\n" +
 				"  - Start `fprintd.service`, run `fprintd-enroll`, and try again.",
@@ -167,8 +175,9 @@ func checkFprintd() checkResult {
 func checkOnePassword() checkResult {
 	if !commandExists("op") {
 		return checkResult{
-			name: "1password (op)",
-			ok:   false,
+			name:     "1password (op)",
+			ok:       false,
+			optional: true,
 			message: "`op` CLI not found.\n" +
 				"  - Install the 1Password CLI and run `op signin` to enable `omaseal resolve` / `import 1password`.",
 		}
@@ -182,8 +191,9 @@ func checkOnePassword() checkResult {
 	}
 
 	return checkResult{
-		name: "1password (op)",
-		ok:   false,
+		name:     "1password (op)",
+		ok:       false,
+		optional: true,
 		message: "`op` CLI is installed but not signed in.\n" +
 			"  - Run `op signin` to enable `omaseal resolve` / `import 1password`.",
 	}
@@ -192,8 +202,9 @@ func checkOnePassword() checkResult {
 func checkBitwarden() checkResult {
 	if !commandExists("bw") {
 		return checkResult{
-			name: "bitwarden (bw)",
-			ok:   false,
+			name:     "bitwarden (bw)",
+			ok:       false,
+			optional: true,
 			message: "`bw` CLI not found.\n" +
 				"  - Install the Bitwarden CLI and run `bw login` to enable `omaseal resolve` / `import bitwarden`.",
 		}
@@ -202,8 +213,9 @@ func checkBitwarden() checkResult {
 		return checkResult{name: "bitwarden (bw)", ok: true, message: "`bw` CLI found and BW_SESSION is set"}
 	}
 	return checkResult{
-		name: "bitwarden (bw)",
-		ok:   false,
+		name:     "bitwarden (bw)",
+		ok:       false,
+		optional: true,
 		message: "`bw` CLI found but `BW_SESSION` is not set.\n" +
 			"  - Run `bw login`, then use a command-scoped session:\n" +
 			"    `BW_SESSION=\"$(bw unlock --raw)\" omaseal resolve <service> <account>` or `omaseal import bitwarden`.",

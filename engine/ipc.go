@@ -50,6 +50,36 @@ func runIPC(method string, jsonArgs string) {
 		}
 		resp.Secret = secret
 
+	case "set":
+		var req ipcRequest
+		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
+			resp.Error = "invalid json: " + err.Error()
+			resp.Code = "invalid_json"
+			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		// The secret arrives on stdin — never inside the JSON payload.
+		secret, err := readSecret()
+		if err != nil || secret == "" {
+			resp.Error = "reading secret from stdin"
+			if err != nil {
+				resp.Error += ": " + err.Error()
+			}
+			resp.Code = "invalid_secret"
+			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		if err := Set(req.Service, req.Account, secret); err != nil {
+			resp.Error = err.Error()
+			resp.Code = codeFromError(err)
+			resp.Help = helpFromError(err)
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		resp.OK = "ok"
+
 	case "del", "delete":
 		var req ipcRequest
 		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {

@@ -7,26 +7,215 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 )
 
-var mcpAgentConfig = map[string]struct {
-	dir  string
-	file string
-}{
-	"claude":      {dir: ".claude", file: "mcp.json"},
-	"codex":       {dir: ".codex", file: "mcp.json"},
-	"cursor":      {dir: ".cursor", file: "mcp.json"},
-	"devin":       {dir: ".devin", file: "mcp.json"},
-	"agy":         {dir: ".agy", file: "mcp.json"},
-	"antigravity": {dir: ".agy", file: "mcp.json"},
-	"hermes":      {dir: ".hermes", file: "mcp.json"},
+// agentSpec describes where one agent reads its MCP server configuration and
+// how to detect that the agent is installed on this machine.
+type agentSpec struct {
+	name string
+	// dirs and files are home-relative paths whose existence marks the agent
+	// as installed (e.g. ".claude", ".codex/config.toml").
+	dirs  []string
+	files []string
+	// bins are looked up on PATH as an additional detection signal.
+	bins []string
+	// globalPath is the home-relative config file written for user-wide MCP.
+	globalPath string
+	// projectPath is the --dir-relative config file written for repo-local MCP.
+	// Empty means the agent has no repo-local config surface.
+	projectPath string
+	// format selects the merge strategy: "json" merges a servers object,
+	// "toml-codex" appends a [mcpServers.omaseal] table.
+	format string
+	// serversKey is the top-level JSON key holding the server map.
+	serversKey string
+	// entry builds the JSON server entry for this agent.
+	entry func(bin string) map[string]any
 }
 
-// canonical agents only; aliases share the same directory and should not
-// be double-written by install-all.
-var mcpCanonicalAgents = []string{"claude", "codex", "cursor", "devin", "agy", "hermes"}
+func stdioEntry(bin string) map[string]any {
+	return map[string]any{
+		"type":    "stdio",
+		"command": bin,
+		"args":    []string{"mcp"},
+	}
+}
+
+func transportEntry(bin string) map[string]any {
+	return map[string]any{
+		"transport": "stdio",
+		"command":   bin,
+		"args":      []string{"mcp"},
+	}
+}
+
+func opencodeEntry(bin string) map[string]any {
+	return map[string]any{
+		"type":    "local",
+		"command": []string{bin, "mcp"},
+		"enabled": true,
+	}
+}
+
+var agentSpecs = []agentSpec{
+	{
+		name:        "claude",
+		dirs:        []string{".claude"},
+		files:       []string{".claude.json"},
+		bins:        []string{"claude"},
+		globalPath:  ".claude.json",
+		projectPath: ".mcp.json",
+		format:      "json",
+		serversKey:  "mcpServers",
+		entry:       stdioEntry,
+	},
+	{
+		name:        "codex",
+		dirs:        []string{".codex"},
+		bins:        []string{"codex"},
+		globalPath:  filepath.Join(".codex", "config.toml"),
+		projectPath: filepath.Join(".codex", "config.toml"),
+		format:      "toml-codex",
+	},
+	{
+		name:        "cursor",
+		dirs:        []string{".cursor"},
+		bins:        []string{"cursor"},
+		globalPath:  filepath.Join(".cursor", "mcp.json"),
+		projectPath: filepath.Join(".cursor", "mcp.json"),
+		format:      "json",
+		serversKey:  "mcpServers",
+		entry:       stdioEntry,
+	},
+	{
+		name:        "devin",
+		dirs:        []string{filepath.Join(".config", "devin"), ".devin"},
+		bins:        []string{"devin"},
+		globalPath:  filepath.Join(".config", "devin", "mcp_config.json"),
+		projectPath: filepath.Join(".devin", "mcp_config.json"),
+		format:      "json",
+		serversKey:  "mcpServers",
+		entry:       transportEntry,
+	},
+	{
+		name:        "opencode",
+		dirs:        []string{filepath.Join(".config", "opencode")},
+		bins:        []string{"opencode"},
+		globalPath:  filepath.Join(".config", "opencode", "opencode.json"),
+		projectPath: "opencode.json",
+		format:      "json",
+		serversKey:  "mcp",
+		entry:       opencodeEntry,
+	},
+	{
+		name:        "agy",
+		dirs:        []string{".agy"},
+		bins:        []string{"agy", "antigravity"},
+		globalPath:  filepath.Join(".agy", "mcp.json"),
+		projectPath: filepath.Join(".agy", "mcp.json"),
+		format:      "json",
+		serversKey:  "mcpServers",
+		entry:       stdioEntry,
+	},
+	{
+		name:        "hermes",
+		dirs:        []string{".hermes"},
+		bins:        []string{"hermes"},
+		globalPath:  filepath.Join(".hermes", "mcp.json"),
+		projectPath: filepath.Join(".hermes", "mcp.json"),
+		format:      "json",
+		serversKey:  "mcpServers",
+		entry:       stdioEntry,
+	},
+}
+
+// agentAliases maps alternate names to the canonical spec name.
+var agentAliases = map[string]string{
+	"antigravity": "agy",
+	"claude-code": "claude",
+}
+
+func findAgentSpec(name string) (agentSpec, bool) {
+	if canonical, ok := agentAliases[name]; ok {
+		name = canonical
+	}
+	for _, s := range agentSpecs {
+		if s.name == name {
+			return s, true
+		}
+	}
+	return agentSpec{}, false
+}
+
+// canonicalAgentNames returns spec names in a stable order for output.
+func canonicalAgentNames() []string {
+	names := make([]string, 0, len(agentSpecs))
+	for _, s := range agentSpecs {
+		names = append(names, s.name)
+	}
+	return names
+}
+
+// agentDetected reports whether the agent appears to be installed: any marker
+// dir/file exists in home, or a known binary is on PATH.
+func agentDetected(s agentSpec, home string) bool {
+	for _, d := range s.dirs {
+		if st, err := os.Stat(filepath.Join(home, d)); err == nil && st.IsDir() {
+			return true
+		}
+	}
+	for _, f := range s.files {
+		if _, err := os.Stat(filepath.Join(home, f)); err == nil {
+			return true
+		}
+	}
+	for _, b := range s.bins {
+		if _, err := exec.LookPath(b); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// detectedAgents returns the names of all agents detected on this machine.
+func detectedAgents() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range agentSpecs {
+		if agentDetected(s, home) {
+			out = append(out, s.name)
+		}
+	}
+	return out
+}
+
+// agentConfigTarget resolves the config file to write for an agent. dir == ""
+// means the user-level config; otherwise a project-level file under dir.
+func agentConfigTarget(s agentSpec, dir string) (string, error) {
+	if dir != "" {
+		if s.projectPath == "" {
+			return "", fmt.Errorf("%s has no project-level MCP config; omit --dir", s.name)
+		}
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return "", fmt.Errorf("resolve --dir: %w", err)
+		}
+		return filepath.Join(abs, s.projectPath), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", errors.New("cannot determine user home directory")
+	}
+	return filepath.Join(home, s.globalPath), nil
+}
 
 func handleMCPInstall() {
 	if len(os.Args) < 4 {
@@ -36,7 +225,7 @@ func handleMCPInstall() {
 
 	agent := os.Args[3]
 	fs := flag.NewFlagSet("mcp-install", flag.ContinueOnError)
-	dir := fs.String("dir", "", "Install .<agent>/mcp.json in this directory instead of the home directory")
+	dir := fs.String("dir", "", "Install the project-level MCP config in this directory instead of the user config")
 	if err := fs.Parse(os.Args[4:]); err != nil {
 		printError("install: ", err)
 		mcpInstallUsage()
@@ -53,54 +242,164 @@ func handleMCPInstall() {
 
 func handleMCPInstallAll() {
 	fs := flag.NewFlagSet("mcp-install-all", flag.ContinueOnError)
-	dir := fs.String("dir", "", "Install .<agent>/mcp.json directories in this path instead of the home directory")
-	// accept positional path too: `mcp install-all [path]`
+	dir := fs.String("dir", "", "Install project-level MCP configs in this path instead of user configs")
 	if err := fs.Parse(os.Args[3:]); err != nil {
 		printError("install-all: ", err)
 		mcpInstallAllUsage()
 		os.Exit(1)
 	}
+	installForAgents(canonicalAgentNames(), flagDir(fs, dir))
+}
 
+func handleMCPInstallDetected() {
+	fs := flag.NewFlagSet("mcp-install-detected", flag.ContinueOnError)
+	dir := fs.String("dir", "", "Install project-level MCP configs in this path instead of user configs")
+	if err := fs.Parse(os.Args[3:]); err != nil {
+		printError("install-detected: ", err)
+		os.Exit(1)
+	}
+
+	targets := map[string]bool{}
+	for _, name := range detectedAgents() {
+		targets[name] = true
+	}
+	// The user's assigned defaults and primary agent are always included.
+	p, _ := loadAgentPolicy()
+	for _, name := range p.Agents {
+		targets[name] = true
+	}
+	if p.PrimaryAgent != "" {
+		targets[p.PrimaryAgent] = true
+	}
+
+	if len(targets) == 0 {
+		fmt.Println("No agents detected. Install an agent first, or assign defaults with `omaseal agent defaults <names...>`.")
+		return
+	}
+
+	names := make([]string, 0, len(targets))
+	for n := range targets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	installForAgents(names, flagDir(fs, dir))
+}
+
+func flagDir(fs *flag.FlagSet, dir *string) string {
 	targetDir := *dir
 	if fs.NArg() > 0 && targetDir == "" {
 		targetDir = fs.Arg(0)
 	}
+	return targetDir
+}
 
+func installForAgents(names []string, dir string) {
 	errs := []string{}
-	installed := []string{}
-	for _, agent := range mcpCanonicalAgents {
-		path, err := installMCP(agent, targetDir)
+	for _, agent := range names {
+		path, err := installMCP(agent, dir)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", agent, err))
 		} else {
-			installed = append(installed, path)
+			fmt.Println("installed:", agent, "->", path)
 		}
 	}
-	for _, p := range installed {
-		fmt.Println("installed:", p)
-	}
 	if len(errs) > 0 {
-		printError("install-all: ", errors.New(strings.Join(errs, "; ")))
+		printError("install: ", errors.New(strings.Join(errs, "; ")))
 		os.Exit(1)
 	}
 }
 
-func mcpInstallUsage() {
-	fmt.Fprintln(os.Stderr, "usage: omaseal mcp install <claude|codex|cursor|devin|agy|antigravity|hermes> [--dir <path>]")
-	fmt.Fprintln(os.Stderr, "       --dir .   writes .<agent>/mcp.json in the current repo")
+// mcpAgentStatus is one row of `omaseal mcp status` output.
+type mcpAgentStatus struct {
+	Name      string `json:"name"`
+	Detected  bool   `json:"detected"`
+	Installed bool   `json:"installed"`
+	Config    string `json:"config"`
+	Primary   bool   `json:"primary,omitempty"`
+	Default   bool   `json:"default,omitempty"`
 }
 
-func mcpInstallAllUsage() {
-	fmt.Fprintln(os.Stderr, "usage: omaseal mcp install-all [path]")
-	fmt.Fprintln(os.Stderr, "       omaseal mcp install-all --dir <path>")
-	fmt.Fprintln(os.Stderr, "  Writes .claude/mcp.json, .codex/mcp.json, .cursor/mcp.json,")
-	fmt.Fprintln(os.Stderr, "  .devin/mcp.json, .agy/mcp.json, and .hermes/mcp.json in one pass.")
+func agentStatusRows() []mcpAgentStatus {
+	home, _ := os.UserHomeDir()
+	p, _ := loadAgentPolicy()
+	defaults := map[string]bool{}
+	for _, n := range p.Agents {
+		defaults[n] = true
+	}
+	rows := make([]mcpAgentStatus, 0, len(agentSpecs))
+	for _, s := range agentSpecs {
+		path, err := agentConfigTarget(s, "")
+		if err != nil {
+			continue
+		}
+		rows = append(rows, mcpAgentStatus{
+			Name:      s.name,
+			Detected:  agentDetected(s, home),
+			Installed: mcpInstalledAt(s, path),
+			Config:    path,
+			Primary:   p.PrimaryAgent == s.name,
+			Default:   defaults[s.name],
+		})
+	}
+	return rows
+}
+
+func handleMCPStatus() {
+	rows := agentStatusRows()
+	if hasFlag(os.Args, "--json") {
+		b, _ := json.MarshalIndent(rows, "", "  ")
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Printf("%-10s %-9s %-9s %-7s %s\n", "AGENT", "DETECTED", "INSTALLED", "ROLE", "CONFIG")
+	for _, r := range rows {
+		role := ""
+		if r.Primary {
+			role = "primary"
+		} else if r.Default {
+			role = "default"
+		}
+		fmt.Printf("%-10s %-9s %-9s %-7s %s\n", r.Name, yesNo(r.Detected), yesNo(r.Installed), role, r.Config)
+	}
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "-"
+}
+
+// mcpInstalledAt reports whether the config file at path already contains an
+// omaseal server entry.
+func mcpInstalledAt(s agentSpec, path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	if s.format == "toml-codex" {
+		return codexMCPRe.MatchString(string(data))
+	}
+	var cfg map[string]json.RawMessage
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	raw, ok := cfg[s.serversKey]
+	if !ok {
+		return false
+	}
+	var servers map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &servers); err != nil {
+		return false
+	}
+	_, ok = servers["omaseal"]
+	return ok
 }
 
 func installMCP(agent, dir string) (string, error) {
-	meta, ok := mcpAgentConfig[agent]
+	spec, ok := findAgentSpec(agent)
 	if !ok {
-		return "", fmt.Errorf("unknown agent %q; try claude, codex, cursor, devin, agy, or hermes", agent)
+		return "", fmt.Errorf("unknown agent %q; try %s", agent, strings.Join(canonicalAgentNames(), ", "))
 	}
 
 	self, err := os.Executable()
@@ -108,80 +407,141 @@ func installMCP(agent, dir string) (string, error) {
 		self = "omaseal"
 	}
 
-	base := ""
-	if dir != "" {
-		abs, err := filepath.Abs(dir)
-		if err != nil {
-			return "", fmt.Errorf("resolve --dir: %w", err)
-		}
-		base = abs
-	} else {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", errors.New("cannot determine user home directory")
-		}
-		base = home
+	configPath, err := agentConfigTarget(spec, dir)
+	if err != nil {
+		return "", err
 	}
 
-	agentDir := filepath.Join(base, meta.dir)
-	if err := os.MkdirAll(agentDir, 0755); err != nil {
-		return "", fmt.Errorf("create %s: %w", agentDir, err)
+	if spec.format == "toml-codex" {
+		if err := mergeCodexTOML(configPath, self); err != nil {
+			return "", err
+		}
+		return configPath, nil
 	}
 
-	configPath := filepath.Join(agentDir, meta.file)
+	if err := mergeJSONConfig(configPath, spec, self); err != nil {
+		return "", err
+	}
+	return configPath, nil
+}
 
-	// Preserve every top-level key we do not recognize (e.g. agent-specific
-	// settings). Surface JSON parse errors instead of silently overwriting.
+// mergeJSONConfig inserts (or replaces) the omaseal server entry while
+// preserving every other top-level key and server in the file.
+func mergeJSONConfig(configPath string, spec agentSpec, bin string) error {
 	rawConfig := map[string]json.RawMessage{}
+	var mode os.FileMode = 0644
 	if data, err := os.ReadFile(configPath); err == nil {
+		if st, serr := os.Stat(configPath); serr == nil {
+			mode = st.Mode().Perm()
+		}
 		if len(bytes.TrimSpace(data)) > 0 {
 			if err := json.Unmarshal(data, &rawConfig); err != nil {
-				return "", fmt.Errorf("parse %s: %w", configPath, err)
+				return fmt.Errorf("parse %s: %w", configPath, err)
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read %s: %w", configPath, err)
+		return fmt.Errorf("read %s: %w", configPath, err)
 	}
 
-	servers := map[string]interface{}{}
-	if raw, ok := rawConfig["mcpServers"]; ok && string(bytes.TrimSpace(raw)) != "null" {
+	servers := map[string]any{}
+	if raw, ok := rawConfig[spec.serversKey]; ok && string(bytes.TrimSpace(raw)) != "null" {
 		if err := json.Unmarshal(raw, &servers); err != nil {
-			return "", fmt.Errorf("parse %s mcpServers: %w", configPath, err)
+			return fmt.Errorf("parse %s %s: %w", configPath, spec.serversKey, err)
 		}
 		if servers == nil {
-			servers = map[string]interface{}{}
+			servers = map[string]any{}
 		}
 	}
-	servers["omaseal"] = map[string]interface{}{
-		"type":    "stdio",
-		"command": self,
-		"args":    []string{"mcp"},
-	}
-	rawConfig["mcpServers"] = mustRawJSON(servers)
+	servers["omaseal"] = spec.entry(bin)
 
-	out := map[string]interface{}{}
+	out := map[string]any{}
 	for k, v := range rawConfig {
-		if k == "mcpServers" {
+		if k == spec.serversKey {
 			out[k] = servers
 		} else {
 			out[k] = v
 		}
 	}
+	if _, ok := out[spec.serversKey]; !ok {
+		out[spec.serversKey] = servers
+	}
 
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshal mcp config: %w", err)
+		return fmt.Errorf("marshal mcp config: %w", err)
 	}
-	if err := os.WriteFile(configPath, b, 0644); err != nil {
-		return "", fmt.Errorf("write %s: %w", configPath, err)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(configPath), err)
 	}
-	return configPath, nil
+	if err := os.WriteFile(configPath, b, mode); err != nil {
+		return fmt.Errorf("write %s: %w", configPath, err)
+	}
+	return nil
 }
 
-func mustRawJSON(v interface{}) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return json.RawMessage("null")
+// codexMCPRe matches an existing [mcpServers.omaseal] table header in TOML.
+var codexMCPRe = regexp.MustCompile(`(?m)^\s*\[\s*mcpServers\.omaseal\s*\]`)
+
+// mergeCodexTOML writes omaseal into ~/.codex/config.toml as a
+// [mcpServers.omaseal] table, replacing any previous omaseal table and
+// preserving all other content.
+func mergeCodexTOML(configPath, bin string) error {
+	var mode os.FileMode = 0644
+	var existing string
+	if data, err := os.ReadFile(configPath); err == nil {
+		if st, serr := os.Stat(configPath); serr == nil {
+			mode = st.Mode().Perm()
+		}
+		existing = string(data)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", configPath, err)
 	}
-	return json.RawMessage(b)
+
+	// Cut a previous [mcpServers.omaseal] table: from its header line to the
+	// next table header or EOF.
+	lines := strings.Split(existing, "\n")
+	kept := lines[:0]
+	skipping := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			if codexMCPRe.MatchString(line) {
+				skipping = true
+				continue
+			}
+			skipping = false
+		}
+		if !skipping {
+			kept = append(kept, line)
+		}
+	}
+	cleaned := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+
+	block := fmt.Sprintf("[mcpServers.omaseal]\ncommand = %q\nargs = [\"mcp\"]\n", bin)
+	out := block
+	if cleaned != "" {
+		out = cleaned + "\n\n" + block
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("create %s: %w", filepath.Dir(configPath), err)
+	}
+	if err := os.WriteFile(configPath, []byte(out), mode); err != nil {
+		return fmt.Errorf("write %s: %w", configPath, err)
+	}
+	return nil
+}
+
+func mcpInstallUsage() {
+	fmt.Fprintf(os.Stderr, "usage: omaseal mcp install <%s> [--dir <path>]\n", strings.Join(canonicalAgentNames(), "|"))
+	fmt.Fprintln(os.Stderr, "       --dir .   writes the project-level MCP config in the current repo")
+	fmt.Fprintln(os.Stderr, "       aliases:  antigravity -> agy, claude-code -> claude")
+}
+
+func mcpInstallAllUsage() {
+	fmt.Fprintln(os.Stderr, "usage: omaseal mcp install-all [--dir <path>]")
+	fmt.Fprintln(os.Stderr, "       omaseal mcp install-detected [--dir <path>]")
+	fmt.Fprintln(os.Stderr, "       omaseal mcp status [--json]")
+	fmt.Fprintln(os.Stderr, "  install-all writes every known agent; install-detected writes only")
+	fmt.Fprintln(os.Stderr, "  agents found on this machine plus your defaults and primary agent.")
 }

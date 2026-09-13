@@ -7,9 +7,10 @@ import (
 )
 
 type pingCheck struct {
-	Name    string `json:"name"`
-	Ok      bool   `json:"ok"`
-	Message string `json:"message"`
+	Name     string `json:"name"`
+	Ok       bool   `json:"ok"`
+	Optional bool   `json:"optional,omitempty"`
+	Message  string `json:"message"`
 }
 
 type pingResult struct {
@@ -30,8 +31,8 @@ func runPing() {
 	checks := make([]pingCheck, len(results))
 	ok := true
 	for i, r := range results {
-		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Message: r.message}
-		if !r.ok {
+		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Optional: r.optional, Message: r.message}
+		if !r.ok && !r.optional {
 			ok = false
 		}
 	}
