@@ -111,12 +111,18 @@ func SetLogOutput() {
 func WriteLog(format string, v ...any) {
 	for i, arg := range v {
 		if s, ok := arg.(string); ok {
-			v[i] = strings.Map(func(r rune) rune {
+			s = strings.Map(func(r rune) rune {
 				if r < 0x20 || r == 0x7f {
 					return ' '
 				}
 				return r
 			}, s)
+			// Bound field length: an unbounded foreign service/account name
+			// must not write a line so large it breaks log parsing.
+			if len(s) > 512 {
+				s = s[:512] + "…"
+			}
+			v[i] = s
 		}
 	}
 	log.Printf(format, v...)

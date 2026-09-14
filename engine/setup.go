@@ -88,6 +88,12 @@ func runSetup() {
 		}
 	case <-time.After(30 * time.Second):
 		fmt.Fprintln(os.Stderr, "selftest timed out (keyring may be locked) — run `omaseal selftest` after unlocking")
+		// The abandoned round-trip may still land its probe Set after the
+		// prompt resolves; remove it once it would have finished.
+		go func() {
+			time.Sleep(60 * time.Second)
+			_ = Delete("omaseal-selftest", "selftest")
+		}()
 	}
 	fmt.Fprintln(os.Stderr, "Agents pick up OmaSeal on their next start; the MCP server tells them to use it.")
 	if loadAgentPolicyOrDefault().Mode == "open" {

@@ -68,21 +68,31 @@ func keyringStore() (*ss.SecretService, dbus.BusObject, error) {
 	return svc, collection, nil
 }
 
-// findItem returns the item matching service and account, regardless of
-// which tool wrote it. When several items collide on those attributes
-// (different writers stamped the same pair), the OmaSeal-owned one wins so
-// writes and deletes prefer the item this tool manages.
-func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account string) (dbus.ObjectPath, error) {
+// findItems returns every item matching service and account, regardless of
+// which tool wrote it. Several physical items can share the pair (different
+// writers stamped the same attributes).
+func findItems(svc *ss.SecretService, collection dbus.BusObject, service, account string) ([]dbus.ObjectPath, error) {
 	search := map[string]string{
 		"service": service,
 		"account": account,
 	}
 	paths, err := svc.SearchItems(collection, search)
 	if err != nil {
-		return "", keyringError(err)
+		return nil, keyringError(err)
 	}
 	if len(paths) == 0 {
-		return "", keyringError(keyring.ErrNotFound)
+		return nil, keyringError(keyring.ErrNotFound)
+	}
+	return paths, nil
+}
+
+// findItem returns the single item matching service and account for reads.
+// When several items collide on those attributes, the OmaSeal-owned one wins
+// so reads prefer the item this tool manages.
+func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account string) (dbus.ObjectPath, error) {
+	paths, err := findItems(svc, collection, service, account)
+	if err != nil {
+		return "", err
 	}
 	if len(paths) == 1 {
 		return paths[0], nil
@@ -112,13 +122,21 @@ func Set(service, account, secret string) error {
 	}
 	defer svc.Close(session)
 
-	// An existing item addressed by service/account is updated in place,
-	// preserving whatever attributes it already carries — including foreign
-	// ones, so updating an omarchy-secrets or keytar item never creates a
-	// duplicate beside it.
-	if p, err := findItem(svc, collection, service, account); err == nil {
-		obj := svc.Object(secretServiceName, p)
-		return keyringError(obj.Call(itemInterface+".SetSecret", 0, ss.NewSecret(session.Path(), secret)).Err)
+	// Existing items addressed by service/account are updated in place,
+	// preserving whatever attributes they carry — including foreign ones, so
+	// updating an omarchy-secrets or keytar item never creates a duplicate
+	// beside it. When several items collide on the pair, all copies are
+	// updated so any subsequent read returns the new value regardless of
+	// which physical item it lands on.
+	if paths, err := findItems(svc, collection, service, account); err == nil {
+		var setErr error
+		for _, p := range paths {
+			obj := svc.Object(secretServiceName, p)
+			if callErr := obj.Call(itemInterface+".SetSecret", 0, ss.NewSecret(session.Path(), secret)).Err; callErr != nil {
+				setErr = callErr
+			}
+		}
+		return keyringError(setErr)
 	} else if !errors.Is(err, keyring.ErrNotFound) {
 		return err
 	}
@@ -180,11 +198,20 @@ func Delete(service, account string) error {
 		return err
 	}
 
-	p, err := findItem(svc, collection, service, account)
+	// Every item matching the pair is deleted — a credential is addressed by
+	// service/account, so removing only one of several colliding copies would
+	// leave the "deleted" secret readable through the survivor.
+	paths, err := findItems(svc, collection, service, account)
 	if err != nil {
 		return err
 	}
-	return keyringError(svc.Delete(p))
+	var delErr error
+	for _, p := range paths {
+		if err := svc.Delete(p); err != nil {
+			delErr = err
+		}
+	}
+	return keyringError(delErr)
 }
 
 // List returns metadata for every item in the collection addressed by

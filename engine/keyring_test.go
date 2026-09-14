@@ -213,3 +213,54 @@ func TestKeyringForeignItem(t *testing.T) {
 		t.Fatal("Get succeeded after Delete on foreign item")
 	}
 }
+
+// TestKeyringDuplicatePair verifies the namespace contract for colliding
+// items: an OmaSeal-owned item and a foreign item can share a
+// service/account pair; Get prefers the owned item, Set updates every copy
+// so the namespace stays coherent, and Delete removes every copy so the
+// credential is actually gone.
+func TestKeyringDuplicatePair(t *testing.T) {
+	svc, collection, err := keyringStore()
+	if err != nil {
+		t.Fatalf("keyring store: %v", err)
+	}
+	session, err := svc.OpenSession()
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	defer svc.Close(session)
+
+	service := randomName(t)
+	account := randomName(t)
+
+	// Foreign copy first, then an OmaSeal copy on the same pair.
+	attrs := map[string]string{"service": service, "account": account, "writer": "foreign-test"}
+	if err := svc.CreateItem(collection, "Foreign: "+service, attrs, ss.NewSecret(session.Path(), "foreign-secret")); err != nil {
+		t.Fatalf("CreateItem foreign: %v", err)
+	}
+	if err := Set(service, account, "owned-secret"); err != nil {
+		t.Fatalf("Set owned: %v", err)
+	}
+	t.Cleanup(func() { _ = Delete(service, account) })
+
+	// Get prefers the owned copy.
+	if got, err := Get(service, account); err != nil || got != "owned-secret" {
+		t.Fatalf("Get duplicate pair: %q, %v", got, err)
+	}
+
+	// Set updates both copies — a read landing on either returns the new value.
+	if err := Set(service, account, "unified"); err != nil {
+		t.Fatalf("Set duplicate pair: %v", err)
+	}
+	if got, err := Get(service, account); err != nil || got != "unified" {
+		t.Fatalf("Get after unified Set: %q, %v", got, err)
+	}
+
+	// Delete removes every copy — nothing readable survives.
+	if err := Delete(service, account); err != nil {
+		t.Fatalf("Delete duplicate pair: %v", err)
+	}
+	if _, err := Get(service, account); err == nil {
+		t.Fatal("Get succeeded after Delete on duplicate pair")
+	}
+}

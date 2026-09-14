@@ -64,7 +64,11 @@ func TestManifestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(GenerateDefaultManifest(items)), 0o600); err != nil {
+	content, skipped := GenerateDefaultManifest(items)
+	if len(skipped) != 1 || skipped[0] != "My Imported App/My Bank Login" {
+		t.Fatalf("skipped = %v, want [My Imported App/My Bank Login]", skipped)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

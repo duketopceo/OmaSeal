@@ -240,9 +240,6 @@ func UnlockAgent() error {
 	if err != nil {
 		return err
 	}
-	if p.Mode == "open" {
-		return fmt.Errorf("agent mode is already open; unlocking is not needed")
-	}
 	if p.Mode == "lock" {
 		return fmt.Errorf("agent mode is locked; run `omaseal agent mode ask` (or open) first")
 	}

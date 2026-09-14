@@ -173,11 +173,16 @@ func defaultPolicyFor(service string) (RulePolicy, string) {
 	return PolicyAsk, fmt.Sprintf("%s credential", service)
 }
 
-// GenerateDefaultManifest builds a starter robots.txt manifest from existing items.
-func GenerateDefaultManifest(items []Item) string {
+// GenerateDefaultManifest builds a starter robots.txt manifest from existing
+// items and reports the service/account names skipped because whitespace
+// would corrupt the space-separated rule format.
+func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 	var b strings.Builder
 	b.WriteString("# OmaSeal AI Agent Access Manifest (robots.txt format)\n")
 	b.WriteString("# Governs AI agent tool access and automated keyring usage.\n")
+	b.WriteString("# Scope: enforced on the agent (MCP) channel only. Same-user processes\n")
+	b.WriteString("# can still read via `omaseal get` / IPC — DENY is a policy boundary for\n")
+	b.WriteString("# wired agents, not confinement against a shell-capable process.\n")
 	b.WriteString("#\n")
 	b.WriteString("# Policies:\n")
 	b.WriteString("#   ALLOW <pattern> - <description>  (Agent may read without biometric/user gate)\n")
@@ -190,9 +195,8 @@ func GenerateDefaultManifest(items []Item) string {
 
 	for _, it := range items {
 		service, account := sanitizeField(it.Service), sanitizeField(it.Account)
-		// Names containing whitespace would corrupt the space-separated
-		// rule format — skip them rather than write an unparseable line.
 		if service == "" || account == "" || strings.ContainsAny(service+account, " \t") {
+			skipped = append(skipped, it.Service+"/"+it.Account)
 			continue
 		}
 		target := fmt.Sprintf("%s/%s", service, account)
@@ -229,10 +233,18 @@ func GenerateDefaultManifest(items []Item) string {
 		b.WriteString(l)
 	}
 
+	if len(skipped) > 0 {
+		b.WriteString("\n# Items whose names contain whitespace cannot be expressed as rules;\n")
+		b.WriteString("# they are governed only by the fallback policy below.\n")
+		for _, s := range skipped {
+			fmt.Fprintf(&b, "#   skipped: %s\n", s)
+		}
+	}
+
 	b.WriteString("\n# Fallback policy for any unlisted credentials\n")
 	b.WriteString("ASK    *                                   - Unspecified credentials require confirmation\n")
 
-	return b.String()
+	return b.String(), skipped
 }
 
 // handleManifest implements `omaseal manifest [show|init|check|path]`.
@@ -299,24 +311,30 @@ func handleManifest() {
 			printError("listing secrets for manifest: ", err)
 			os.Exit(1)
 		}
-		content := GenerateDefaultManifest(items)
+		content, skipped := GenerateDefaultManifest(items)
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			printError("writing manifest: ", err)
 			os.Exit(1)
 		}
 		var allow, ask, deny int
-		for _, it := range items {
-			p, _ := defaultPolicyFor(sanitizeField(it.Service))
-			switch p {
-			case PolicyAllow:
+		for _, line := range strings.Split(content, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || strings.HasPrefix(line, "#") {
+				continue
+			}
+			switch fields[0] {
+			case "ALLOW":
 				allow++
-			case PolicyAsk:
+			case "ASK":
 				ask++
-			case PolicyDeny:
+			case "DENY":
 				deny++
 			}
 		}
 		fmt.Printf("Initialized AI agent manifest at %s (%d ALLOW / %d ASK / %d DENY rules).\n", path, allow, ask, deny)
+		if len(skipped) > 0 {
+			fmt.Printf("Note: %d item(s) with whitespace in their names were skipped — the fallback ASK * policy governs them; rules cannot address them directly.\n", len(skipped))
+		}
 		fmt.Println("Review and edit the file — it takes effect on the next agent call.")
 
 	case "check":

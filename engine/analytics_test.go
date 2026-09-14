@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,43 @@ func TestParseAccessLogEdges(t *testing.T) {
 	stat, ok := stats[statKey("browseros", "openrouter-work/apiKey")]
 	if !ok || stat.Account != "openrouter-work/apiKey" {
 		t.Fatalf("multi-slash account misattributed: %+v", stat)
+	}
+}
+
+// TestAccessLogExactKeys verifies payload-keyed matching: case variants stay
+// distinct, a service containing "/" still enriches its own item, and a
+// >64KB line does not poison the parse.
+func TestAccessLogExactKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "keys.log")
+
+	big := strings.Repeat("x", 80*1024)
+	data := `2026/09/14 01:00:00 access GitHub/work
+2026/09/14 01:01:00 access github/work
+2026/09/14 01:02:00 access github/work
+2026/09/14 01:03:00 access a/b/c
+2026/09/14 01:04:00 access ` + big + `/x
+`
+	if err := os.WriteFile(logPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ParseAccessLogsFromFile(logPath)
+	if err != nil {
+		t.Fatalf("oversized line broke parse: %v", err)
+	}
+	if stats[statKey("GitHub", "work")].Count != 1 {
+		t.Fatalf("case-folded merge: %+v", stats)
+	}
+	if stats[statKey("github", "work")].Count != 2 {
+		t.Fatalf("case-folded merge: %+v", stats)
+	}
+	// Slash-in-service payload: item Service="a/b" Account="c" must match.
+	items := EnrichItemsWithStats([]Item{{Service: "a/b", Account: "c"}}, stats)
+	if items[0].AccessCount != 1 {
+		t.Fatalf("slash-service item not enriched: %+v", items[0])
+	}
+	if stats[statKey(big, "x")].Count != 1 {
+		t.Fatalf("oversized-name stat missing: %d entries", len(stats))
 	}
 }
 

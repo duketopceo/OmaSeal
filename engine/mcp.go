@@ -240,7 +240,11 @@ func toolOperation(name string) string {
 // empty manifest applies no per-secret policy.
 func checkManifestPolicy(service, account string) error {
 	m, err := LoadManifest()
-	if err != nil || m == nil || len(m.Rules) == 0 {
+	if err != nil {
+		return newError("manifest_error", "omaseal manifest",
+			fmt.Errorf("AI manifest unreadable; refusing agent access: %w", err))
+	}
+	if m == nil || len(m.Rules) == 0 {
 		return nil
 	}
 	policy, desc := m.CheckPolicy(service, account)
@@ -256,6 +260,45 @@ func checkManifestPolicy(service, account string) error {
 		}
 	}
 	return nil
+}
+
+// loadManifestClosed loads the AI manifest for enumeration filtering. A
+// missing or empty manifest denies nothing; an unreadable manifest fails
+// closed — callers surface the error rather than enumerate secrets they
+// cannot filter correctly.
+func loadManifestClosed() (*Manifest, error) {
+	m, err := LoadManifest()
+	if err != nil {
+		return nil, newError("manifest_error", "omaseal manifest",
+			fmt.Errorf("AI manifest unreadable; refusing agent access: %w", err))
+	}
+	return m, nil
+}
+
+// manifestDenies reports whether the manifest denies a specific credential,
+// evaluating pattern rules (including wildcard forms) per item.
+func manifestDenies(m *Manifest, service, account string) bool {
+	if m == nil {
+		return false
+	}
+	policy, _ := m.CheckPolicy(service, account)
+	return policy == PolicyDeny
+}
+
+// manifestDeniesPayload evaluates a raw "service/account" log payload. When
+// a name contains "/" the split point is ambiguous; a DENY on any valid
+// decomposition hides the entry — over-hiding a stat row is cosmetic, while
+// under-hiding leaks a denied credential's existence.
+func manifestDeniesPayload(m *Manifest, payload string) bool {
+	if m == nil {
+		return false
+	}
+	for i := 0; i < len(payload); i++ {
+		if payload[i] == '/' && manifestDenies(m, payload[:i], payload[i+1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func callMCPTool(req mcpToolCall) *mcpResponse {
@@ -374,6 +417,17 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if m, err := loadManifestClosed(); err != nil {
+			return toolErrorResp(req, err)
+		} else {
+			visible := items[:0]
+			for _, it := range items {
+				if !manifestDenies(m, it.Service, it.Account) {
+					visible = append(visible, it)
+				}
+			}
+			items = visible
+		}
 		b, err := json.Marshal(items)
 		if err != nil {
 			return toolErrorResp(req, err)
@@ -381,10 +435,20 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": string(b)})
 
 	case "omaseal_stats":
-		report, err := GetAnalyticsReport()
+		statsMap, err := ParseAccessLogs()
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if m, err := loadManifestClosed(); err != nil {
+			return toolErrorResp(req, err)
+		} else if m != nil {
+			for k := range statsMap {
+				if manifestDeniesPayload(m, k) {
+					delete(statsMap, k)
+				}
+			}
+		}
+		report := BuildAnalyticsReport(statsMap)
 		b, err := json.Marshal(report)
 		if err != nil {
 			return toolErrorResp(req, err)

@@ -32,8 +32,12 @@ type AnalyticsReport struct {
 	Stats         []AccessStat `json:"stats"`
 }
 
+// statKey is the canonical map key for a credential: the exact
+// "service/account" payload as logged. It is deliberately case-sensitive
+// (Secret Service attribute matching is case-sensitive) and unsplit — items
+// whose service or account contains "/" still match their own log lines.
 func statKey(service, account string) string {
-	return strings.ToLower(service) + "\x00" + strings.ToLower(account)
+	return service + "/" + account
 }
 
 // ParseAccessLogs reads the OmaSeal log file and aggregates access statistics.
@@ -58,6 +62,10 @@ func ParseAccessLogsFromFile(path string) (map[string]AccessStat, error) {
 
 	stats := make(map[string]AccessStat)
 	scanner := bufio.NewScanner(f)
+	// WriteLog bounds field lengths, but a pre-existing or hand-edited log
+	// could hold longer lines; 1 MiB headroom keeps one giant line from
+	// erroring every stats call.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	layout := "2006/01/02 15:04:05"
 
 	for scanner.Scan() {
@@ -74,11 +82,14 @@ func ParseAccessLogsFromFile(path string) (map[string]AccessStat, error) {
 			continue
 		}
 
+		// Key by the exact logged payload so services containing "/" match
+		// their items. The stored Service/Account split is display-only —
+		// first-"/" is always correct for OmaSeal-written items.
 		service, account, ok := strings.Cut(m[2], "/")
 		if !ok {
 			continue
 		}
-		k := statKey(service, account)
+		k := m[2]
 
 		cur, ok := stats[k]
 		if !ok {

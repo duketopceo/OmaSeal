@@ -69,17 +69,21 @@ Panel {
   }
 
   // This wl-clipboard build has no --clear-after flag, so the panel clears
-  // the selection itself 30s after a successful copy — the documented
-  // guarantee is that a copied secret does not sit in the live clipboard
-  // indefinitely.
+  // the selection itself 30s after a successful copy. `omaseal clipclear`
+  // clears only when the clipboard still holds that secret, so a stale
+  // timer cannot wipe whatever the user copied in the meantime.
+  property var lastCopied: null
   Timer {
     id: clipboardClearTimer
     interval: 30000
-    onTriggered: clipboardClearProc.running = true
+    onTriggered: {
+      if (root.lastCopied === null) return
+      clipboardClearProc.command = ["omaseal", "clipclear", root.lastCopied.service, root.lastCopied.account]
+      clipboardClearProc.running = true
+    }
   }
   Process {
     id: clipboardClearProc
-    command: ["wl-copy", "--clear"]
   }
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
@@ -466,6 +470,7 @@ Panel {
         proc.exited.connect(function(ec) {
           if (ec === 0) {
             root.notice = "Copied to clipboard (clears in 30s)"
+            root.lastCopied = {service: service, account: account}
             clipboardClearTimer.restart()
           } else {
             root.notice = "Copy failed"

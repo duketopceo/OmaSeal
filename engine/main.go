@@ -105,6 +105,8 @@ func main() {
 		handleManifest()
 	case "resolve":
 		handleResolve()
+	case "clipclear":
+		handleClipclear()
 	case "import":
 		handleImport()
 	case "mcp":
@@ -368,11 +370,14 @@ func handleLogs() {
 }
 
 // selftestRoundTrip runs a set/get/delete round-trip against the live keyring.
+// The probe uses a fixed name and is removed before writing, so a key left
+// behind by a timed-out or killed run is cleaned up on the next run.
 func selftestRoundTrip() error {
 	service := "omaseal-selftest"
-	account := fmt.Sprintf("selftest-%d", os.Getpid())
+	account := "selftest"
 	secret := fmt.Sprintf("omaseal-selftest-%d", time.Now().UnixNano())
 
+	_ = Delete(service, account) // clear any orphan from a previous timed-out run
 	if err := Set(service, account, secret); err != nil {
 		return fmt.Errorf("set: %w", err)
 	}
