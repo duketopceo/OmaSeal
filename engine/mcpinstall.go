@@ -255,7 +255,10 @@ func handleMCPInstallAll() {
 		mcpInstallAllUsage()
 		os.Exit(1)
 	}
-	installForAgents(canonicalAgentNames(), flagDir(fs, dir))
+	if err := installForAgents(canonicalAgentNames(), flagDir(fs, dir)); err != nil {
+		printError("install: ", err)
+		os.Exit(1)
+	}
 }
 
 func handleMCPInstallDetected() {
@@ -285,7 +288,10 @@ func handleMCPInstallDetected() {
 		return
 	}
 
-	installForAgents(slices.Sorted(maps.Keys(targets)), flagDir(fs, dir))
+	if err := installForAgents(slices.Sorted(maps.Keys(targets)), flagDir(fs, dir)); err != nil {
+		printError("install: ", err)
+		os.Exit(1)
+	}
 }
 
 func flagDir(fs *flag.FlagSet, dir *string) string {
@@ -293,10 +299,16 @@ func flagDir(fs *flag.FlagSet, dir *string) string {
 	if fs.NArg() > 0 && targetDir == "" {
 		targetDir = fs.Arg(0)
 	}
+	if fs.NArg() > 1 || (fs.NArg() > 0 && *dir != "") {
+		fmt.Fprintln(os.Stderr, "error: unexpected positional arguments")
+		os.Exit(2)
+	}
 	return targetDir
 }
 
-func installForAgents(names []string, dir string) {
+// installForAgents wires each agent and returns the per-agent failures joined
+// so callers (setup) can continue instead of dying mid-flow.
+func installForAgents(names []string, dir string) error {
 	errs := []string{}
 	for _, agent := range names {
 		path, err := installMCP(agent, dir)
@@ -307,9 +319,9 @@ func installForAgents(names []string, dir string) {
 		}
 	}
 	if len(errs) > 0 {
-		printError("install: ", errors.New(strings.Join(errs, "; ")))
-		os.Exit(1)
+		return errors.New(strings.Join(errs, "; "))
 	}
+	return nil
 }
 
 // mcpAgentStatus is one row of `omaseal mcp status` output.
@@ -455,8 +467,14 @@ func readConfigPreservingMode(path string) (data []byte, mode os.FileMode, err e
 
 // writeFileMode writes atomically: a temp file in the same directory is
 // fsynced and renamed over the target, so a crash mid-write can never leave
-// a truncated config another tool owns.
+// a truncated config another tool owns. A symlinked target (dotfile managers)
+// is resolved first so the rename replaces the real file, not the link.
 func writeFileMode(path string, data []byte, mode os.FileMode) error {
+	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			path = real
+		}
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)

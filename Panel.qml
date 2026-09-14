@@ -27,6 +27,7 @@ Panel {
   property bool refreshPending: false
   property var pendingCopy: null
   property var pendingDel: null
+  property bool agentStatusPending: false
   property bool saving: false
   property string getText: ""
   property bool isAdding: false
@@ -149,7 +150,11 @@ Panel {
   }
 
   function refreshAgentStatus() {
-    if (!agentProc.running) agentProc.running = true
+    if (agentProc.running) {
+      root.agentStatusPending = true
+    } else {
+      agentProc.running = true
+    }
   }
 
   function applyAgentStatus(raw) {
@@ -325,16 +330,19 @@ Panel {
       onStreamFinished: root.getText = text
     }
     onExited: function(exitCode) {
+      // Capture-and-clear: the clipboard payload must not race a queued get.
+      var secret = root.getText
+      root.getText = ""
       // Only a successful get reaches the clipboard — a failed or empty
       // read must never clobber what the user already has.
-      if (exitCode === 0 && root.getText !== "") {
+      if (exitCode === 0 && secret !== "") {
         var proc = copyProcComponent.createObject(root)
         proc.exited.connect(function(ec) {
           root.notice = ec === 0 ? "Copied to clipboard (clears in 30s)" : "Copy failed"
           proc.destroy()
         })
         proc.started.connect(function() {
-          proc.write(root.getText)
+          proc.write(secret)
           proc.stdinEnabled = false
         })
         proc.running = true
@@ -373,6 +381,12 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyAgentStatus(text)
+    }
+    onExited: function(exitCode) {
+      if (root.agentStatusPending) {
+        root.agentStatusPending = false
+        root.refreshAgentStatus()
+      }
     }
   }
 

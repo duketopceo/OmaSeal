@@ -69,7 +69,10 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 		return nil
 	}
 
-	// Notifications have no id; some require a result.
+	// Notifications have no id and must never receive a response frame.
+	if len(msg.ID) == 0 {
+		return nil
+	}
 	switch msg.Method {
 	case "initialize":
 		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: initMCPResult()}

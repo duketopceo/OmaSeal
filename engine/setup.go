@@ -108,13 +108,21 @@ func maybeInstallDetected(detected []mcpAgentStatus, yes bool) {
 	if !yes && !confirm(fmt.Sprintf("Install OmaSeal MCP for detected agents (%s)? [Y/n] ", strings.Join(todo, ", "))) {
 		return
 	}
-	installForAgents(todo, "")
+	// Report failures but keep going — setup continues to primary-agent
+	// selection and the remaining sections.
+	if err := installForAgents(todo, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "  some agents failed to install: %v\n", err)
+	}
 }
+
+// setupReader is shared across prompts so input buffered by one confirm is
+// not lost to the next.
+var setupReader = bufio.NewReader(os.Stdin)
 
 // confirm asks once on stdin; empty, y, and yes accept, anything else declines.
 func confirm(prompt string) bool {
 	fmt.Fprint(os.Stderr, prompt)
-	text, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	text, err := setupReader.ReadString('\n')
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  could not read response: %v\n", err)
 		return false

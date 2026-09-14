@@ -226,6 +226,9 @@ func UnlockAgent() error {
 	if p.Mode == "open" {
 		return fmt.Errorf("agent mode is already open; unlocking is not needed")
 	}
+	if p.Mode == "lock" {
+		return fmt.Errorf("agent mode is locked; run `omaseal agent mode ask` (or open) first")
+	}
 
 	// FprintdVerify returns nil when no biometric hardware is present, but
 	// returns an error on a failed scan. That mirrors the macOS best-effort

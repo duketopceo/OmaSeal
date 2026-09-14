@@ -60,7 +60,7 @@ func refAwareCredentials(service, account string, strict bool) (string, string, 
 	}
 	if isOmaSealFamily(service) {
 		if account != "" {
-			return "", "", fmt.Errorf("account must not accompany %s", service)
+			return fail(fmt.Errorf("account must not accompany %s", service))
 		}
 		s, a, err := parseRef(service, strict)
 		if err != nil {
