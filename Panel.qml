@@ -73,7 +73,7 @@ Panel {
   function refresh() {
     root.notice = ""
     root.pendingDeleteIndex = -1
-    listProc.command = ["omaseal", "list", "--json"]
+    listProc.command = ["omaseal", "list", "--sort=used", "--json"]
     if (!listProc.running) listProc.running = true
   }
 
@@ -90,7 +90,8 @@ Panel {
         secretsModel.append({
           service: d[i].service || "",
           account: d[i].account || "",
-          label: d[i].label || ""
+          label: d[i].label || "",
+          hits: d[i].access_count || 0
         })
       }
       if (root.selectedIndex >= secretsModel.count) {

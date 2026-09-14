@@ -28,11 +28,13 @@ const (
 // Item is metadata for a stored secret. It intentionally does not include the
 // secret value; callers must explicitly request that with GetSecret.
 type Item struct {
-	Service   string    `json:"service"`
-	Account   string    `json:"account"`
-	Label     string    `json:"label"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Service      string     `json:"service"`
+	Account      string     `json:"account"`
+	Label        string     `json:"label"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	AccessCount  int        `json:"access_count,omitempty"`
+	LastAccessed *time.Time `json:"last_accessed,omitempty"`
 }
 
 // keyringError wraps keyring failures with actionable context.

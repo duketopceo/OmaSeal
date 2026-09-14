@@ -14,15 +14,17 @@ import (
 type ipcRequest struct {
 	Service string `json:"service"`
 	Account string `json:"account"`
+	Sort    string `json:"sort"`
 }
 
 type ipcResponse struct {
-	OK     string `json:"ok,omitempty"`
-	Secret string `json:"secret,omitempty"`
-	Items  []Item `json:"items,omitempty"`
-	Error  string `json:"error,omitempty"`
-	Code   string `json:"code,omitempty"`
-	Help   string `json:"help,omitempty"`
+	OK      string           `json:"ok,omitempty"`
+	Secret  string           `json:"secret,omitempty"`
+	Items   []Item           `json:"items,omitempty"`
+	Stats   *AnalyticsReport `json:"stats,omitempty"`
+	Error   string           `json:"error,omitempty"`
+	Code    string           `json:"code,omitempty"`
+	Help    string           `json:"help,omitempty"`
 }
 
 func runIPC(method string, jsonArgs string) {
@@ -87,7 +89,23 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
+		stats, _ := ParseAccessLogs()
+		if stats != nil {
+			items = EnrichItemsWithStats(items, stats)
+		}
+		if req.Sort == "used" || req.Sort == "hits" {
+			SortItemsByUsage(items)
+		}
 		resp.Items = items
+
+	case "stats", "analytics":
+		report, err := GetAnalyticsReport(50)
+		if err != nil {
+			resp.Error = err.Error()
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		resp.Stats = report
 
 	case "resolve":
 		var req ipcRequest
