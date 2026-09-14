@@ -36,6 +36,9 @@ Panel {
     id: setProcComponent
     Process {
       stdinEnabled: true
+      stderr: StdioCollector {
+        waitForEnd: true
+      }
     }
   }
 
@@ -179,13 +182,21 @@ Panel {
         root.refresh()
         root.statusChanged()
       } else {
-        root.notice = "Save failed"
+        var detail = ""
+        var lines = (proc.stderr.text || "").split("\n")
+        for (var i = 0; i < lines.length; i++) {
+          var l = lines[i].trim()
+          if (l.indexOf("error:") === 0) { detail = l; break }
+        }
+        root.notice = detail !== "" ? "Save failed: " + detail : "Save failed"
       }
       proc.destroy()
     })
+    proc.started.connect(function() {
+      proc.write(secret)
+      proc.stdinEnabled = false
+    })
     proc.running = true
-    proc.write(secret)
-    proc.stdinEnabled = false
   }
 
   function deleteSecret(index, service, account) {
@@ -254,9 +265,11 @@ Panel {
           }
           proc.destroy()
         })
+        proc.started.connect(function() {
+          proc.write(text)
+          proc.stdinEnabled = false
+        })
         proc.running = true
-        proc.write(text)
-        proc.stdinEnabled = false
       }
     }
     onExited: function(exitCode) {
@@ -625,7 +638,7 @@ Panel {
         Flickable {
           id: listFlickable
           width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          implicitHeight: Math.min(secretsCol.implicitHeight, Style.space(420))
+          implicitHeight: Math.min(secretsCol.implicitHeight, root.isAdding ? Style.space(220) : Style.space(420))
           height: implicitHeight
           contentHeight: secretsCol.implicitHeight
           clip: true
