@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,26 @@ func prompterFor(kind string) guiPrompter {
 		return &pinentryPrompter{}
 	}
 	return &zenityPrompter{}
+}
+
+// requesterName identifies the process that invoked omaseal so the dialog
+// shows who is asking. Falls back to a generic label when unreadable.
+func requesterName() string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", os.Getppid()))
+	name := strings.TrimSpace(string(b))
+	if err != nil || name == "" || strings.IndexFunc(name, func(r rune) bool {
+		return r < 0x20 || r == 0x7f
+	}) != -1 {
+		return "a local process"
+	}
+	return name
+}
+
+// pangoEscape makes literal text safe for a zenity --text label, which is
+// rendered as Pango markup.
+func pangoEscape(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return r.Replace(s)
 }
 
 // withPromptDeadline adds the default prompt deadline when the caller's
@@ -182,8 +203,13 @@ func isNonGUIFlavor(flavor string) bool {
 }
 
 func (p *pinentryPrompter) prompt(ctx context.Context, service, account string) (string, error) {
+	paths := pinentryCandidatePaths()
+	if p.path != "" {
+		// The binary probed GUI-capable by available() goes first.
+		paths = append([]string{p.path}, slices.DeleteFunc(slices.Clone(paths), func(s string) bool { return s == p.path })...)
+	}
 	var lastErr error
-	for _, path := range pinentryCandidatePaths() {
+	for _, path := range paths {
 		secret, err := promptPinentry(ctx, path, service, account)
 		switch {
 		case err == nil:
@@ -409,7 +435,7 @@ func promptPinentry(ctx context.Context, path, service, account string) (string,
 	for _, cmd := range []string{
 		"SETTITLE OmaSeal",
 		"SETPROMPT Secret:",
-		"SETDESC " + assuanEscape(fmt.Sprintf("Enter secret for %s/%s (OmaSeal)", service, account)),
+		"SETDESC " + assuanEscape(fmt.Sprintf("Enter secret for %s/%s (OmaSeal, requested by %s)", service, account, requesterName())),
 		fmt.Sprintf("SETTIMEOUT %d", int(guiPromptTimeout.Seconds())),
 	} {
 		if err := conn.command(cmd); err != nil {
@@ -476,7 +502,7 @@ func promptZenity(ctx context.Context, path, service, account string) (string, e
 	cmd := exec.CommandContext(ctx, path,
 		"--password",
 		"--title=OmaSeal",
-		"--text=Enter secret for "+service+"/"+account,
+		"--text="+pangoEscape(fmt.Sprintf("Enter secret for %s/%s (requested by %s)", service, account, requesterName())),
 		fmt.Sprintf("--timeout=%d", int(guiPromptTimeout.Seconds())),
 	)
 	var out bytes.Buffer

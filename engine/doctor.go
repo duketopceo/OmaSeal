@@ -274,7 +274,7 @@ func checkGUIPrompt() checkResult {
 			name:     "gui-prompt",
 			ok:       false,
 			optional: true,
-			message: "No usable masked graphical prompter found.\n" +
+			message: "No usable masked graphical prompter: " + err.Error() + "\n" +
 				"  - Install `pinentry` with a GUI backend or `zenity` for headless `omaseal resolve` prompts.\n" +
 				"  - `OMASEAL_GUI_PROMPT=pinentry|zenity|off` overrides prompter selection.",
 		}

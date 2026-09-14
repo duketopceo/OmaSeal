@@ -39,10 +39,12 @@ omaseal mcp status          # who is detected / installed
 omaseal mcp install claude  # a single agent
 ```
 
-Each agent's real config path is used (for example `~/.agents/mcp/mcp.json` or
-Codex's `~/.codex/config.toml`); existing keys in those files are preserved.
+Each agent's real config path is used (for example Codex's
+`~/.codex/config.toml` or Devin's `~/.config/devin/mcp_config.json`); existing
+keys in those files are preserved, and writes are atomic so a crash cannot
+truncate the file.
 
-Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`.
+Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`, `omaseal_status` (read-only agent/session state).
 
 Agents should:
 - call `omaseal_set` or `omaseal_resolve` rather than reading dotfiles

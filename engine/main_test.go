@@ -23,6 +23,17 @@ func TestIsTerminalNonTerminalFiles(t *testing.T) {
 	if isTerminal(reg) {
 		t.Error("isTerminal(regular file) = true, want false")
 	}
+
+	// A pipe — the stdin shape daemons and IPC callers actually have.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if isTerminal(r) {
+		t.Error("isTerminal(pipe) = true, want false")
+	}
 }
 
 func TestIsStdinTTYMatchesStdin(t *testing.T) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,47 @@ func TestKeepAliveDoesNotReviveExpiredSession(t *testing.T) {
 	err := CheckAgentOperation("list")
 	if err == nil || !strings.Contains(err.Error(), "unlock") {
 		t.Fatalf("expected unauthorized error, got %v", err)
+	}
+}
+
+func TestRenewalDoesNotResurrectLockedSession(t *testing.T) {
+	setupAgentEnv(t)
+	askPolicy(t, true)
+
+	// Simulate `agent lock` removing the file between an op's session read
+	// and its keep-alive renewal: the renewal must not recreate it.
+	renewal := time.Now().UTC().Add(15 * time.Minute)
+	if err := renewSessionExpiry(renewal); err == nil {
+		t.Fatal("renewal created a session file that never existed")
+	}
+	if _, ok := readSessionExpiry(); ok {
+		t.Fatal("session resurrected after removal")
+	}
+}
+
+func TestAgentStatusJSONContract(t *testing.T) {
+	setupAgentEnv(t)
+	askPolicy(t, true)
+
+	s, err := agentStatusJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal([]byte(s), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["mode"] != "ask" || d["keep_alive"] != true || d["session_active"] != false {
+		t.Fatalf("bad status: %s", s)
+	}
+	if _, ok := d["fprintd_available"]; !ok {
+		t.Fatal("ask mode must report fprintd_available")
+	}
+	if a, ok := d["agents"].([]any); !ok || a == nil {
+		t.Fatalf("agents must be an array, got %T %v", d["agents"], d["agents"])
+	}
+	if _, ok := d["session_expires"]; ok {
+		t.Fatal("session_expires must be absent without an active session")
 	}
 }
 

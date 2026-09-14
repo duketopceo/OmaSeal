@@ -88,7 +88,15 @@ func saveAgentPolicy(p AgentPolicy) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return writeFileMode(path, data, 0600)
+}
+
+// loadAgentPolicyOrDefault returns the persisted policy, or defaults when the
+// file is missing/unreadable. Use for display paths; CheckAgentOperation must
+// keep using loadAgentPolicy so a corrupt policy fails closed there.
+func loadAgentPolicyOrDefault() AgentPolicy {
+	p, _ := loadAgentPolicy()
+	return p
 }
 
 func isValidMode(mode string) bool {
@@ -118,10 +126,28 @@ func agentSessionPath() string {
 
 func writeSessionExpiry(expiry time.Time) error {
 	path := agentSessionPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	return writeFileMode(path, []byte(sessionExpiryText(expiry)), 0600)
+}
+
+// renewSessionExpiry updates an existing session file in place. Unlike
+// writeSessionExpiry it never creates the file, so a keep-alive renewal can
+// never resurrect a session revoked by `agent lock` mid-operation. The
+// payload is fixed-width and written in one call so a concurrent reader can
+// never observe a torn (empty or partial) expiry.
+func renewSessionExpiry(expiry time.Time) error {
+	f, err := os.OpenFile(agentSessionPath(), os.O_WRONLY, 0)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d", expiry.Unix())), 0600)
+	defer f.Close()
+	_, err = f.Write([]byte(sessionExpiryText(expiry)))
+	return err
+}
+
+// sessionExpiryText renders an expiry as a zero-padded fixed-width unix
+// timestamp so in-place renewals always overwrite a same-length record.
+func sessionExpiryText(expiry time.Time) string {
+	return fmt.Sprintf("%020d", expiry.Unix())
 }
 
 func readSessionExpiry() (time.Time, bool) {
@@ -142,7 +168,7 @@ func clearAgentSession() error {
 
 // AgentMode returns the current mode for use in status/CLI output.
 func AgentMode() string {
-	p, _ := loadAgentPolicy()
+	p := loadAgentPolicyOrDefault()
 	return p.Mode
 }
 
@@ -165,7 +191,7 @@ func CheckAgentOperation(op string) error {
 			if p.KeepAlive {
 				// Sliding window: each authorized op renews the session for
 				// another SessionMinutes; it lapses after that much inactivity.
-				_ = writeSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
+				_ = renewSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
 			}
 			return nil
 		}
@@ -219,7 +245,9 @@ func UnlockAgent() error {
 // LockAgent revokes any active agent session and, if mode is not locked, sets
 // the persistent policy to ask so the next access requires re-authorization.
 func LockAgent() error {
-	_ = clearAgentSession()
+	if err := clearAgentSession(); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear agent session: %w", err)
+	}
 	p, err := loadAgentPolicy()
 	if err != nil {
 		return err
@@ -275,13 +303,17 @@ func agentStatusJSON() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	agents := p.Agents
+	if agents == nil {
+		agents = []string{} // JSON contract: always an array, never null
+	}
 	out := map[string]any{
 		"mode":            p.Mode,
 		"session_minutes": p.SessionMinutes,
 		"keep_alive":      p.KeepAlive,
 		"session_active":  false,
 		"primary_agent":   p.PrimaryAgent,
-		"agents":          p.Agents,
+		"agents":          agents,
 	}
 	// The fprintd probe spawns subprocesses; only ask mode consumes the field.
 	if p.Mode == "ask" {
@@ -418,7 +450,7 @@ func handleAgent() {
 		}
 	case "keepalive", "keep-alive":
 		if len(os.Args) < 4 {
-			p, _ := loadAgentPolicy()
+			p := loadAgentPolicyOrDefault()
 			if p.KeepAlive {
 				fmt.Println("keep-alive: on")
 			} else {
@@ -459,7 +491,7 @@ func handleAgent() {
 		fmt.Printf("Primary agent set to %s.\n", os.Args[3])
 	case "defaults":
 		if len(os.Args) < 4 {
-			p, _ := loadAgentPolicy()
+			p := loadAgentPolicyOrDefault()
 			if len(p.Agents) == 0 {
 				fmt.Println("No default agents assigned.")
 			} else {

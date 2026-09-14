@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // ipcRequest holds the supported payload shapes.
@@ -40,7 +41,15 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		secret, err := Get(req.Service, req.Account)
+		service, account, err := refAwareCredentials(req.Service, req.Account, false)
+		if err != nil {
+			resp.Error = err.Error()
+			resp.Code = codeFromError(err)
+			resp.Help = helpFromError(err)
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		secret, err := Get(service, account)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
@@ -59,8 +68,27 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		// The secret arrives on stdin — never inside the JSON payload.
-		secret, err := readSecret()
+		// Writes are strict: new names must satisfy the shared charset.
+		service, account, verr := refAwareCredentials(req.Service, req.Account, true)
+		if verr != nil {
+			resp.Error = verr.Error()
+			resp.Code = codeFromError(verr)
+			resp.Help = helpFromError(verr)
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		// The secret arrives on stdin — never inside the JSON payload. A TTY
+		// stdin would turn the read into an interactive prompt on a terminal
+		// the IPC caller may not own; a held-open pipe would block forever —
+		// both are rejected with a typed error instead of hanging.
+		if isStdinTTY() {
+			resp.Error = "ipc set requires a piped secret on stdin"
+			resp.Code = "invalid_secret"
+			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		secret, err := readSecretDeadline(30 * time.Second)
 		if err != nil || secret == "" {
 			resp.Error = "reading secret from stdin"
 			if err != nil {
@@ -71,7 +99,7 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		if err := Set(req.Service, req.Account, secret); err != nil {
+		if err := Set(service, account, secret); err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
 			resp.Help = helpFromError(err)
@@ -89,7 +117,15 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		if err := Delete(req.Service, req.Account); err != nil {
+		service, account, verr := refAwareCredentials(req.Service, req.Account, false)
+		if verr != nil {
+			resp.Error = verr.Error()
+			resp.Code = codeFromError(verr)
+			resp.Help = helpFromError(verr)
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		if err := Delete(service, account); err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
 			resp.Help = helpFromError(err)
@@ -109,7 +145,15 @@ func runIPC(method string, jsonArgs string) {
 				os.Exit(1)
 			}
 		}
-		items, err := List(req.Service)
+		service, serr := refAwareService(req.Service, false)
+		if serr != nil {
+			resp.Error = serr.Error()
+			resp.Code = "invalid_name"
+			resp.Help = "omaseal ipc list '{\"service\":\"...\"}'"
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		items, err := List(service)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
@@ -128,7 +172,15 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		secret, err := Resolve(context.Background(), req.Service, req.Account, true, false)
+		service, account, verr := refAwareCredentials(req.Service, req.Account, false)
+		if verr != nil {
+			resp.Error = verr.Error()
+			resp.Code = codeFromError(verr)
+			resp.Help = helpFromError(verr)
+			writeJSON(resp)
+			os.Exit(1)
+		}
+		secret, err := Resolve(context.Background(), service, account, true, false)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)

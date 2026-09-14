@@ -13,6 +13,12 @@ No whitespace, no control characters, no `%`. There is no percent-encoding in
 `omaseal://` references; a name that needs one is outside the alphabet by
 design.
 
+The alphabet is enforced on **writes** (`set` on every surface — CLI, MCP,
+IPC). **Reads** (`get`, `del`, `reveal`, `list`, `resolve`) are permissive so
+entries created before validation existed — or imported from 1Password /
+Bitwarden titles with spaces — stay reachable and deletable. To update a
+legacy non-conforming entry, delete it and re-add it under a conforming name.
+
 ## `omaseal://` references
 
 Anywhere the CLI takes `<service> <account>`, a single reference works too:
@@ -27,6 +33,12 @@ token is case-insensitive (`OMASEAL://…` is accepted). Malformed
 `omaseal`-scheme strings (`omaseal:x`, `omaseal:///acct`) are errors, never
 silent literals. `omaseal list` accepts `omaseal://<service>` with an optional
 trailing slash; a reference carrying an account is rejected there.
+
+**Agent surfaces (MCP tools and `omaseal ipc`)** take either separate
+`service`/`account` fields or a verbatim `omaseal://<service>/<account>`
+reference in the `service` field. A reference and a separate `account` may not
+be combined. Note that an account may begin or end with `/` — `svc//x` parses
+to account `/x`; the charset permits it, so keep segments meaningful.
 
 **References are capability pointers, not secrets.** Storing
 `omaseal://browseros/x/apiKey` in a database or config file avoids embedding

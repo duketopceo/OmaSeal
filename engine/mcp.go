@@ -107,6 +107,7 @@ const mcpInstructions = `OmaSeal is the system keyring on this Omarchy machine â
 	`paste secrets, reading .env files, or grepping dotfiles. When the user gives you a new credential to keep, ` +
 	`store it with omaseal_set â€” never write secrets to files, dotfiles, shell arguments, or logs. ` +
 	`omaseal_list returns service/account metadata only (no values) and is safe for discovering what is stored. ` +
+	`A stored omaseal://<service>/<account> reference may be passed verbatim in the service field of any tool. ` +
 	`If a call fails with code agent_unauthorized, tell the user to run "omaseal agent unlock"; ` +
 	`for not_found, suggest "omaseal set <service> <account>" or omaseal_set.`
 
@@ -175,6 +176,15 @@ var mcpToolsResult = map[string]any{
 				"required":   []string{},
 			},
 		},
+		{
+			"name":        "omaseal_status",
+			"description": "Report the agent trust policy and session state (mode, unlock status, expiry, keep-alive). Read-only and non-secret; unlocking stays a human-only action.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+				"required":   []string{},
+			},
+		},
 	},
 }
 
@@ -223,7 +233,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		v, err := Get(a.Service, a.Account)
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		v, err := Get(service, account)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -237,7 +251,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		v, err := Resolve(context.Background(), a.Service, a.Account, true, false)
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		v, err := Resolve(context.Background(), service, account, true, false)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -252,7 +270,13 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		if err := Set(a.Service, a.Account, a.Secret); err != nil {
+		// Writes are strict: new names must satisfy the shared charset so
+		// stored entries stay reachable and promptable everywhere.
+		service, account, err := refAwareCredentials(a.Service, a.Account, true)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if err := Set(service, account, a.Secret); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -265,7 +289,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		if err := Delete(a.Service, a.Account); err != nil {
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if err := Delete(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -279,7 +307,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 				return errResp(req, err)
 			}
 		}
-		items, err := List(a.Service)
+		service, err := refAwareService(a.Service, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		items, err := List(service)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -288,6 +320,15 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": string(b)})
+
+	case "omaseal_status":
+		// Ungated: the status payload is non-secret and must stay readable
+		// even while the agent policy is locked.
+		status, err := agentStatusJSON()
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		r.Content = append(r.Content, map[string]any{"type": "text", "text": status})
 
 	default:
 		return &mcpResponse{JSONRPC: "2.0", Error: newMCPError(-32602, "unknown tool: "+req.Name)}

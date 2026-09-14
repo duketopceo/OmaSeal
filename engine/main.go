@@ -156,7 +156,7 @@ func handleSet() {
 }
 
 func handleGet() {
-	service, account, err := argCredentials(os.Args[2:])
+	service, account, err := argCredentialsLoose(os.Args[2:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
@@ -172,7 +172,7 @@ func handleGet() {
 }
 
 func handleDel() {
-	service, account, err := argCredentials(os.Args[2:])
+	service, account, err := argCredentialsLoose(os.Args[2:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
@@ -233,7 +233,7 @@ func handleList() {
 }
 
 func handleReveal() {
-	service, account, err := argCredentials(os.Args[2:])
+	service, account, err := argCredentialsLoose(os.Args[2:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
@@ -264,7 +264,7 @@ func handleIPC() {
 }
 
 func handleResolve() {
-	service, account, err := argCredentials(os.Args[2:])
+	service, account, err := argCredentialsLoose(os.Args[2:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
@@ -372,6 +372,27 @@ func handleSelfTest() {
 	}
 	WriteLog("selftest passed")
 	fmt.Println("selftest ok: set/get/delete round-trip passed")
+}
+
+// readSecretDeadline reads stdin like readSecret but gives up after d, so
+// callers that cannot see their caller's stdin (IPC) fail instead of hanging
+// on a held-open pipe.
+func readSecretDeadline(d time.Duration) (string, error) {
+	type result struct {
+		s   string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		b, err := io.ReadAll(os.Stdin)
+		ch <- result{strings.TrimSuffix(string(b), "\n"), err}
+	}()
+	select {
+	case r := <-ch:
+		return r.s, r.err
+	case <-time.After(d):
+		return "", fmt.Errorf("timed out waiting for the secret on stdin")
+	}
 }
 
 // readSecret reads a secret from stdin without a trailing newline.

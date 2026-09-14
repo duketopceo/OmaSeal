@@ -181,9 +181,70 @@ func TestGUIPrompterOrder(t *testing.T) {
 	}
 }
 
+func TestGUIPromptSecretDisabled(t *testing.T) {
+	t.Setenv("OMASEAL_GUI_PROMPT", "off")
+	_, err := guiPromptSecret(context.Background(), "s", "a")
+	if !errors.Is(err, errGUIDisabled) {
+		t.Errorf("err = %v, want errGUIDisabled", err)
+	}
+}
+
+func TestGUIPromptCancelShortCircuits(t *testing.T) {
+	// A pinentry cancel must not fall through to zenity — the user dismissed
+	// the dialog once; asking again elsewhere is a second prompt for one key.
+	marker := filepath.Join(t.TempDir(), "zenity-ran")
+	pin, _ := pinentryStub(t, "gnome3", `printf 'ERR 83886179 cancelled\n'`)
+	zen := zenityStub(t, `touch "`+marker+`"; printf 'x\n'`)
+	oldP, oldZ := pinentryCandidatePaths, zenityCandidatePaths
+	pinentryCandidatePaths = func() []string { return []string{pin} }
+	zenityCandidatePaths = func() []string { return []string{zen} }
+	defer func() { pinentryCandidatePaths, zenityCandidatePaths = oldP, oldZ }()
+
+	_, err := guiPromptSecret(context.Background(), "s", "a")
+	if !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("err = %v, want errPromptCancelled", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("zenity ran after a pinentry cancel")
+	}
+}
+
+func TestGUIPromptFallsThroughOnFailure(t *testing.T) {
+	pin, _ := pinentryStub(t, "gnome3", `printf 'ERR 1 io error\n'; exit 1`)
+	zen := zenityStub(t, `printf 'from-zenity\n'`)
+	oldP, oldZ := pinentryCandidatePaths, zenityCandidatePaths
+	pinentryCandidatePaths = func() []string { return []string{pin} }
+	zenityCandidatePaths = func() []string { return []string{zen} }
+	defer func() { pinentryCandidatePaths, zenityCandidatePaths = oldP, oldZ }()
+
+	got, err := guiPromptSecret(context.Background(), "s", "a")
+	if err != nil || got != "from-zenity" {
+		t.Fatalf("guiPromptSecret = %q, %v; want from-zenity", got, err)
+	}
+}
+
+func TestFixedOrLookPathPrefersFixed(t *testing.T) {
+	// The fixed absolute path must win over a PATH-resolved namesake so a
+	// shadowed PATH cannot swap the prompter binary.
+	fixed := writeStub(t, "pinentry", "#!/bin/sh\nexit 0\n")
+	dir := t.TempDir()
+	shadow := filepath.Join(dir, "pinentry")
+	if err := os.WriteFile(shadow, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	got := fixedOrLookPath(fixed, "pinentry")
+	if len(got) == 0 || got[0] != fixed {
+		t.Fatalf("fixedOrLookPath = %v, want %q first", got, fixed)
+	}
+	if len(got) != 2 || got[1] != shadow {
+		t.Fatalf("PATH fallback missing: %v", got)
+	}
+}
+
 func TestResolveGUIPromptCachesSecret(t *testing.T) {
 	// Needs a live Secret Service keyring; skip cleanly where absent.
-	probe := "omaseal-gui-test-probe"
+	probe := randomName(t)
 	if err := Set(probe, "probe", "x"); err != nil {
 		t.Skipf("no usable keyring: %v", err)
 	}
@@ -202,9 +263,8 @@ func TestResolveGUIPromptCachesSecret(t *testing.T) {
 		t.Skip("test stdin is a TTY; TTY prompt path takes precedence")
 	}
 
-	service := "omaseal-gui-test"
-	account := "miss"
-	_ = Delete(service, account)
+	service, account := randomName(t), "miss"
+	t.Cleanup(func() { _ = Delete(service, account) })
 
 	got, err := Resolve(context.Background(), service, account, true, true)
 	if err != nil {
@@ -220,5 +280,4 @@ func TestResolveGUIPromptCachesSecret(t *testing.T) {
 	if cached != "gui-secret" {
 		t.Errorf("cached = %q, want gui-secret", cached)
 	}
-	_ = Delete(service, account)
 }

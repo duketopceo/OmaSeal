@@ -36,7 +36,7 @@ func runSetup() {
 		fmt.Fprintln(os.Stderr, "  no supported agents detected yet")
 	}
 
-	p, _ := loadAgentPolicy()
+	p := loadAgentPolicyOrDefault()
 	if p.PrimaryAgent != "" {
 		fmt.Fprintf(os.Stderr, "  primary agent: %s\n", p.PrimaryAgent)
 	}
@@ -76,6 +76,11 @@ func runSetup() {
 	fmt.Fprintln(os.Stderr, "=== Verify ===")
 	fmt.Fprintln(os.Stderr, "Run `omaseal selftest` for a keyring round-trip check.")
 	fmt.Fprintln(os.Stderr, "Agents pick up OmaSeal on their next start; the MCP server tells them to use it.")
+	if loadAgentPolicyOrDefault().Mode == "open" {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Agent mode is `open` — every wired agent can read secrets freely.")
+		fmt.Fprintln(os.Stderr, "Run `omaseal agent mode ask` to gate agent access behind a session unlock.")
+	}
 
 	if runtime.GOOS == "linux" {
 		if _, err := exec.LookPath("fprintd-verify"); err == nil {

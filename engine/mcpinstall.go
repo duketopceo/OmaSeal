@@ -37,7 +37,7 @@ type agentSpec struct {
 	// Empty means the agent has no repo-local config surface.
 	projectPath string
 	// format selects the merge strategy: formatJSON merges a servers object,
-	// formatCodexTOML appends a [mcpServers.omaseal] table.
+	// formatCodexTOML appends a [mcp_servers.omaseal] table.
 	format string
 	// serversKey is the top-level JSON key holding the server map.
 	serversKey string
@@ -272,7 +272,7 @@ func handleMCPInstallDetected() {
 		targets[name] = true
 	}
 	// The user's assigned defaults and primary agent are always included.
-	p, _ := loadAgentPolicy()
+	p := loadAgentPolicyOrDefault()
 	for _, name := range p.Agents {
 		targets[name] = true
 	}
@@ -327,7 +327,7 @@ func mcpStatusRows() []mcpAgentStatus {
 	if err != nil {
 		return nil // relative spec paths would stat against CWD and false-positive
 	}
-	p, _ := loadAgentPolicy()
+	p := loadAgentPolicyOrDefault()
 	defaults := map[string]bool{}
 	for _, n := range p.Agents {
 		defaults[n] = true
@@ -453,11 +453,40 @@ func readConfigPreservingMode(path string) (data []byte, mode os.FileMode, err e
 	return data, st.Mode().Perm(), nil
 }
 
+// writeFileMode writes atomically: a temp file in the same directory is
+// fsynced and renamed over the target, so a crash mid-write can never leave
+// a truncated config another tool owns.
 func writeFileMode(path string, data []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	if err := os.WriteFile(path, data, mode); err != nil {
+	f, err := os.CreateTemp(dir, ".omaseal-*.tmp")
+	if err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
@@ -507,11 +536,12 @@ func mergeJSONConfig(configPath string, spec agentSpec, bin string) error {
 	return writeFileMode(configPath, b, mode)
 }
 
-// codexMCPRe matches an existing [mcpServers.omaseal] table header in TOML.
-var codexMCPRe = regexp.MustCompile(`(?m)^\s*\[\s*mcpServers\.omaseal\s*\]`)
+// codexMCPRe matches an existing [mcp_servers.omaseal] table header in TOML.
+// The earlier mcpServers spelling is also matched so installs repair it.
+var codexMCPRe = regexp.MustCompile(`(?m)^\s*\[\s*mcp(?:_s|S)ervers\.omaseal\s*\]`)
 
 // mergeCodexTOML writes omaseal into ~/.codex/config.toml as a
-// [mcpServers.omaseal] table, replacing any previous omaseal table and
+// [mcp_servers.omaseal] table, replacing any previous omaseal table and
 // preserving all other content.
 func mergeCodexTOML(configPath, bin string) error {
 	data, mode, err := readConfigPreservingMode(configPath)
@@ -540,7 +570,7 @@ func mergeCodexTOML(configPath, bin string) error {
 	}
 	cleaned := strings.TrimRight(strings.Join(kept, "\n"), "\n")
 
-	block := fmt.Sprintf("[mcpServers.omaseal]\ncommand = %q\nargs = [\"mcp\"]\n", bin)
+	block := fmt.Sprintf("[mcp_servers.omaseal]\ncommand = %q\nargs = [\"mcp\"]\n", bin)
 	out := block
 	if cleaned != "" {
 		out = cleaned + "\n\n" + block
