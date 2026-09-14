@@ -19,13 +19,13 @@ type ipcRequest struct {
 }
 
 type ipcResponse struct {
-	OK      string           `json:"ok,omitempty"`
-	Secret  string           `json:"secret,omitempty"`
-	Items   []Item           `json:"items,omitempty"`
-	Stats   *AnalyticsReport `json:"stats,omitempty"`
-	Error   string           `json:"error,omitempty"`
-	Code    string           `json:"code,omitempty"`
-	Help    string           `json:"help,omitempty"`
+	OK     string           `json:"ok,omitempty"`
+	Secret string           `json:"secret,omitempty"`
+	Items  []Item           `json:"items,omitempty"`
+	Stats  *AnalyticsReport `json:"stats,omitempty"`
+	Error  string           `json:"error,omitempty"`
+	Code   string           `json:"code,omitempty"`
+	Help   string           `json:"help,omitempty"`
 }
 
 func runIPC(method string, jsonArgs string) {
@@ -156,7 +156,7 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		items, err := List(service)
+		items, err := listWithUsage(service, req.Sort)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
@@ -164,17 +164,10 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
-		stats, _ := ParseAccessLogs()
-		if stats != nil {
-			items = EnrichItemsWithStats(items, stats)
-		}
-		if req.Sort == "used" || req.Sort == "hits" {
-			SortItemsByUsage(items)
-		}
 		resp.Items = items
 
 	case "stats", "analytics":
-		report, err := GetAnalyticsReport(50)
+		report, err := GetAnalyticsReport()
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Code = codeFromError(err)
@@ -215,7 +208,7 @@ func runIPC(method string, jsonArgs string) {
 	default:
 		resp.Error = "unknown method: " + method
 		resp.Code = "unknown_method"
-		resp.Help = "omaseal ipc ping|get|set|del|list|resolve"
+		resp.Help = "omaseal ipc ping|get|set|del|list|stats|resolve"
 		writeJSON(resp)
 		os.Exit(1)
 	}

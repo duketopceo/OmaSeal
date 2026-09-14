@@ -68,6 +68,20 @@ Panel {
     }
   }
 
+  // This wl-clipboard build has no --clear-after flag, so the panel clears
+  // the selection itself 30s after a successful copy — the documented
+  // guarantee is that a copied secret does not sit in the live clipboard
+  // indefinitely.
+  Timer {
+    id: clipboardClearTimer
+    interval: 30000
+    onTriggered: clipboardClearProc.running = true
+  }
+  Process {
+    id: clipboardClearProc
+    command: ["wl-copy", "--clear"]
+  }
+
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
   readonly property color urgent: Color.urgent !== undefined ? Color.urgent : "#f38ba8"
@@ -210,33 +224,30 @@ Panel {
       rows.push(it)
     }
 
-    // Sort.
+    // Sort — decorate once so the comparator never reparses dates or
+    // rebuilds key strings per comparison (O(n log n) calls otherwise).
+    for (var d = 0; d < rows.length; d++) {
+      rows[d]._key = ((rows[d].service || "") + "/" + (rows[d].account || "")).toLowerCase()
+      rows[d]._ts = rows[d].last_accessed ? +new Date(rows[d].last_accessed) : 0
+    }
     rows.sort(function(a, b) {
       if (root.sortMode === "name") {
-        var ka = ((a.service || "") + "/" + (a.account || "")).toLowerCase()
-        var kb = ((b.service || "") + "/" + (b.account || "")).toLowerCase()
-        return ka < kb ? -1 : (ka > kb ? 1 : 0)
+        return a._key < b._key ? -1 : (a._key > b._key ? 1 : 0)
       }
       if (root.sortMode === "recent") {
-        var ta = a.last_accessed ? new Date(a.last_accessed).getTime() : 0
-        var tb = b.last_accessed ? new Date(b.last_accessed).getTime() : 0
-        if (ta !== tb) return tb - ta
+        if (a._ts !== b._ts) return b._ts - a._ts
       } else {
         var ha = a.access_count || 0, hb = b.access_count || 0
         if (ha !== hb) return hb - ha
-        var la = a.last_accessed ? new Date(a.last_accessed).getTime() : 0
-        var lb = b.last_accessed ? new Date(b.last_accessed).getTime() : 0
-        if (la !== lb) return lb - la
+        if (a._ts !== b._ts) return b._ts - a._ts
       }
-      var na = ((a.service || "") + "/" + (a.account || "")).toLowerCase()
-      var nb = ((b.service || "") + "/" + (b.account || "")).toLowerCase()
-      return na < nb ? -1 : (na > nb ? 1 : 0)
+      return a._key < b._key ? -1 : (a._key > b._key ? 1 : 0)
     })
 
     // Collapsed limit — bypassed while searching or filtering a vault.
     root.hiddenCount = 0
     var shown = rows
-    if (!root.expanded && f === "" && rows.length > root.collapsedLimit) {
+    if (!root.expanded && f === "" && root.serviceFilter === "" && rows.length > root.collapsedLimit) {
       shown = rows.slice(0, root.collapsedLimit)
       root.hiddenCount = rows.length - shown.length
     }
@@ -249,7 +260,8 @@ Panel {
         account: shown[r].account || "",
         label: shown[r].label || "",
         hits: shown[r].access_count || 0,
-        lastTs: shown[r].last_accessed || ""
+        lastTs: shown[r].last_accessed || "",
+        owned: shown[r].owned !== false
       }
       secretsModel.append(row)
       if (selKey !== "" && root.secretKey(row.service, row.account) === selKey) {
@@ -452,7 +464,12 @@ Panel {
       if (exitCode === 0 && secret !== "") {
         var proc = copyProcComponent.createObject(root)
         proc.exited.connect(function(ec) {
-          root.notice = ec === 0 ? "Copied to clipboard" : "Copy failed"
+          if (ec === 0) {
+            root.notice = "Copied to clipboard (clears in 30s)"
+            clipboardClearTimer.restart()
+          } else {
+            root.notice = "Copy failed"
+          }
           proc.destroy()
         })
         proc.started.connect(function() {
@@ -1012,6 +1029,7 @@ Panel {
                     required property string label
                     required property int hits
                     required property string lastTs
+                    required property bool owned
                     width: secretsCol.width
                     implicitHeight: Style.space(42)
                     radius: Style.cornerRadius
@@ -1063,6 +1081,7 @@ Panel {
                           width: parent.width
                           text: {
                             var parts = []
+                            if (!owned) parts.push("external")
                             if (label) parts.push(label)
                             if (lastTs) parts.push("used " + root.ago(lastTs))
                             return parts.join(" · ")

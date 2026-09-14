@@ -24,8 +24,8 @@ Usage:
   omaseal get <service> <account>          print stored secret
   omaseal reveal <service> <account>       print secret after fprintd gate
   omaseal del <service> <account>          delete stored secret
-  omaseal list [service] [--json] [--sort=used]
-                                           list stored secrets (optionally sorted by hits)
+  omaseal list [service] [--json] [--sort=used|recent|name]
+                                           list stored secrets (optionally sorted)
   omaseal stats [--json]                   display access analytics & usage leaderboard
   omaseal manifest [show|init|check|path]  AI agent access policy (robots.txt format)
   omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
@@ -198,19 +198,23 @@ func handleDel() {
 
 func handleList() {
 	jsonOut := hasFlag(os.Args, "--json")
-	sortByUsed := hasFlag(os.Args, "--sort=used") || hasFlag(os.Args, "--sort-by=used") || hasFlag(os.Args, "--hits")
 
 	var positionals []string
+	sortMode := ""
 	for i := 2; i < len(os.Args); i++ {
 		arg := os.Args[i]
-		if arg == "--json" || arg == "--sort=used" || arg == "--sort-by=used" || arg == "--hits" {
-			continue
-		}
-		if strings.HasPrefix(arg, "-") {
+		switch {
+		case arg == "--json":
+		case arg == "--hits":
+			sortMode = "used"
+		case strings.HasPrefix(arg, "--sort=") || strings.HasPrefix(arg, "--sort-by="):
+			sortMode = arg[strings.Index(arg, "=")+1:]
+		case strings.HasPrefix(arg, "-"):
 			fmt.Fprintln(os.Stderr, "error: unknown flag:", arg)
 			os.Exit(1)
+		default:
+			positionals = append(positionals, arg)
 		}
-		positionals = append(positionals, os.Args[i])
 	}
 	service, err := argService(positionals)
 	if err != nil {
@@ -218,20 +222,12 @@ func handleList() {
 		os.Exit(1)
 	}
 
-	items, err := List(service)
+	items, err := listWithUsage(service, sortMode)
 	if err != nil {
 		printError("listing secrets: ", err)
 		os.Exit(1)
 	}
 	WriteLog("list: %d secrets", len(items))
-
-	stats, _ := ParseAccessLogs()
-	if stats != nil {
-		items = EnrichItemsWithStats(items, stats)
-	}
-	if sortByUsed {
-		SortItemsByUsage(items)
-	}
 
 	if jsonOut {
 		b, _ := json.Marshal(items)
@@ -245,160 +241,22 @@ func handleList() {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	if sortByUsed {
+	if sortMode == "used" || sortMode == "hits" || sortMode == "recent" {
 		fmt.Fprintln(w, "SERVICE\tACCOUNT\tHITS\tLAST ACCESSED\tLABEL")
 		for _, it := range items {
 			last := "-"
 			if it.LastAccessed != nil {
 				last = it.LastAccessed.Format("2006-01-02 15:04:05")
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", it.Service, it.Account, it.AccessCount, last, it.Label)
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", sanitizeField(it.Service), sanitizeField(it.Account), it.AccessCount, last, sanitizeField(it.Label))
 		}
 	} else {
 		fmt.Fprintln(w, "SERVICE\tACCOUNT\tLABEL")
 		for _, it := range items {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", it.Service, it.Account, it.Label)
+			fmt.Fprintf(w, "%s\t%s\t%s\n", sanitizeField(it.Service), sanitizeField(it.Account), sanitizeField(it.Label))
 		}
 	}
 	w.Flush()
-}
-
-func handleStats() {
-	jsonOut := hasFlag(os.Args, "--json")
-	report, err := GetAnalyticsReport(50)
-	if err != nil {
-		printError("generating analytics: ", err)
-		os.Exit(1)
-	}
-
-	if jsonOut {
-		b, _ := json.Marshal(report)
-		fmt.Println(string(b))
-		return
-	}
-
-	fmt.Printf("OmaSeal Keyring Usage Analytics\n")
-	fmt.Printf("Total Secret Accesses: %d\n", report.TotalAccesses)
-	fmt.Printf("Unique Secrets Accessed: %d\n\n", report.UniqueSecrets)
-
-	if len(report.TopSecrets) == 0 {
-		fmt.Println("No secret access activity recorded yet.")
-		return
-	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "RANK\tHITS\tSERVICE\tACCOUNT\tLAST ACCESSED")
-	for i, stat := range report.TopSecrets {
-		last := stat.LastAccessed.Format("2006-01-02 15:04:05")
-		fmt.Fprintf(w, "#%d\t%d\t%s\t%s\t%s\n", i+1, stat.Count, stat.Service, stat.Account, last)
-	}
-	w.Flush()
-}
-
-func handleManifest() {
-	jsonOut := hasFlag(os.Args, "--json")
-
-	var subcmd string
-	var extraArgs []string
-	for _, a := range os.Args[2:] {
-		if a == "--json" || a == "--force" || a == "-f" {
-			continue
-		}
-		if subcmd == "" {
-			subcmd = a
-		} else {
-			extraArgs = append(extraArgs, a)
-		}
-	}
-	if subcmd == "" {
-		subcmd = "show"
-	}
-
-	switch subcmd {
-	case "show":
-		m, err := LoadManifest()
-		if err != nil {
-			printError("loading manifest: ", err)
-			os.Exit(1)
-		}
-		if jsonOut {
-			b, _ := json.Marshal(m)
-			fmt.Println(string(b))
-			return
-		}
-		if len(m.Rules) == 0 {
-			fmt.Println("No AI manifest found at", m.Path)
-			fmt.Println("Run 'omaseal manifest init' to generate one from existing secrets.")
-			return
-		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "POLICY\tPATTERN\tDESCRIPTION")
-		for _, r := range m.Rules {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", r.Policy, r.Pattern, r.Description)
-		}
-		w.Flush()
-
-	case "init":
-		path, err := manifestDir()
-		if err != nil {
-			printError("resolving manifest path: ", err)
-			os.Exit(1)
-		}
-		force := hasFlag(os.Args, "--force") || hasFlag(os.Args, "-f")
-		if !force {
-			if _, err := os.Stat(path); err == nil {
-				fmt.Fprintf(os.Stderr, "Manifest already exists at %s (use --force to overwrite)\n", path)
-				os.Exit(1)
-			}
-		}
-		items, err := List("")
-		if err != nil {
-			printError("listing secrets for manifest: ", err)
-			os.Exit(1)
-		}
-		content := GenerateDefaultManifest(items)
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			printError("writing manifest: ", err)
-			os.Exit(1)
-		}
-		fmt.Printf("Initialized AI agent manifest at %s with %d secret rules.\n", path, len(items))
-
-	case "check":
-		if len(extraArgs) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: omaseal manifest check <service> <account>")
-			os.Exit(1)
-		}
-		service, account := extraArgs[0], extraArgs[1]
-		m, err := LoadManifest()
-		if err != nil {
-			printError("loading manifest: ", err)
-			os.Exit(1)
-		}
-		policy, desc := m.CheckPolicy(service, account)
-		if jsonOut {
-			b, _ := json.Marshal(map[string]string{
-				"service":     service,
-				"account":     account,
-				"policy":      string(policy),
-				"description": desc,
-			})
-			fmt.Println(string(b))
-			return
-		}
-		fmt.Printf("%s: %s/%s (%s)\n", policy, service, account, desc)
-
-	case "path":
-		p, err := ManifestPath()
-		if err != nil {
-			printError("getting manifest path: ", err)
-			os.Exit(1)
-		}
-		fmt.Println(p)
-
-	default:
-		fmt.Fprintln(os.Stderr, "Usage: omaseal manifest [show|init|check|path] [--json]")
-		os.Exit(1)
-	}
 }
 
 func handleReveal() {

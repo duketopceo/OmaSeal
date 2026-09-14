@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,12 +43,15 @@ func TestParseAccessLogs(t *testing.T) {
 		t.Errorf("expected kurultai/antigravity count 2 (get+resolve), got %+v", stat)
 	}
 
-	report := BuildAnalyticsReport(stats, 10)
+	report := BuildAnalyticsReport(stats)
 	if report.TotalAccesses != 6 {
 		t.Errorf("expected 6 total accesses, got %d", report.TotalAccesses)
 	}
 	if report.UniqueSecrets != 2 {
 		t.Errorf("expected 2 unique secrets, got %d", report.UniqueSecrets)
+	}
+	if len(report.Stats) != 2 || report.Stats[0].Service != "openrouter" {
+		t.Errorf("expected stats sorted most-used first, got %+v", report.Stats)
 	}
 }
 
@@ -58,11 +63,76 @@ func TestSortItemsByUsage(t *testing.T) {
 		{Service: "svcB", Account: "acct", AccessCount: 5, LastAccessed: &earlier},
 		{Service: "svcA", Account: "acct", AccessCount: 10, LastAccessed: &now},
 		{Service: "svcC", Account: "acct", AccessCount: 0, LastAccessed: nil},
+		// Ties: same count -> more recent access first; both stale -> name order.
+		{Service: "svcD", Account: "b", AccessCount: 5, LastAccessed: &now},
+		{Service: "svcE", Account: "a", AccessCount: 0, LastAccessed: nil},
 	}
 
 	SortItemsByUsage(items)
 
-	if items[0].Service != "svcA" || items[1].Service != "svcB" || items[2].Service != "svcC" {
-		t.Errorf("SortItemsByUsage order unexpected: %+v", items)
+	order := []string{}
+	for _, it := range items {
+		order = append(order, it.Service)
+	}
+	want := []string{"svcA", "svcD", "svcB", "svcC", "svcE"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("SortItemsByUsage order %v, want %v", order, want)
+		}
+	}
+}
+
+// TestParseAccessLogEdges covers the skip paths: missing file, corrupt
+// timestamps, verb lines without a service/account separator, and accounts
+// that legitimately contain '/'.
+func TestParseAccessLogEdges(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Missing file -> empty map, not an error.
+	stats, err := ParseAccessLogsFromFile(filepath.Join(tmpDir, "absent.log"))
+	if err != nil || len(stats) != 0 {
+		t.Fatalf("missing file: stats=%v err=%v", stats, err)
+	}
+
+	data := `not-a-timestamp get openrouter/default
+2026/09/14 01:00:00 get noslash
+2026/09/14 01:05:00 access browseros/openrouter-work/apiKey
+`
+	logPath := filepath.Join(tmpDir, "edge.log")
+	if err := os.WriteFile(logPath, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = ParseAccessLogsFromFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 parsed stat, got %+v", stats)
+	}
+	stat, ok := stats[statKey("browseros", "openrouter-work/apiKey")]
+	if !ok || stat.Account != "openrouter-work/apiKey" {
+		t.Fatalf("multi-slash account misattributed: %+v", stat)
+	}
+}
+
+// TestAccessLogProducerParser bridges the WriteLog producers and the parser:
+// the emitted line shape must stay regex-compatible or this test fails.
+func TestAccessLogProducerParser(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer SetLogOutput()
+	WriteLog("access %s/%s", "svc", "acct")
+	WriteLog("get %s/%s", "svc2", "acct2")
+
+	logPath := filepath.Join(t.TempDir(), "prod.log")
+	if err := os.WriteFile(logPath, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ParseAccessLogsFromFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("WriteLog output no longer parses: %q -> %+v", buf.String(), stats)
 	}
 }

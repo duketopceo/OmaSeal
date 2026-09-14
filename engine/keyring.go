@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +38,10 @@ type Item struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 	AccessCount  int        `json:"access_count,omitempty"`
 	LastAccessed *time.Time `json:"last_accessed,omitempty"`
+	// Owned marks items written by OmaSeal (app=oma-ring). Items sharing the
+	// service/account namespace but written by other tools report false so
+	// consumers can distinguish provenance before mutating them.
+	Owned bool `json:"owned"`
 }
 
 // keyringError wraps keyring failures with actionable context.
@@ -49,24 +53,6 @@ func keyringError(err error) error {
 		return newError("not_found", "omaseal set", err)
 	}
 	return newError("keyring_unavailable", "omaseal doctor", fmt.Errorf("keyring: %w", err))
-}
-
-// keyringReachable returns an error if the Secret Service is not reachable,
-// without attempting to unlock any collection. This is safe for `omaseal doctor`
-// because it does not pop a keyring unlock dialog.
-func keyringReachable() error {
-	svc, err := ss.NewSecretService()
-	if err != nil {
-		return keyringError(err)
-	}
-	collection := svc.GetLoginCollection()
-	if collection == nil {
-		return keyringError(errors.New("no login collection"))
-	}
-	if _, err := collection.GetProperty(collectionInterface + ".Label"); err != nil {
-		return keyringError(fmt.Errorf("login collection not reachable: %w", err))
-	}
-	return nil
 }
 
 // keyringStore returns a connected SecretService and the default collection.
@@ -82,8 +68,10 @@ func keyringStore() (*ss.SecretService, dbus.BusObject, error) {
 	return svc, collection, nil
 }
 
-// findItem returns the first item matching service and account, regardless of
-// which tool wrote it.
+// findItem returns the item matching service and account, regardless of
+// which tool wrote it. When several items collide on those attributes
+// (different writers stamped the same pair), the OmaSeal-owned one wins so
+// writes and deletes prefer the item this tool manages.
 func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account string) (dbus.ObjectPath, error) {
 	search := map[string]string{
 		"service": service,
@@ -95,6 +83,14 @@ func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account
 	}
 	if len(paths) == 0 {
 		return "", keyringError(keyring.ErrNotFound)
+	}
+	if len(paths) == 1 {
+		return paths[0], nil
+	}
+	for _, p := range paths {
+		if attrs, err := itemAttributes(svc, p); err == nil && attrs[appAttribute] == appAttributeVal {
+			return p, nil
+		}
 	}
 	return paths[0], nil
 }
@@ -201,15 +197,26 @@ func List(service string) ([]Item, error) {
 		return nil, err
 	}
 
-	// Secret Service search requires at least one attribute, so enumerate the
-	// collection's Items property and filter client-side.
-	v, err := collection.GetProperty(collectionInterface + ".Items")
-	if err != nil {
-		return nil, keyringError(err)
-	}
-	paths, ok := v.Value().([]dbus.ObjectPath)
-	if !ok {
-		return nil, keyringError(fmt.Errorf("unexpected type for %s.Items: %T", collectionInterface, v.Value()))
+	var paths []dbus.ObjectPath
+	if service != "" {
+		// Server-side search keeps filtered lists cheap — one round-trip
+		// instead of a metadata fetch per collection item.
+		paths, err = svc.SearchItems(collection, map[string]string{"service": service})
+		if err != nil {
+			return nil, keyringError(err)
+		}
+	} else {
+		// Secret Service search requires at least one attribute, so enumerate
+		// the collection's Items property and filter client-side.
+		v, err := collection.GetProperty(collectionInterface + ".Items")
+		if err != nil {
+			return nil, keyringError(err)
+		}
+		var ok bool
+		paths, ok = v.Value().([]dbus.ObjectPath)
+		if !ok {
+			return nil, keyringError(fmt.Errorf("unexpected type for %s.Items: %T", collectionInterface, v.Value()))
+		}
 	}
 
 	// Per-item metadata fetches dominate list latency on large collections
@@ -217,6 +224,7 @@ func List(service string) ([]Item, error) {
 	items := make([]Item, 0, len(paths))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var failures int
 	sem := make(chan struct{}, 64)
 	for _, p := range paths {
 		wg.Add(1)
@@ -226,12 +234,12 @@ func List(service string) ([]Item, error) {
 			defer func() { <-sem }()
 			item, err := readItemMetadata(svc, path)
 			if err != nil {
+				mu.Lock()
+				failures++
+				mu.Unlock()
 				return // locked or unreadable item; skip rather than fail the list
 			}
 			if item.Service == "" || item.Account == "" {
-				return
-			}
-			if service != "" && item.Service != service {
 				return
 			}
 			mu.Lock()
@@ -241,13 +249,38 @@ func List(service string) ([]Item, error) {
 	}
 	wg.Wait()
 
+	// A total failure means the daemon died mid-list or the connection is
+	// broken — report that instead of masquerading as an empty keyring.
+	if len(paths) > 0 && len(items) == 0 && failures > 0 {
+		return nil, keyringError(fmt.Errorf("all %d item metadata reads failed", failures))
+	}
+	if failures > 0 {
+		WriteLog("list: %d of %d items skipped (metadata read failed)", failures, len(paths))
+	}
+
 	// Concurrent fetch scrambles collection order; restore a stable one.
 	sort.Slice(items, func(i, j int) bool {
-		a := strings.ToLower(items[i].Service + "\x00" + items[i].Account)
-		b := strings.ToLower(items[j].Service + "\x00" + items[j].Account)
-		return a < b
+		return statKey(items[i].Service, items[i].Account) < statKey(items[j].Service, items[j].Account)
 	})
 	return items, nil
+}
+
+// itemAttrTimeout bounds every per-item D-Bus call so a hung daemon stalls a
+// single list for seconds, not forever — wg.Wait() would otherwise never
+// return, wedging the panel refresh and the sequential MCP server loop.
+const itemAttrTimeout = 10 * time.Second
+
+// itemAttributes fetches just the Attributes property of an item.
+func itemAttributes(svc *ss.SecretService, path dbus.ObjectPath) (map[string]string, error) {
+	obj := svc.Object(secretServiceName, path)
+	ctx, cancel := context.WithTimeout(context.Background(), itemAttrTimeout)
+	defer cancel()
+	var v dbus.Variant
+	if err := obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, itemInterface, "Attributes").Store(&v); err != nil {
+		return nil, err
+	}
+	attrs, _ := v.Value().(map[string]string)
+	return attrs, nil
 }
 
 // readItemMetadata pulls all Item interface properties in one GetAll call —
@@ -255,8 +288,10 @@ func List(service string) ([]Item, error) {
 func readItemMetadata(svc *ss.SecretService, path dbus.ObjectPath) (Item, error) {
 	obj := svc.Object(secretServiceName, path)
 
+	ctx, cancel := context.WithTimeout(context.Background(), itemAttrTimeout)
+	defer cancel()
 	var props map[string]dbus.Variant
-	if err := obj.Call("org.freedesktop.DBus.Properties.GetAll", 0, itemInterface).Store(&props); err != nil {
+	if err := obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.GetAll", 0, itemInterface).Store(&props); err != nil {
 		return Item{}, keyringError(err)
 	}
 
@@ -277,6 +312,6 @@ func readItemMetadata(svc *ss.SecretService, path dbus.ObjectPath) (Item, error)
 		Label:     label,
 		CreatedAt: created,
 		UpdatedAt: updated,
+		Owned:     attrs[appAttribute] == appAttributeVal,
 	}, nil
 }
-

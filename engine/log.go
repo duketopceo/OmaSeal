@@ -43,6 +43,11 @@ func ensureLogDir() (string, error) {
 	return dir, nil
 }
 
+// logMaxBytes caps the append-only log so ParseAccessLogs and ReadLog stay
+// fast over the tool's lifetime. When the cap is crossed the file is
+// truncated to its newest half.
+const logMaxBytes = 512 * 1024
+
 func initLog() {
 	dir, err := ensureLogDir()
 	if err != nil {
@@ -51,6 +56,7 @@ func initLog() {
 		return
 	}
 	logFilePath = filepath.Join(dir, "omaseal.log")
+	truncateLogIfLarge(logFilePath)
 	f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		logInitErr = err
@@ -59,6 +65,31 @@ func initLog() {
 	}
 	logFile = f
 	logWriter = io.MultiWriter(os.Stderr, logFile)
+}
+
+// truncateLogIfLarge keeps only the newest half of the log once it passes
+// logMaxBytes. The retained tail starts at a line boundary.
+func truncateLogIfLarge(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() <= logMaxBytes {
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	keep := int64(logMaxBytes / 2)
+	buf := make([]byte, keep)
+	if _, err := f.ReadAt(buf, info.Size()-keep); err != nil && err != io.EOF {
+		f.Close()
+		return
+	}
+	f.Close()
+	// Drop the first partial line.
+	if i := strings.IndexByte(string(buf), '\n'); i >= 0 {
+		buf = buf[i+1:]
+	}
+	_ = os.WriteFile(path, buf, 0o600)
 }
 
 // LogWriter returns the multi-writer used by OmaSeal. It initializes the log
