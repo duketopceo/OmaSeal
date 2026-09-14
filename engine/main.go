@@ -339,7 +339,7 @@ func handleManifest() {
 		w.Flush()
 
 	case "init":
-		path, err := ManifestPath()
+		path, err := manifestDir()
 		if err != nil {
 			printError("resolving manifest path: ", err)
 			os.Exit(1)

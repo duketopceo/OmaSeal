@@ -177,6 +177,8 @@ func runIPC(method string, jsonArgs string) {
 		report, err := GetAnalyticsReport(50)
 		if err != nil {
 			resp.Error = err.Error()
+			resp.Code = codeFromError(err)
+			resp.Help = helpFromError(err)
 			writeJSON(resp)
 			os.Exit(1)
 		}

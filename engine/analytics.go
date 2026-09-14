@@ -13,7 +13,7 @@ import (
 // Every successful secret read is counted: `get`, `reveal`, and `resolve`
 // are logged by their CLI handlers, while MCP/IPC read paths emit an
 // explicit `access` line so agent traffic is tallied too.
-var getLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+)$`)
+var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+)$`)
 
 // AccessStat records the usage frequency and recency for a given secret.
 type AccessStat struct {
@@ -61,26 +61,20 @@ func ParseAccessLogsFromFile(path string) (map[string]AccessStat, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		m := getLogRe.FindStringSubmatch(line)
+		m := accessLogRe.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
 
-		tsStr := m[1]
-		target := m[2]
-
-		ts, err := time.Parse(layout, tsStr)
+		ts, err := time.Parse(layout, m[1])
 		if err != nil {
 			continue
 		}
 
-		idx := strings.Index(target, "/")
-		if idx == -1 {
+		service, account, ok := strings.Cut(m[2], "/")
+		if !ok {
 			continue
 		}
-
-		service := target[:idx]
-		account := target[idx+1:]
 		k := statKey(service, account)
 
 		cur, ok := stats[k]

@@ -29,7 +29,8 @@ type Manifest struct {
 	Rules []ManifestRule `json:"rules"`
 }
 
-// ManifestPath returns the path to the ai-manifest.txt file.
+// ManifestPath returns the path to the ai-manifest.txt file. Reads must not
+// create the config dir as a side effect — manifestDir makes it only on write.
 func ManifestPath() (string, error) {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -39,11 +40,20 @@ func ManifestPath() (string, error) {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	dir := filepath.Join(base, "omaseal")
+	return filepath.Join(base, "omaseal", "ai-manifest.txt"), nil
+}
+
+// manifestDir creates the config dir for manifest writes.
+func manifestDir() (string, error) {
+	path, err := ManifestPath()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "ai-manifest.txt"), nil
+	return path, nil
 }
 
 // LoadManifest parses the ai-manifest.txt file.
@@ -162,7 +172,7 @@ func defaultPolicyFor(service string) (RulePolicy, string) {
 	}
 
 	// Personal & sensitive
-	personalServices := []string{"bank", "schwab", "google", "apple", "uber", "hulu", "starbucks", "termius", "experian", "cleanbrowsing", "cleanbrowsing"}
+	personalServices := []string{"bank", "schwab", "google", "apple", "uber", "hulu", "starbucks", "termius", "experian", "cleanbrowsing"}
 	for _, a := range personalServices {
 		if strings.Contains(s, a) {
 			return PolicyDeny, fmt.Sprintf("Personal %s credentials (restricted)", service)

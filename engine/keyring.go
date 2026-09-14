@@ -280,39 +280,3 @@ func readItemMetadata(svc *ss.SecretService, path dbus.ObjectPath) (Item, error)
 	}, nil
 }
 
-func getVariantStringMap(obj dbus.BusObject, prop string) (map[string]string, error) {
-	v, err := obj.GetProperty(prop)
-	if err != nil {
-		return nil, err
-	}
-	m, ok := v.Value().(map[string]string)
-	if !ok {
-		return nil, fmt.Errorf("unexpected type for %s: %T", prop, v.Value())
-	}
-	return m, nil
-}
-
-func getStringProp(obj dbus.BusObject, prop string) (string, error) {
-	v, err := obj.GetProperty(prop)
-	if err != nil {
-		return "", err
-	}
-	s, ok := v.Value().(string)
-	if !ok {
-		return "", fmt.Errorf("unexpected type for %s: %T", prop, v.Value())
-	}
-	return s, nil
-}
-
-// gnome-keyring stores Created/Modified as 64-bit timestamps (uint64).
-func getTimestampProp(obj dbus.BusObject, prop string) (time.Time, error) {
-	v, err := obj.GetProperty(prop)
-	if err != nil {
-		return time.Time{}, err
-	}
-	t, ok := v.Value().(uint64)
-	if !ok {
-		return time.Time{}, fmt.Errorf("unexpected type for %s: %T", prop, v.Value())
-	}
-	return time.Unix(int64(t), 0).UTC(), nil
-}
