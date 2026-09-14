@@ -1,5 +1,9 @@
 # OmaSeal
 
+<p align="center">
+  <img src="docs/assets/social.png" alt="OmaSeal — system keyring for agents" width="640" />
+</p>
+
 > One keyring for your Omarchy desktop, agents, and plugins.
 
 ![OmaSeal Quickshell panel](screenshot.png)
