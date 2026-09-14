@@ -46,6 +46,8 @@ truncate the file.
 
 Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`, `omaseal_status` (read-only agent/session state).
 
+**Shared namespace:** OmaSeal addresses items by `service`/`account` attributes only — reads and updates do not require OmaSeal to have written the item, so credentials stored by other tools (`omarchy-secrets-*`, keytar, seahorse) are visible to `omaseal get`/`list` and `omaseal set` updates them in place. Items OmaSeal creates carry an `app=oma-ring` attribute purely as provenance. Note this widens `omaseal_list`: it enumerates every `service`/`account` item in the keyring, including ones written by other applications — those are already readable by any same-user process via `secret-tool`, so no new exposure is introduced, but agent trust modes (`omaseal agent …`) now gate access to foreign items too.
+
 Agents should:
 - call `omaseal_set` or `omaseal_resolve` rather than reading dotfiles
 - never put a real secret in a command argument

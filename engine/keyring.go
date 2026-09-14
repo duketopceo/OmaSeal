@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	// appAttribute is a fixed attribute that marks every item owned by OmaSeal.
+	// appAttribute marks items OmaSeal itself wrote, as provenance. Reads and
+	// updates match on service/account alone so items written by other tools
+	// (omarchy-secrets-*, keytar, seahorse) share the same namespace.
 	// appAttributeVal is intentionally still "oma-ring" so secrets stored before
-	// the rename continue to be found; the label (visible in keyring UIs) uses
-	// the new name.
+	// the rename keep consistent metadata; the label (visible in keyring UIs)
+	// uses the new name.
 	appAttribute    = "app"
 	appAttributeVal = "oma-ring"
 
@@ -75,12 +77,12 @@ func keyringStore() (*ss.SecretService, dbus.BusObject, error) {
 	return svc, collection, nil
 }
 
-// findItem returns the first item matching service and account.
+// findItem returns the first item matching service and account, regardless of
+// which tool wrote it.
 func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account string) (dbus.ObjectPath, error) {
 	search := map[string]string{
-		appAttribute: appAttributeVal,
-		"service":    service,
-		"account":    account,
+		"service": service,
+		"account": account,
 	}
 	paths, err := svc.SearchItems(collection, search)
 	if err != nil {
@@ -109,6 +111,17 @@ func Set(service, account, secret string) error {
 	}
 	defer svc.Close(session)
 
+	// An existing item addressed by service/account is updated in place,
+	// preserving whatever attributes it already carries — including foreign
+	// ones, so updating an omarchy-secrets or keytar item never creates a
+	// duplicate beside it.
+	if p, err := findItem(svc, collection, service, account); err == nil {
+		obj := svc.Object(secretServiceName, p)
+		return keyringError(obj.Call(itemInterface+".SetSecret", 0, ss.NewSecret(session.Path(), secret)).Err)
+	} else if !errors.Is(err, keyring.ErrNotFound) {
+		return err
+	}
+
 	attributes := map[string]string{
 		appAttribute: appAttributeVal,
 		"service":    service,
@@ -116,9 +129,6 @@ func Set(service, account, secret string) error {
 	}
 	label := fmt.Sprintf("OmaSeal: %s / %s", service, account)
 
-	// CreateItem is called with replace=true, so an existing item with the same
-	// attributes is updated in place. If CreateItem fails, the previous secret
-	// is left untouched.
 	if err := svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret)); err != nil {
 		return keyringError(err)
 	}
@@ -176,32 +186,38 @@ func Delete(service, account string) error {
 	return keyringError(svc.Delete(p))
 }
 
-// List returns metadata for all secrets stored by OmaSeal. If service is
-// non-empty, only items for that service are returned.
+// List returns metadata for every item in the collection addressed by
+// service/account attributes, regardless of which tool wrote it. Items lacking
+// either attribute are skipped — nothing in the CLI can address them. If
+// service is non-empty, only items for that service are returned.
 func List(service string) ([]Item, error) {
 	svc, collection, err := keyringStore()
 	if err != nil {
 		return nil, err
 	}
 
-	search := map[string]string{appAttribute: appAttributeVal}
-	if service != "" {
-		search["service"] = service
-	}
-
-	paths, err := svc.SearchItems(collection, search)
+	// Secret Service search requires at least one attribute, so enumerate the
+	// collection's Items property and filter client-side.
+	v, err := collection.GetProperty(collectionInterface + ".Items")
 	if err != nil {
 		return nil, keyringError(err)
 	}
-	if len(paths) == 0 {
-		return []Item{}, nil
+	paths, ok := v.Value().([]dbus.ObjectPath)
+	if !ok {
+		return nil, keyringError(fmt.Errorf("unexpected type for %s.Items: %T", collectionInterface, v.Value()))
 	}
 
 	items := make([]Item, 0, len(paths))
 	for _, p := range paths {
 		item, err := readItemMetadata(svc, p)
 		if err != nil {
-			return nil, err
+			continue // locked or unreadable item; skip rather than fail the list
+		}
+		if item.Service == "" || item.Account == "" {
+			continue
+		}
+		if service != "" && item.Service != service {
+			continue
 		}
 		items = append(items, item)
 	}
