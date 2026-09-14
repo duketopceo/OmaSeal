@@ -3,6 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -28,11 +31,13 @@ const (
 // Item is metadata for a stored secret. It intentionally does not include the
 // secret value; callers must explicitly request that with GetSecret.
 type Item struct {
-	Service   string    `json:"service"`
-	Account   string    `json:"account"`
-	Label     string    `json:"label"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Service      string     `json:"service"`
+	Account      string     `json:"account"`
+	Label        string     `json:"label"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	AccessCount  int        `json:"access_count,omitempty"`
+	LastAccessed *time.Time `json:"last_accessed,omitempty"`
 }
 
 // keyringError wraps keyring failures with actionable context.
@@ -207,38 +212,64 @@ func List(service string) ([]Item, error) {
 		return nil, keyringError(fmt.Errorf("unexpected type for %s.Items: %T", collectionInterface, v.Value()))
 	}
 
+	// Per-item metadata fetches dominate list latency on large collections
+	// (one D-Bus round-trip each, serialized). Fetch them concurrently.
 	items := make([]Item, 0, len(paths))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 64)
 	for _, p := range paths {
-		item, err := readItemMetadata(svc, p)
-		if err != nil {
-			continue // locked or unreadable item; skip rather than fail the list
-		}
-		if item.Service == "" || item.Account == "" {
-			continue
-		}
-		if service != "" && item.Service != service {
-			continue
-		}
-		items = append(items, item)
+		wg.Add(1)
+		go func(path dbus.ObjectPath) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			item, err := readItemMetadata(svc, path)
+			if err != nil {
+				return // locked or unreadable item; skip rather than fail the list
+			}
+			if item.Service == "" || item.Account == "" {
+				return
+			}
+			if service != "" && item.Service != service {
+				return
+			}
+			mu.Lock()
+			items = append(items, item)
+			mu.Unlock()
+		}(p)
 	}
+	wg.Wait()
+
+	// Concurrent fetch scrambles collection order; restore a stable one.
+	sort.Slice(items, func(i, j int) bool {
+		a := strings.ToLower(items[i].Service + "\x00" + items[i].Account)
+		b := strings.ToLower(items[j].Service + "\x00" + items[j].Account)
+		return a < b
+	})
 	return items, nil
 }
 
+// readItemMetadata pulls all Item interface properties in one GetAll call —
+// four round-trips per item would otherwise make large keyrings unusably slow.
 func readItemMetadata(svc *ss.SecretService, path dbus.ObjectPath) (Item, error) {
 	obj := svc.Object(secretServiceName, path)
 
-	attrs, err := getVariantStringMap(obj, itemInterface+".Attributes")
-	if err != nil {
+	var props map[string]dbus.Variant
+	if err := obj.Call("org.freedesktop.DBus.Properties.GetAll", 0, itemInterface).Store(&props); err != nil {
 		return Item{}, keyringError(err)
 	}
 
-	label, err := getStringProp(obj, itemInterface+".Label")
-	if err != nil {
-		return Item{}, keyringError(err)
-	}
+	attrs, _ := props["Attributes"].Value().(map[string]string)
+	label, _ := props["Label"].Value().(string)
 
-	created, _ := getTimestampProp(obj, itemInterface+".Created")
-	updated, _ := getTimestampProp(obj, itemInterface+".Modified")
+	var created, updated time.Time
+	if c, ok := props["Created"].Value().(uint64); ok {
+		created = time.Unix(int64(c), 0).UTC()
+	}
+	if m, ok := props["Modified"].Value().(uint64); ok {
+		updated = time.Unix(int64(m), 0).UTC()
+	}
 
 	return Item{
 		Service:   attrs["service"],

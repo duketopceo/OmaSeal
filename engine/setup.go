@@ -74,7 +74,11 @@ func runSetup() {
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Verify ===")
-	fmt.Fprintln(os.Stderr, "Run `omaseal selftest` for a keyring round-trip check.")
+	if err := selftestRoundTrip(); err != nil {
+		fmt.Fprintf(os.Stderr, "selftest failed: %v\n", err)
+	} else {
+		fmt.Fprintln(os.Stderr, "selftest ok: set/get/delete round-trip passed")
+	}
 	fmt.Fprintln(os.Stderr, "Agents pick up OmaSeal on their next start; the MCP server tells them to use it.")
 	if loadAgentPolicyOrDefault().Mode == "open" {
 		fmt.Fprintln(os.Stderr)

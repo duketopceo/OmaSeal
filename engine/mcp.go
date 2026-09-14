@@ -244,6 +244,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		WriteLog("access %s/%s", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
 	case "omaseal_resolve":
@@ -262,6 +263,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		WriteLog("access %s/%s", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
 	case "omaseal_set":
