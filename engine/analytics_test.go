@@ -15,6 +15,12 @@ func TestParseAccessLogs(t *testing.T) {
 2026/09/14 01:00:00 get openrouter/default
 2026/09/14 01:05:00 get openrouter/default
 2026/09/14 01:10:00 get kurultai/antigravity
+2026/09/14 01:15:00 reveal openrouter/default
+2026/09/14 01:20:00 resolve kurultai/antigravity
+2026/09/14 01:25:00 access openrouter/default
+2026/09/14 01:30:00 mcp tool: omaseal_get openrouter/default
+2026/09/14 01:35:00 ipc get
+2026/09/14 01:40:00 set openrouter/default
 `
 	if err := os.WriteFile(logPath, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
@@ -26,18 +32,18 @@ func TestParseAccessLogs(t *testing.T) {
 	}
 
 	k1 := statKey("openrouter", "default")
-	if stat, ok := stats[k1]; !ok || stat.Count != 2 {
-		t.Errorf("expected openrouter/default count 2, got %+v", stat)
+	if stat, ok := stats[k1]; !ok || stat.Count != 4 {
+		t.Errorf("expected openrouter/default count 4 (get+reveal+access), got %+v", stat)
 	}
 
 	k2 := statKey("kurultai", "antigravity")
-	if stat, ok := stats[k2]; !ok || stat.Count != 1 {
-		t.Errorf("expected kurultai/antigravity count 1, got %+v", stat)
+	if stat, ok := stats[k2]; !ok || stat.Count != 2 {
+		t.Errorf("expected kurultai/antigravity count 2 (get+resolve), got %+v", stat)
 	}
 
 	report := BuildAnalyticsReport(stats, 10)
-	if report.TotalAccesses != 3 {
-		t.Errorf("expected 3 total accesses, got %d", report.TotalAccesses)
+	if report.TotalAccesses != 6 {
+		t.Errorf("expected 6 total accesses, got %d", report.TotalAccesses)
 	}
 	if report.UniqueSecrets != 2 {
 		t.Errorf("expected 2 unique secrets, got %d", report.UniqueSecrets)

@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var getLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+get\s+(.+)$`)
+// Every successful secret read is counted: `get`, `reveal`, and `resolve`
+// are logged by their CLI handlers, while MCP/IPC read paths emit an
+// explicit `access` line so agent traffic is tallied too.
+var getLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+)$`)
 
 // AccessStat records the usage frequency and recency for a given secret.
 type AccessStat struct {

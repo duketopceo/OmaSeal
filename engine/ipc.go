@@ -50,6 +50,7 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
+		WriteLog("access %s/%s", req.Service, req.Account)
 		resp.Secret = secret
 
 	case "del", "delete":
@@ -124,6 +125,7 @@ func runIPC(method string, jsonArgs string) {
 			writeJSON(resp)
 			os.Exit(1)
 		}
+		WriteLog("access %s/%s", req.Service, req.Account)
 		resp.Secret = secret
 
 	default:
