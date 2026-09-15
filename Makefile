@@ -28,6 +28,7 @@ test:
 # Post-release pin bump: `make release-bump TAG=v0.2.3` (add --allow-unsigned
 # via BUMP_FLAGS for unsigned releases). Needs makepkg — Arch host only.
 release-bump:
+	$(if $(TAG),,$(error release-bump requires TAG=vX.Y.Z))
 	packaging/aur/bump.sh $(TAG) $(BUMP_FLAGS)
 
 clean:

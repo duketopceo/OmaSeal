@@ -36,6 +36,9 @@ jobs:
             -ldflags "-X main.version=${GITHUB_REF_NAME} -X main.commit=${GITHUB_SHA::7}" \
             -o omaseal .
           cd ..
+          # Stamp the plugin manifest version from the tag — same source as
+          # main.version above — so the tarball never reports a stale version.
+          sed -i 's/"version": "[^"]*"/"version": "${GITHUB_REF_NAME#v}"/' manifest.json
           cp engine/omaseal dist/omaseal-linux-${{ matrix.release_name }}/omaseal
           cp BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/omaseal-linux-${{ matrix.release_name }}/
           tar -czf dist/omaseal-linux-${{ matrix.release_name }}.tar.gz -C dist omaseal-linux-${{ matrix.release_name }}
@@ -82,13 +85,15 @@ jobs:
             dist/sha256sums*
           generate_release_notes: true
 
-  # Post-release packaging bump. makepkg only exists on Arch, and container
-  # jobs run as root while makepkg refuses root — so the work runs in a
-  # builder-owned copy of the checkout via runuser. gh is not in the
-  # archlinux image, hence github-cli in the pacman line; and because the
-  # checkout uses persist-credentials: false, `gh auth setup-git` supplies
-  # the push credentials. Note: a GITHUB_TOKEN-authored PR does not trigger
-  # ci.yml's pull_request checks — it merges on maintainer review.
+  # Post-release packaging bump. Container jobs run as root and makepkg
+  # refuses root — so the work runs as a non-root builder via runuser on
+  # the chowned workspace. gh is not in the archlinux image, hence
+  # github-cli in the pacman line; and because the checkout uses
+  # persist-credentials: false, `gh auth setup-git` supplies the push
+  # credentials. HOME must be repointed — runuser without -l inherits the
+  # root-context HOME (/github/home), which builder cannot write. Note:
+  # a GITHUB_TOKEN-authored PR does not trigger ci.yml's pull_request
+  # checks — it merges on maintainer review.
   bump-packaging:
     needs: release
     runs-on: ubuntu-latest
@@ -100,8 +105,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Install build tools
-        run: pacman -Sy --noconfirm base-devel git github-cli
+      - name: Install tools
+        # makepkg ships in pacman (already installed); no toolchain needed —
+        # bump.sh only runs makepkg --printsrcinfo, never a build.
+        run: pacman -Syu --noconfirm --needed git github-cli
       - name: Bump packaging and open PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,36 +117,31 @@ jobs:
         run: |
           set -euo pipefail
           useradd -m builder
-          cp -a "$GITHUB_WORKSPACE" /home/builder/ws
-          chown -R builder:builder /home/builder/ws
-          runuser -u builder -- env \
-            GH_TOKEN="$GH_TOKEN" TAG="$TAG" \
-            OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}" \
-            bash -euo pipefail -c '
-              cd /home/builder/ws
-              git config user.name "github-actions[bot]"
-              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              gh auth setup-git
-              git checkout -b "bump/${TAG}"
-              if [ -n "${OMASEAL_SIGNING_FINGERPRINT:-}" ]; then
-                packaging/aur/bump.sh "${TAG}"
-              else
-                packaging/aur/bump.sh "${TAG}" --allow-unsigned
-              fi
-              git add packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin \
-                      packaging/aur/.SRCINFO packaging/aur/omaseal-bin.SRCINFO \
-                      install.sh
-              changed=$(git diff --cached --name-only | sort)
-              expected=$(printf "%s\n" install.sh packaging/aur/.SRCINFO \
-                packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin \
-                packaging/aur/omaseal-bin.SRCINFO | sort)
-              [ "$changed" = "$expected" ] || {
-                echo "unexpected diff scope:" >&2
-                git diff --cached --name-only >&2
-                exit 1
-              }
-              git commit -m "chore(packaging): bump pins to ${TAG}"
-              git push -u origin "bump/${TAG}"
-              gh pr create --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
-                --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets before merging."
-            '
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          runuser -u builder -- env HOME=/home/builder bash -euo pipefail -c '
+            cd "$GITHUB_WORKSPACE"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            gh auth setup-git
+            git checkout -b "bump/${TAG}"
+            if [ -n "${OMASEAL_SIGNING_FINGERPRINT:-}" ]; then
+              packaging/aur/bump.sh "${TAG}"
+            else
+              packaging/aur/bump.sh "${TAG}" --allow-unsigned
+            fi
+            # Fresh checkout: anything dirty is bump.sh output. Stage all of
+            # it so the scope check can see out-of-scope writes too.
+            files="install.sh packaging/aur/.SRCINFO packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin packaging/aur/omaseal-bin.SRCINFO"
+            git add -A
+            changed=$(git diff --cached --name-only | sort)
+            expected=$(printf "%s\n" $files | sort)
+            [ "$changed" = "$expected" ] || {
+              echo "unexpected diff scope:" >&2
+              git diff --cached --name-only >&2
+              exit 1
+            }
+            git commit -m "chore(packaging): bump pins to ${TAG}"
+            git push -u origin "bump/${TAG}"
+            gh pr create --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
+              --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets before merging."
+          '

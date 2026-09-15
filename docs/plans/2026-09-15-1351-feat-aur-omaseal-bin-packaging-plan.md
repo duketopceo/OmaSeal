@@ -87,7 +87,7 @@ The package metadata overstates runtime requirements (`libsecret` is not linked 
 
 1. In `PKGBUILD-bin`: replace `depends=('gnome-keyring' 'libsecret' 'fprintd')` with `depends=('org.freedesktop.secrets')`; add `optdepends` for `fprintd` (biometric agent unlock), `wl-clipboard` (clipclear and panel copy), and `pinentry` (GUI unlock prompt) with the standard `optdepends=('name: description')` form; add `provides=('omaseal')` and `conflicts=('omaseal')`.
 2. In `PKGBUILD`: same dependency split, plus `conflicts=('omaseal-bin')`; `makedepends=('go')` stays.
-3. Generate `.SRCINFO` per package via `makepkg --printsrcinfo` (run with the PKGBUILD under the name `PKGBUILD` in a scratch dir, since `--printsrcinfo` keys off the literal filename).
+3. Generate `.SRCINFO` per package via `makepkg --printsrcinfo` in `packaging/aur/` — `makepkg -p PKGBUILD-bin` handles the non-default filename in place (verified byte-identical), no scratch dir needed.
 4. Leave `pkgver`/`pkgrel`/checksums untouched — U2 owns the bump story.
 
 **Execution note:** This is mostly packaging/config; prefer build/lint smoke verification over unit coverage.
