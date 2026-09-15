@@ -17,8 +17,10 @@ conflicts=('omaseal')
 source_x86_64=("omaseal-linux-x86_64-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-x86_64.tar.gz")
 source_aarch64=("omaseal-linux-aarch64-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v${pkgver}/omaseal-linux-aarch64.tar.gz")
 # Release archives are built in CI, so hashes cannot be known before the release
-# is published. Run `updpkgsums` after each release to pin the real SHA-256
-# values. Do not publish this PKGBUILD with 'SKIP'.
+# is published. Run `packaging/aur/bump.sh vX.Y.Z` (or merge the CI bump PR)
+# after each release — it updates these sums, pkgrel, install.sh's pins, and
+# both .SRCINFO files together. updpkgsums alone leaves a half-bump. Do not
+# publish this PKGBUILD with 'SKIP'.
 sha256sums_x86_64=('c189f0c84f72048842efe91644721b4d9121834b108eea04e7687441cb61e4d8')
 sha256sums_aarch64=('366a5e440f592644e9563e44d8eea49c6401c077f78f1e0dcf96bb35c5a06333')
 install=${pkgname}.install

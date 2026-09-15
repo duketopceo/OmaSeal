@@ -38,7 +38,12 @@ jobs:
           cd ..
           # Stamp the plugin manifest version from the tag — same source as
           # main.version above — so the tarball never reports a stale version.
-          sed -i 's/"version": "[^"]*"/"version": "${GITHUB_REF_NAME#v}"/' manifest.json
+          # Double quotes: the parameter expansion must run inside the sed
+          # program, and the grep proves the stamp actually landed (sed exits
+          # 0 on zero substitutions).
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${GITHUB_REF_NAME#v}\"/" manifest.json
+          grep -q "\"version\": \"${GITHUB_REF_NAME#v}\"" manifest.json \
+            || { echo "manifest.json version stamp did not land" >&2; exit 1; }
           cp engine/omaseal dist/omaseal-linux-${{ matrix.release_name }}/omaseal
           cp BarWidget.qml Panel.qml manifest.json README.md LICENSE dist/omaseal-linux-${{ matrix.release_name }}/
           tar -czf dist/omaseal-linux-${{ matrix.release_name }}.tar.gz -C dist omaseal-linux-${{ matrix.release_name }}
@@ -102,13 +107,18 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # archlinux:latest ships no git, and without git in PATH checkout falls
+      # back to a REST-API tarball with no .git — every git/gh step below
+      # would die. Install git BEFORE checkout so it produces a real clone.
+      - name: Install git (required for checkout to produce a real .git)
+        run: pacman -Sy --noconfirm --needed git
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Install tools
         # makepkg ships in pacman (already installed); no toolchain needed —
         # bump.sh only runs makepkg --printsrcinfo, never a build.
-        run: pacman -Syu --noconfirm --needed git github-cli
+        run: pacman -Syu --noconfirm --needed github-cli
       - name: Bump packaging and open PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -142,6 +152,7 @@ jobs:
             }
             git commit -m "chore(packaging): bump pins to ${TAG}"
             git push -u origin "bump/${TAG}"
-            gh pr create --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
+            gh pr create --base main \
+              --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
               --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets before merging."
           '

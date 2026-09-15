@@ -14,8 +14,10 @@ makedepends=('go')
 conflicts=('omaseal-bin')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v${pkgver}.tar.gz")
 # The source is the immutable git-tag tarball. The SHA-256 can only be computed
-# once the v${pkgver} tag is published; run `updpkgsums` after tagging each
-# release to pin the real hash. Do not publish this PKGBUILD with 'SKIP'.
+# once the v${pkgver} tag is published; run `packaging/aur/bump.sh vX.Y.Z` (or
+# merge the CI bump PR) after each release — it updates this sum, pkgrel,
+# install.sh's pins, and both .SRCINFO files together. updpkgsums alone leaves
+# a half-bump. Do not publish this PKGBUILD with 'SKIP'.
 sha256sums=('a6b441783cd1af2f02008c67964c59223aebbebc183fcc3d8d23fb34d730a56e')
 install=${pkgname}.install
 

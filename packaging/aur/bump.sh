@@ -49,11 +49,12 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # --- Fetch and authenticate the checksum manifest --------------------------
-curl -fsSL -o "$TMP/sha256sums.txt" "${DL_BASE}/sha256sums.txt" \
+CURL_OPTS=(--connect-timeout 10 --max-time 120)
+curl -fsSL "${CURL_OPTS[@]}" -o "$TMP/sha256sums.txt" "${DL_BASE}/sha256sums.txt" \
   || die "sha256sums.txt not found on release ${TAG} — is the release published?"
 
 # A 404 means "unsigned"; any other failure is a fetch error, not consent.
-asc_code=$(curl -fsSL -o "$TMP/sha256sums.txt.asc" -w '%{http_code}' \
+asc_code=$(curl -fsSL "${CURL_OPTS[@]}" -o "$TMP/sha256sums.txt.asc" -w '%{http_code}' \
   "${DL_BASE}/sha256sums.txt.asc" 2>/dev/null || true)
 case "$asc_code" in
   200)
@@ -65,7 +66,8 @@ case "$asc_code" in
     KEYRING="$TMP/keyring.gpg"
     KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
     gpg --batch --yes --no-default-keyring --keyring "$KEYRING" \
-        --keyserver "$KEYSERVER" --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1 \
+        --keyserver "$KEYSERVER" --keyserver-options timeout=10 \
+        --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1 \
       || die "could not fetch signing key ${OMASEAL_SIGNING_FINGERPRINT} from ${KEYSERVER}"
     gpg --batch --yes --no-default-keyring --keyring "$KEYRING" \
         --verify "$TMP/sha256sums.txt.asc" "$TMP/sha256sums.txt" >/dev/null 2>&1 \
@@ -90,7 +92,8 @@ sum_for() {
 SUM_X86=$(sum_for "omaseal-linux-x86_64.tar.gz")
 SUM_ARM=$(sum_for "omaseal-linux-aarch64.tar.gz")
 
-curl -fsSL -o "$TMP/src.tar.gz" "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
+curl -fsSL "${CURL_OPTS[@]}" -o "$TMP/src.tar.gz" \
+  "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
   || die "source archive for ${TAG} not found"
 SUM_SRC=$(sha256sum "$TMP/src.tar.gz")
 SUM_SRC="${SUM_SRC%% *}"
@@ -118,10 +121,13 @@ sed -i "s/\\b${OLD_RE}\\b/${TAG}/g" "$INSTALL_SH"
 
 # EXPECTED_SHA256 is per-arch inside a case block: x86_64 first, aarch64
 # second. Key on the case labels so order can't silently swap them.
+# The case labels carry literal alternation syntax (`aarch64|arm64)`), so
+# match the label shape — arch token followed by `|` or `)` — rather than
+# requiring `)` immediately after the token.
 awk -v x="$SUM_X86" -v a="$SUM_ARM" '
-  /^[[:space:]]*x86_64\)/          { inx=1; ina=0 }
-  /^[[:space:]]*(aarch64|arm64)\)/ { inx=0; ina=1 }
-  /^[[:space:]]*\*\)/              { inx=0; ina=0 }
+  /^[[:space:]]*x86_64\)/            { inx=1; ina=0 }
+  /^[[:space:]]*(aarch64|arm64)[|)]/ { inx=0; ina=1 }
+  /^[[:space:]]*\*\)/                { inx=0; ina=0 }
   inx && /EXPECTED_SHA256="/ { sub(/"[0-9a-f]*"/, "\"" x "\""); inx=0 }
   ina && /EXPECTED_SHA256="/ { sub(/"[0-9a-f]*"/, "\"" a "\""); ina=0 }
   { print }
@@ -135,12 +141,27 @@ awk -v x="$SUM_X86" -v a="$SUM_ARM" '
   && cp "$TMP/omaseal-bin.SRCINFO" "$PKG_DIR/omaseal-bin.SRCINFO"
 
 # --- Self-assertions: pins must have landed, not merely kept their shape ----
-if [ "$OLD_TAG" != "$TAG" ] && grep -qw "$OLD_RE" "$INSTALL_SH"; then
-  die "stale ${OLD_TAG} literal remains in install.sh"
-fi
-grep -q "EXPECTED_SHA256=\"${SUM_X86}\"" "$INSTALL_SH" \
-  && grep -q "EXPECTED_SHA256=\"${SUM_ARM}\"" "$INSTALL_SH" \
-  || die "EXPECTED_SHA256 pins not updated to ${TAG}"
+# Totality check, not a literal check: every vX.Y.Z left in install.sh must be
+# the new tag — a divergent pin would pass the OLD_TAG-keyed grep vacuously.
+stale=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$INSTALL_SH" | sort -u)
+[ "$stale" = "$TAG" ] \
+  || die "version literal(s) other than ${TAG} remain in install.sh: ${stale}"
+# Per-arm binding, not file-wide presence: each EXPECTED_SHA256 must sit under
+# its own case label (a label-swap or dead matcher would pass a bare grep).
+grep -A2 -E '^[[:space:]]*x86_64\)' "$INSTALL_SH" | grep -qF "EXPECTED_SHA256=\"${SUM_X86}\"" \
+  || die "x86_64 EXPECTED_SHA256 not updated to ${TAG}"
+grep -A2 -E '^[[:space:]]*(aarch64|arm64)[|)]' "$INSTALL_SH" | grep -qF "EXPECTED_SHA256=\"${SUM_ARM}\"" \
+  || die "aarch64 EXPECTED_SHA256 not updated to ${TAG}"
+# The PKGBUILD seds exit 0 on a pattern miss — verify the new values landed.
+grep -q "^pkgver=${NEW_VER}$" "$PKG_DIR/PKGBUILD-bin" \
+  && grep -q "^pkgver=${NEW_VER}$" "$PKG_DIR/PKGBUILD" \
+  || die "pkgver not updated to ${TAG}"
+grep -qF "sha256sums_x86_64=('${SUM_X86}')" "$PKG_DIR/PKGBUILD-bin" \
+  && grep -qF "sha256sums_aarch64=('${SUM_ARM}')" "$PKG_DIR/PKGBUILD-bin" \
+  || die "PKGBUILD-bin per-arch sums not updated to ${TAG}"
+grep -qF "sha256sums=('${SUM_SRC}')" "$PKG_DIR/PKGBUILD" \
+  || die "PKGBUILD source sum not updated to ${TAG}"
+bash -n "$INSTALL_SH" || die "install.sh failed a syntax check after rewrite"
 
 echo "Bumped ${OLD_TAG} -> ${TAG}:"
 echo "  packaging/aur/PKGBUILD      pkgver=${NEW_VER} + source sum"
