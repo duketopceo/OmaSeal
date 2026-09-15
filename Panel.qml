@@ -232,7 +232,8 @@ Panel {
     // rebuilds key strings per comparison (O(n log n) calls otherwise).
     for (var d = 0; d < rows.length; d++) {
       rows[d]._key = ((rows[d].service || "") + "/" + (rows[d].account || "")).toLowerCase()
-      rows[d]._ts = rows[d].last_accessed ? +new Date(rows[d].last_accessed) : 0
+      var t = rows[d].last_accessed ? +new Date(rows[d].last_accessed) : 0
+      rows[d]._ts = isNaN(t) ? 0 : t
     }
     rows.sort(function(a, b) {
       if (root.sortMode === "name") {
