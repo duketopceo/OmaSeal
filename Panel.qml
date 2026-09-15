@@ -381,6 +381,10 @@ Panel {
     deleteConfirmTimer.stop()
     root.pendingDeleteKey = ""
     if (delProc.running) {
+      if (root.pendingDel !== null) {
+        root.notice = "Delete already queued — wait for it to finish"
+        return
+      }
       root.pendingDel = {service: service, account: account}
       root.notice = "Delete queued"
       return
@@ -985,7 +989,7 @@ Panel {
               placeholderText: "Search secrets  (press /)"
               foreground: root.fg
               visible: root.allSecrets.length > 0
-              Keys.onReleased: root.searchFilter = searchField.text
+              onTextChanged: root.searchFilter = text
               Keys.onEscapePressed: searchField.focus = false
             }
 
