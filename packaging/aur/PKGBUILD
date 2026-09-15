@@ -6,8 +6,12 @@ pkgdesc="First-party Omarchy keyring manager"
 arch=('x86_64' 'aarch64')
 url="https://github.com/duketopceo/OmaSeal"
 license=('MIT')
-depends=('gnome-keyring' 'libsecret' 'fprintd')
+depends=('org.freedesktop.secrets')
+optdepends=('fprintd: biometric unlock for the agent gate'
+            'wl-clipboard: conditional clipboard clear (clipclear, panel copy)'
+            'pinentry: GUI unlock prompt')
 makedepends=('go')
+conflicts=('omaseal-bin')
 source=("${pkgname}-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v${pkgver}.tar.gz")
 # The source is the immutable git-tag tarball. The SHA-256 can only be computed
 # once the v${pkgver} tag is published; run `updpkgsums` after tagging each
