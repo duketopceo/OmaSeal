@@ -81,3 +81,65 @@ jobs:
             dist/*.tar.gz
             dist/sha256sums*
           generate_release_notes: true
+
+  # Post-release packaging bump. makepkg only exists on Arch, and container
+  # jobs run as root while makepkg refuses root — so the work runs in a
+  # builder-owned copy of the checkout via runuser. gh is not in the
+  # archlinux image, hence github-cli in the pacman line; and because the
+  # checkout uses persist-credentials: false, `gh auth setup-git` supplies
+  # the push credentials. Note: a GITHUB_TOKEN-authored PR does not trigger
+  # ci.yml's pull_request checks — it merges on maintainer review.
+  bump-packaging:
+    needs: release
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: pacman -Sy --noconfirm base-devel git github-cli
+      - name: Bump packaging and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMASEAL_SIGNING_FINGERPRINT: ${{ secrets.OMASEAL_SIGNING_FINGERPRINT }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          cp -a "$GITHUB_WORKSPACE" /home/builder/ws
+          chown -R builder:builder /home/builder/ws
+          runuser -u builder -- env \
+            GH_TOKEN="$GH_TOKEN" TAG="$TAG" \
+            OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}" \
+            bash -euo pipefail -c '
+              cd /home/builder/ws
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              gh auth setup-git
+              git checkout -b "bump/${TAG}"
+              if [ -n "${OMASEAL_SIGNING_FINGERPRINT:-}" ]; then
+                packaging/aur/bump.sh "${TAG}"
+              else
+                packaging/aur/bump.sh "${TAG}" --allow-unsigned
+              fi
+              git add packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin \
+                      packaging/aur/.SRCINFO packaging/aur/omaseal-bin.SRCINFO \
+                      install.sh
+              changed=$(git diff --cached --name-only | sort)
+              expected=$(printf "%s\n" install.sh packaging/aur/.SRCINFO \
+                packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin \
+                packaging/aur/omaseal-bin.SRCINFO | sort)
+              [ "$changed" = "$expected" ] || {
+                echo "unexpected diff scope:" >&2
+                git diff --cached --name-only >&2
+                exit 1
+              }
+              git commit -m "chore(packaging): bump pins to ${TAG}"
+              git push -u origin "bump/${TAG}"
+              gh pr create --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
+                --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets before merging."
+            '

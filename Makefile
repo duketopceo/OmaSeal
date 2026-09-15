@@ -7,7 +7,7 @@ TAR_PREFIX := omaseal-linux
 GOARCH_x86_64 := amd64
 GOARCH_aarch64 := arm64
 
-.PHONY: all build build-all test clean
+.PHONY: all build build-all test clean release-bump
 
 all: build
 
@@ -24,6 +24,11 @@ $(RELEASE_ARCHS):
 
 test:
 	cd engine && go test ./...
+
+# Post-release pin bump: `make release-bump TAG=v0.2.3` (add --allow-unsigned
+# via BUMP_FLAGS for unsigned releases). Needs makepkg — Arch host only.
+release-bump:
+	packaging/aur/bump.sh $(TAG) $(BUMP_FLAGS)
 
 clean:
 	rm -rf dist/ engine/omaseal
