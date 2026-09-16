@@ -53,20 +53,19 @@ not yet published to AUR.)
 ### From a release tarball (verified)
 
 `install.sh` pins an immutable release tag (`OMASEAL_VERSION`, default
-`v0.2.2`) and verifies the tarball against a checksum embedded in the
+`v0.3.0`) and verifies the tarball against a checksum embedded in the
 script — it never follows `latest`:
 
 ```sh
-./install.sh            # pinned v0.2.2, embedded sha256 verify
+./install.sh            # pinned v0.3.0, embedded sha256 verify
 ./install.sh --dry-run
 ```
 
-Manual equivalent — download the tarball, checksums, and detached GPG
-signature for your architecture from the pinned tag, then verify before
-installing:
+Manual equivalent — download the tarball and checksums for your
+architecture from the pinned tag, then verify before installing:
 
 ```sh
-VER=v0.2.2
+VER=v0.3.0
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
@@ -75,11 +74,17 @@ case "$ARCH" in
 esac
 curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/$TAR"
 curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/sha256sums.txt"
-curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/sha256sums.txt.asc"
 sha256sum -c --ignore-missing sha256sums.txt
-gpg --verify sha256sums.txt.asc sha256sums.txt
 tar -xzf "$TAR"
 install -Dm755 omaseal-linux-"$ARCH"/omaseal ~/.local/bin/omaseal
+```
+
+Releases may also carry a detached GPG signature (`sha256sums.txt.asc`).
+When present, verify it too:
+
+```sh
+curl -fsSL -O "https://github.com/duketopceo/OmaSeal/releases/download/$VER/sha256sums.txt.asc"
+gpg --verify sha256sums.txt.asc sha256sums.txt
 ```
 
 ### Build from source

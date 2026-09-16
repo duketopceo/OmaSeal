@@ -26,7 +26,7 @@ cp /path/to/OmaSeal/packaging/aur/PKGBUILD-bin PKGBUILD
 cp /path/to/OmaSeal/packaging/aur/omaseal-bin.SRCINFO .SRCINFO
 cp /path/to/OmaSeal/packaging/aur/omaseal-bin.install omaseal-bin.install
 git add PKGBUILD .SRCINFO omaseal-bin.install
-git commit -m "omaseal-bin 0.2.2-1"
+git commit -m "omaseal-bin 0.3.0-1"
 git push
 ```
 

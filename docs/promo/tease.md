@@ -19,7 +19,7 @@ It is a first-party, local-only keyring built on the existing `gnome-keyring` / 
 - automatic provider-key resolution with fallback to 1Password or Bitwarden,
 - an MCP stdio server for Claude, Codex, Cursor, Devin, Agy, and Hermes,
 - multi-arch `x86_64` and `aarch64` releases,
-- signed tarballs and AUR packages,
+- checksum-pinned tarballs and AUR packages (GPG signing planned),
 - an atomic install/upgrade path that keeps the previous binary for rollback.
 
 No new crypto primitive. No cloud dependency. Just a standard namespace and interface so Omarchy apps, agents, browsers, and plugins can stop inventing their own secret storage.
