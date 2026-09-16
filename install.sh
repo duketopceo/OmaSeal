@@ -36,9 +36,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Pinned release — bump on each release. Immutable tag + embedded checksums
-# bind this installer to the reviewed snapshot. Override with env only if you
-# accept that the new version's checksums are fetched (not embedded).
-OMASEAL_VERSION="${OMASEAL_VERSION:-v0.2.2}"
+# bind this installer to the reviewed snapshot; there is deliberately no
+# version override: a version without an installer-embedded digest could only
+# be checked against checksums fetched from the same mutable release, which
+# is not an independent integrity binding.
+OMASEAL_VERSION="v0.2.2"
 OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}"
 OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
 
@@ -64,11 +66,6 @@ DOWNLOAD_URL="${RELEASE_BASE}/${TARBALL}"
 SUMS_URL="${RELEASE_BASE}/sha256sums.txt"
 SIG_URL="${RELEASE_BASE}/sha256sums.txt.asc"
 
-# Embedded checksums only apply to the pinned version.
-if [[ "$OMASEAL_VERSION" != "v0.2.2" ]]; then
-  EXPECTED_SHA256=""
-fi
-
 echo "Downloading OmaSeal for ${ARCH_NAME}..."
 echo "  URL: ${DOWNLOAD_URL}"
 
@@ -89,49 +86,44 @@ curl -fsSL -o "${TMPDIR}/${TARBALL}" "$DOWNLOAD_URL" || {
   exit 1
 }
 
-if [[ -n "$EXPECTED_SHA256" ]]; then
-  echo "${EXPECTED_SHA256}  ${TMPDIR}/${TARBALL}" | sha256sum -c - || {
-    echo "Checksum verification failed against the pinned digest for ${OMASEAL_VERSION}." >&2
+echo "${EXPECTED_SHA256}  ${TMPDIR}/${TARBALL}" | sha256sum -c - || {
+  echo "Checksum verification failed against the pinned digest for ${OMASEAL_VERSION}." >&2
+  exit 1
+}
+echo "Checksum verified against pinned digest (${OMASEAL_VERSION})."
+
+# Signature verification is an additional layer on top of the pinned digest.
+# When OMASEAL_SIGNING_FINGERPRINT is set it is strict: gpg, the .asc asset,
+# the key fetch, and the verification itself are all required, and any
+# failure aborts. Without a fingerprint there is no pinned signer to check
+# against, so the embedded digest alone is the binding.
+if [[ -n "$OMASEAL_SIGNING_FINGERPRINT" ]]; then
+  command -v gpg >/dev/null 2>&1 || {
+    echo "OMASEAL_SIGNING_FINGERPRINT is set but gpg is unavailable." >&2
     exit 1
   }
-  echo "Checksum verified against pinned digest (${OMASEAL_VERSION})."
-else
   curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL" || {
     echo "Checksum file not found: ${SUMS_URL}" >&2
     exit 1
   }
-  (cd "$TMPDIR" && grep "$TARBALL" sha256sums.txt | sha256sum -c -) || {
-    echo "Checksum verification failed." >&2
+  curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" || {
+    echo "Signature file not found: ${SIG_URL}" >&2
     exit 1
   }
-fi
-
-if command -v gpg >/dev/null 2>&1; then
-  if curl -fsSL -o "${TMPDIR}/sha256sums.txt.asc" "$SIG_URL" 2>/dev/null; then
-    if [[ ! -f "${TMPDIR}/sha256sums.txt" ]]; then
-      curl -fsSL -o "${TMPDIR}/sha256sums.txt" "$SUMS_URL"
-    fi
-    if [ -z "$OMASEAL_SIGNING_FINGERPRINT" ]; then
-      echo "A GPG signature is present, but OMASEAL_SIGNING_FINGERPRINT is not set." >&2
-      echo "Set it to the release signing key fingerprint before trusting a signature." >&2
-      exit 1
-    fi
-    GNUPGHOME="$TMPDIR/omaseal-gnupg"
-    mkdir -p "$GNUPGHOME"
-    chmod 700 "$GNUPGHOME"
-    export GNUPGHOME
-    KEYRING="$TMPDIR/omaseal.gpg"
-    if ! gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --keyserver "$OMASEAL_KEYSERVER" --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1; then
-      echo "Unable to fetch the OmaSeal release signing key from ${OMASEAL_KEYSERVER}." >&2
-      exit 1
-    fi
-    if gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" >/dev/null 2>&1; then
-      echo "GPG signature verified (fingerprint: $OMASEAL_SIGNING_FINGERPRINT)."
-    else
-      echo "GPG signature verification failed: signature is not from the pinned OmaSeal signer." >&2
-      exit 1
-    fi
-  fi
+  GNUPGHOME="$TMPDIR/omaseal-gnupg"
+  mkdir -p "$GNUPGHOME"
+  chmod 700 "$GNUPGHOME"
+  export GNUPGHOME
+  KEYRING="$TMPDIR/omaseal.gpg"
+  gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --keyserver "$OMASEAL_KEYSERVER" --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1 || {
+    echo "Unable to fetch the OmaSeal release signing key from ${OMASEAL_KEYSERVER}." >&2
+    exit 1
+  }
+  gpg --batch --yes --no-default-keyring --keyring "$KEYRING" --verify "${TMPDIR}/sha256sums.txt.asc" "${TMPDIR}/sha256sums.txt" >/dev/null 2>&1 || {
+    echo "GPG signature verification failed: signature is not from the pinned OmaSeal signer." >&2
+    exit 1
+  }
+  echo "GPG signature verified (fingerprint: $OMASEAL_SIGNING_FINGERPRINT)."
 fi
 
 mkdir -p "$BIN_DIR"
