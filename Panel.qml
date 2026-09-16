@@ -574,27 +574,24 @@ Panel {
   Component {
     id: logsComponent
 
-    Column {
-      width: parent.width
-      leftPadding: Style.space(14)
-      rightPadding: Style.space(14)
-      topPadding: Style.space(14)
-      bottomPadding: Style.space(14)
+    ColumnLayout {
+      anchors.fill: parent
+      anchors.margins: Style.space(14)
       spacing: Style.space(10)
 
       RowLayout {
-        width: parent.width - parent.leftPadding - parent.rightPadding
+        Layout.fillWidth: true
         spacing: Style.space(8)
 
         Text {
+          Layout.fillWidth: true
+          elide: Text.ElideRight
           text: "󰌋 OmaSeal"
           color: root.fg
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
           font.bold: true
         }
-
-        Item { Layout.fillWidth: true }
 
         Button {
           text: "Back"
@@ -609,8 +606,9 @@ Panel {
       }
 
       ListView {
-        width: parent.width - parent.leftPadding - parent.rightPadding
-        height: Style.space(240)
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        implicitHeight: Style.space(240)
         clip: true
         model: logModel
 
@@ -655,7 +653,7 @@ Panel {
       }
 
       RowLayout {
-        width: parent.width - parent.leftPadding - parent.rightPadding
+        Layout.fillWidth: true
         Item { Layout.fillWidth: true }
         Button {
           text: "Refresh"
@@ -674,7 +672,10 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: root.expanded ? panel.fittedContentWidth(Style.space(920), 1180) : panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(root.showLogs ? (logLoader.item ? logLoader.item.implicitHeight + Style.space(28) : Style.space(28)) : contentColumn.implicitHeight, root.expanded ? 840 : 640)
+    // +28: contentColumn is a ColumnLayout inset by anchors.margins, and
+    // margins are not part of implicitHeight — add the 2×14 margin back so
+    // the card keeps its visual padding when sizing to content.
+    contentHeight: panel.fittedContentHeight(root.showLogs ? (logLoader.item ? logLoader.item.implicitHeight + Style.space(28) : Style.space(28)) : contentColumn.implicitHeight + Style.space(28), root.expanded ? 840 : 640)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -710,27 +711,32 @@ Panel {
         else if (t === "/" && searchField.visible) searchField.forceActiveFocus()
       }
 
-      Column {
+      // ColumnLayout, not Column: anchors.fill pins the column to the card's
+      // inner box and Layout.fillHeight on the list lets it absorb whatever
+      // space remains. A positioner Column has no height bound — any child
+      // taller than the card draws straight over the border.
+      ColumnLayout {
         id: contentColumn
-        width: parent.width
+        anchors.fill: parent
+        anchors.margins: Style.space(14)
         visible: !root.showLogs
-        leftPadding: Style.space(14)
-        rightPadding: Style.space(14)
-        topPadding: Style.space(14)
-        bottomPadding: Style.space(14)
         spacing: Style.space(10)
 
         // Header
         RowLayout {
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          Layout.fillWidth: true
           spacing: Style.space(8)
 
           Text {
+            // fillWidth + elide: the fixed-size buttons on the right can
+            // never be pushed past the card edge by a narrow panel.
+            Layout.fillWidth: true
             text: "󰌋 OmaSeal"
             color: root.fg
             font.family: root.fontFamily
             font.pixelSize: Style.font.heading
             font.bold: true
+            elide: Text.ElideRight
           }
 
           Text {
@@ -740,8 +746,6 @@ Panel {
             font.pixelSize: Style.font.caption
             visible: root.allSecrets.length > 0
           }
-
-          Item { Layout.fillWidth: true }
 
           Button {
             text: root.isAdding ? "Cancel" : "+ Add"
@@ -772,13 +776,13 @@ Panel {
 
         PanelSeparator {
           foreground: root.fg
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          Layout.fillWidth: true
         }
 
         // Expanded stats strip: totals at a glance.
         Text {
           visible: root.expanded
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          Layout.fillWidth: true
           text: root.allSecrets.length + " SECRETS · " + root.totalAccesses + " ACCESSES · TOP: " + root.topSecretLabel
           color: root.dim
           font.family: root.fontFamily
@@ -787,13 +791,15 @@ Panel {
         }
 
         RowLayout {
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          Layout.fillWidth: true
+          Layout.fillHeight: true
           spacing: Style.space(12)
 
           // Vault sidebar — expanded mode only. One row per service.
-          Column {
+          ColumnLayout {
             visible: root.expanded
             Layout.preferredWidth: Style.space(190)
+            Layout.fillHeight: true
             Layout.alignment: Qt.AlignTop
             spacing: Style.space(4)
 
@@ -803,8 +809,9 @@ Panel {
             }
 
             Flickable {
-              width: parent.width
-              height: Math.min(vaultCol.implicitHeight, Style.space(560))
+              Layout.fillWidth: true
+              Layout.fillHeight: true
+              implicitHeight: Math.min(vaultCol.implicitHeight, Style.space(560))
               contentHeight: vaultCol.implicitHeight
               clip: true
 
@@ -857,14 +864,14 @@ Panel {
           }
 
           // Main column
-          Column {
+          ColumnLayout {
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignTop
+            Layout.fillHeight: true
             spacing: Style.space(10)
 
             // Add Secret Form Collapsible
             Column {
-              width: parent.width
+              Layout.fillWidth: true
               spacing: Style.space(8)
               visible: root.isAdding
 
@@ -918,11 +925,13 @@ Panel {
 
             // Agent trust status — the Keychain-style lock indicator.
             RowLayout {
-              width: parent.width
+              Layout.fillWidth: true
               spacing: Style.space(8)
               visible: root.agentMode !== ""
 
               Text {
+                Layout.fillWidth: true
+                elide: Text.ElideRight
                 text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
                       (root.agentKeepAlive ? " · KA" : "") +
                       (root.agentMode === "ask" && root.agentSessionActive
@@ -935,8 +944,6 @@ Panel {
                 font.pixelSize: Style.font.caption
               }
 
-              Item { Layout.fillWidth: true }
-
               Button {
                 visible: root.agentMode === "ask" && !root.agentSessionActive
                 text: "Unlock"
@@ -948,7 +955,7 @@ Panel {
             // fprintd availability notice — only relevant when ask mode gates on it.
             Text {
               visible: root.agentMode === "ask" && !root.fprintdAvailable
-              width: parent.width
+              Layout.fillWidth: true
               text: "no fingerprint reader — unlock is ungated"
               color: root.dim
               font.family: root.fontFamily
@@ -957,7 +964,7 @@ Panel {
 
             // Toolbar: vault picker + sort + search.
             RowLayout {
-              width: parent.width
+              Layout.fillWidth: true
               spacing: Style.space(6)
               visible: root.allSecrets.length > 0
 
@@ -986,7 +993,7 @@ Panel {
             // Search field — Keychain Access style filtering.
             TextField {
               id: searchField
-              width: parent.width
+              Layout.fillWidth: true
               placeholderText: "Search secrets  (press /)"
               foreground: root.fg
               visible: root.allSecrets.length > 0
@@ -994,19 +1001,40 @@ Panel {
               Keys.onEscapePressed: searchField.focus = false
             }
 
-            PanelSectionHeader {
-              text: "SECRETS (" + secretsModel.count + (root.hiddenCount > 0 ? "+" + root.hiddenCount : "") + ")  ·  j/k nav  ·  / search  ·  v vault  ·  s sort  ·  enter copy  ·  x del  ·  e " + (root.expanded ? "collapse" : "expand")
-              foreground: root.fg
+            // Section label + keybind hints on one row. The hints Text owns
+            // the spare width and elides — a single long header string would
+            // paint straight past the card's right border (PanelSectionHeader
+            // is a bare Text: no width bound, no elide).
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+
+              PanelSectionHeader {
+                text: "SECRETS (" + secretsModel.count + (root.hiddenCount > 0 ? "+" + root.hiddenCount : "") + ")"
+                foreground: root.fg
+              }
+
+              Text {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignRight
+                text: "j/k nav · / search · v vault · s sort · ⏎ copy · x del · e " + (root.expanded ? "collapse" : "expand")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideLeft
+              }
             }
 
-            // Scrollable secrets list
+            // Scrollable secrets list — fillHeight absorbs whatever is left
+            // of the card, so the list can never draw past the bottom border.
             Flickable {
               id: listFlickable
-              width: parent.width
+              Layout.fillWidth: true
+              Layout.fillHeight: true
+              Layout.minimumHeight: Style.space(60)
               implicitHeight: Math.min(secretsCol.implicitHeight,
                 root.expanded ? Style.space(640)
                   : (root.isAdding ? Style.space(220) : Style.space(420)))
-              height: implicitHeight
               contentHeight: secretsCol.implicitHeight
               clip: true
 
@@ -1169,7 +1197,7 @@ Panel {
         Text {
           id: noticeText
           visible: root.notice !== ""
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          Layout.fillWidth: true
           text: root.notice
           color: root.notice.indexOf("fail") !== -1 ? root.urgent : root.accent
           font.family: root.fontFamily
