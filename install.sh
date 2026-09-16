@@ -40,7 +40,7 @@ done
 # version override: a version without an installer-embedded digest could only
 # be checked against checksums fetched from the same mutable release, which
 # is not an independent integrity binding.
-OMASEAL_VERSION="v0.2.2"
+OMASEAL_VERSION="v0.3.0"
 OMASEAL_SIGNING_FINGERPRINT="${OMASEAL_SIGNING_FINGERPRINT:-}"
 OMASEAL_KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
 
@@ -48,11 +48,11 @@ ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)
     ARCH_NAME=x86_64
-    EXPECTED_SHA256="c189f0c84f72048842efe91644721b4d9121834b108eea04e7687441cb61e4d8"
+    EXPECTED_SHA256="3b79d3449d25f48f1420585c2b7b6802713823242ea8c45542b82eccc32fded2"
     ;;
   aarch64|arm64)
     ARCH_NAME=aarch64
-    EXPECTED_SHA256="366a5e440f592644e9563e44d8eea49c6401c077f78f1e0dcf96bb35c5a06333"
+    EXPECTED_SHA256="207b79210565b765994dfb009ac1f2ab53f462c47860aba4af06dd52bc4beac0"
     ;;
   *)
     echo "Unsupported architecture: $ARCH" >&2
