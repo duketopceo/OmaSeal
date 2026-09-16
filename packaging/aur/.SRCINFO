@@ -1,0 +1,19 @@
+pkgbase = omaseal
+	pkgdesc = First-party Omarchy keyring manager
+	pkgver = 0.2.2
+	pkgrel = 1
+	url = https://github.com/duketopceo/OmaSeal
+	install = omaseal.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = go
+	depends = org.freedesktop.secrets
+	optdepends = fprintd: biometric unlock for the agent gate
+	optdepends = wl-clipboard: conditional clipboard clear (clipclear, panel copy)
+	optdepends = pinentry: GUI unlock prompt
+	conflicts = omaseal-bin
+	source = omaseal-0.2.2.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v0.2.2.tar.gz
+	sha256sums = a6b441783cd1af2f02008c67964c59223aebbebc183fcc3d8d23fb34d730a56e
+
+pkgname = omaseal
