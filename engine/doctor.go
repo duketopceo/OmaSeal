@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,6 +18,8 @@ type checkResult struct {
 	name    string
 	ok      bool
 	message string
+	// optional checks degrade to a warning instead of failing the doctor run.
+	optional bool
 }
 
 func handleDoctor() {
@@ -29,40 +33,66 @@ func handleDoctor() {
 }
 
 func runDoctorJSON() {
-	results := doctorChecks()
-	checks := make([]pingCheck, len(results))
-	ok := true
-	for i, r := range results {
-		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Message: r.message}
-		if !r.ok {
-			ok = false
-		}
-	}
+	emitCheckJSON(doctorChecks(), "omaseal setup")
+}
+
+// emitCheckJSON renders check results in the shared ping/doctor JSON shape.
+func emitCheckJSON(results []checkResult, help string) {
+	checks, ok := toPingChecks(results)
 	res := pingResult{
 		Version: version,
 		Commit:  commit,
 		Target:  target(),
 		Ok:      ok,
 		Checks:  checks,
-		Help:    "omaseal setup",
+		Help:    help,
 	}
 	b, err := json.MarshalIndent(res, "", "  ")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error marshaling doctor result:", err)
+		fmt.Fprintln(os.Stderr, "error marshaling check result:", err)
 		os.Exit(1)
 	}
 	fmt.Println(string(b))
 }
 
+// doctorChecks runs every check concurrently — each is an independent probe
+// and several spawn subprocesses with multi-second timeouts, so serial runs
+// cost the sum of all timeouts instead of the slowest one.
 func doctorChecks() []checkResult {
-	return []checkResult{
-		checkBinary(),
-		checkSecretService(),
-		checkFprintd(),
-		checkOnePassword(),
-		checkBitwarden(),
-		checkPath(),
+	checks := []func() checkResult{
+		checkBinary,
+		checkSecretService,
+		checkFprintd,
+		checkOnePassword,
+		checkBitwarden,
+		checkGUIPrompt,
+		checkPath,
 	}
+	results := make([]checkResult, len(checks))
+	var wg sync.WaitGroup
+	for i, c := range checks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = c()
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// toPingChecks converts check results to the JSON shape and reports whether
+// all required (non-optional) checks passed.
+func toPingChecks(results []checkResult) ([]pingCheck, bool) {
+	checks := make([]pingCheck, len(results))
+	ok := true
+	for i, r := range results {
+		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Optional: r.optional, Message: r.message}
+		if !r.ok && !r.optional {
+			ok = false
+		}
+	}
+	return checks, ok
 }
 
 func printDoctorResults(results []checkResult) bool {
@@ -70,8 +100,12 @@ func printDoctorResults(results []checkResult) bool {
 	for _, r := range results {
 		mark := "ok"
 		if !r.ok {
-			mark = "FAIL"
-			ok = false
+			if r.optional {
+				mark = "warn"
+			} else {
+				mark = "FAIL"
+				ok = false
+			}
 		}
 		fmt.Fprintf(os.Stderr, "%-18s %s\n", mark, r.name)
 		if r.message != "" {
@@ -87,10 +121,10 @@ func runDoctor() {
 	results := doctorChecks()
 	ok := printDoctorResults(results)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "\nSome checks failed. Run `omaseal setup` for next steps.")
+		fmt.Fprintln(os.Stderr, "\nSome required checks failed. Run `omaseal setup` for next steps.")
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "\nAll checks passed. OmaSeal is ready to use.")
+	fmt.Fprintln(os.Stderr, "\nAll required checks passed. OmaSeal is ready to use.")
 }
 
 func checkBinary() checkResult {
@@ -140,8 +174,9 @@ func containsLine(text, needle string) bool {
 func checkFprintd() checkResult {
 	if !commandExists("fprintd") {
 		return checkResult{
-			name: "fprintd",
-			ok:   false,
+			name:     "fprintd",
+			ok:       false,
+			optional: true,
 			message: "`fprintd` is not installed.\n" +
 				"  - `reveal` will fall through without a fingerprint gate.\n" +
 				"  - Install and enable `fprintd` and run `fprintd-enroll` to enable biometric gating.",
@@ -153,8 +188,9 @@ func checkFprintd() checkResult {
 
 	if err := fprintdAvailable(ctx); err != nil {
 		return checkResult{
-			name: "fprintd",
-			ok:   false,
+			name:     "fprintd",
+			ok:       false,
+			optional: true,
 			message: err.Error() + "\n" +
 				"  - `reveal` will fall through without a fingerprint gate.\n" +
 				"  - Start `fprintd.service`, run `fprintd-enroll`, and try again.",
@@ -167,8 +203,9 @@ func checkFprintd() checkResult {
 func checkOnePassword() checkResult {
 	if !commandExists("op") {
 		return checkResult{
-			name: "1password (op)",
-			ok:   false,
+			name:     "1password (op)",
+			ok:       false,
+			optional: true,
 			message: "`op` CLI not found.\n" +
 				"  - Install the 1Password CLI and run `op signin` to enable `omaseal resolve` / `import 1password`.",
 		}
@@ -182,8 +219,9 @@ func checkOnePassword() checkResult {
 	}
 
 	return checkResult{
-		name: "1password (op)",
-		ok:   false,
+		name:     "1password (op)",
+		ok:       false,
+		optional: true,
 		message: "`op` CLI is installed but not signed in.\n" +
 			"  - Run `op signin` to enable `omaseal resolve` / `import 1password`.",
 	}
@@ -192,8 +230,9 @@ func checkOnePassword() checkResult {
 func checkBitwarden() checkResult {
 	if !commandExists("bw") {
 		return checkResult{
-			name: "bitwarden (bw)",
-			ok:   false,
+			name:     "bitwarden (bw)",
+			ok:       false,
+			optional: true,
 			message: "`bw` CLI not found.\n" +
 				"  - Install the Bitwarden CLI and run `bw login` to enable `omaseal resolve` / `import bitwarden`.",
 		}
@@ -202,12 +241,45 @@ func checkBitwarden() checkResult {
 		return checkResult{name: "bitwarden (bw)", ok: true, message: "`bw` CLI found and BW_SESSION is set"}
 	}
 	return checkResult{
-		name: "bitwarden (bw)",
-		ok:   false,
+		name:     "bitwarden (bw)",
+		ok:       false,
+		optional: true,
 		message: "`bw` CLI found but `BW_SESSION` is not set.\n" +
 			"  - Run `bw login`, then use a command-scoped session:\n" +
 			"    `BW_SESSION=\"$(bw unlock --raw)\" omaseal resolve <service> <account>` or `omaseal import bitwarden`.",
 	}
+}
+
+// checkGUIPrompt reports the effective masked graphical prompter so a headless
+// `omaseal resolve` has somewhere to ask. It is optional: no prompter only
+// limits prompting, never the keyring itself.
+func checkGUIPrompt() checkResult {
+	if !graphicalSession() {
+		return checkResult{
+			name:     "gui-prompt",
+			ok:       false,
+			optional: true,
+			message: "No graphical session (WAYLAND_DISPLAY/DISPLAY unset).\n" +
+				"  - Headless `omaseal resolve` prompts need a TTY or a graphical session.",
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	p, err := selectGUIPrompter(ctx)
+	if errors.Is(err, errGUIDisabled) {
+		return checkResult{name: "gui-prompt", ok: true, optional: true, message: "disabled by OMASEAL_GUI_PROMPT=off"}
+	}
+	if err != nil {
+		return checkResult{
+			name:     "gui-prompt",
+			ok:       false,
+			optional: true,
+			message: "No usable masked graphical prompter: " + err.Error() + "\n" +
+				"  - Install `pinentry` with a GUI backend or `zenity` for headless `omaseal resolve` prompts.\n" +
+				"  - `OMASEAL_GUI_PROMPT=pinentry|zenity|off` overrides prompter selection.",
+		}
+	}
+	return checkResult{name: "gui-prompt", ok: true, optional: true, message: "graphical prompt via " + p.name()}
 }
 
 func checkPath() checkResult {
@@ -216,16 +288,24 @@ func checkPath() checkResult {
 		return checkResult{name: "PATH", ok: false, message: "Cannot locate the running binary"}
 	}
 	dir := filepath.Dir(self)
-	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
-		if p == dir {
-			return checkResult{name: "PATH", ok: true, message: fmt.Sprintf("`%s` is on PATH", dir)}
-		}
+	if dirOnPATH(dir) {
+		return checkResult{name: "PATH", ok: true, message: fmt.Sprintf("`%s` is on PATH", dir)}
 	}
 	return checkResult{
 		name:    "PATH",
 		ok:      false,
 		message: fmt.Sprintf("`%s` is not on your PATH.\n  - Add `export PATH=\"%s:$PATH\"` to your shell profile.", dir, dir),
 	}
+}
+
+// dirOnPATH reports whether dir appears verbatim in PATH.
+func dirOnPATH(dir string) bool {
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		if p == dir {
+			return true
+		}
+	}
+	return false
 }
 
 func commandExists(name string) bool {

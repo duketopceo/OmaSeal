@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -73,8 +74,20 @@ func SetLogOutput() {
 	log.SetOutput(LogWriter())
 }
 
-// WriteLog records a single event without secret values.
+// WriteLog records a single event without secret values. String arguments
+// are sanitized so a caller-controlled service/account name cannot forge
+// extra log lines.
 func WriteLog(format string, v ...any) {
+	for i, arg := range v {
+		if s, ok := arg.(string); ok {
+			v[i] = strings.Map(func(r rune) rune {
+				if r < 0x20 || r == 0x7f {
+					return ' '
+				}
+				return r
+			}, s)
+		}
+	}
 	log.Printf(format, v...)
 }
 

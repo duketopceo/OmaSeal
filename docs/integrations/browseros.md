@@ -36,6 +36,12 @@ The stored SQLite value is the reference string:
 omaseal://browseros/openrouter-work/apiKey
 ```
 
+The OmaSeal CLI accepts that reference verbatim — `omaseal resolve
+omaseal://browseros/openrouter-work/apiKey` — so BrowserOS can pass the stored
+value through unchanged. The grammar, charset, and shared parser test vectors
+live in [`../namespaces.md`](../namespaces.md); this app-owned convention is
+the `<app>/<context>/<field>` pattern described there.
+
 ## Enabling in BrowserOS (planned)
 
 When the integration lands, the planned enablement flow is:

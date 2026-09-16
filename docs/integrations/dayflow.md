@@ -12,6 +12,10 @@ default`. Examples:
 - `service = mcp`,          `account = <mcp-server>`
 - `service = custom`,       `account = <endpoint-host>`
 
+This is the provider-owned convention from [`../namespaces.md`](../namespaces.md):
+one credential shared by every application, with the service name doubling as
+the 1Password/Bitwarden item title for `resolve` fallback.
+
 ## Retrieval
 
 Dayflow should call:

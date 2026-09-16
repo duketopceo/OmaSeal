@@ -18,17 +18,32 @@ Panel {
   property bool popoutSwitchClosing: false
 
   property string searchFilter: ""
+  onSearchFilterChanged: root.rebuildModel()
+  property var allSecrets: []
   property string notice: ""
-  property string logText: ""
   property bool showLogs: false
   property int selectedIndex: 0
+  property string pendingDeleteKey: ""
+  property bool refreshPending: false
+  property var pendingCopy: null
+  property var pendingDel: null
+  property bool agentStatusPending: false
+  property bool saving: false
+  property string getText: ""
   property bool isAdding: false
-  property int pendingDeleteIndex: -1
+  property string agentMode: ""
+  property bool agentSessionActive: false
+  property string agentSessionExpires: ""
+  property bool agentKeepAlive: false
+  property bool fprintdAvailable: true
 
   Component {
     id: setProcComponent
     Process {
       stdinEnabled: true
+      stderr: StdioCollector {
+        waitForEnd: true
+      }
     }
   }
 
@@ -49,6 +64,7 @@ Panel {
   function open() {
     root.controller.show()
     root.refresh()
+    root.refreshAgentStatus()
   }
 
   function close() {
@@ -70,11 +86,19 @@ Panel {
     return false
   }
 
+  function secretKey(service, account) {
+    return service + "\u0001" + account
+  }
+
   function refresh() {
     root.notice = ""
-    root.pendingDeleteIndex = -1
+    root.pendingDeleteKey = ""
     listProc.command = ["omaseal", "list", "--json"]
-    if (!listProc.running) listProc.running = true
+    if (listProc.running) {
+      root.refreshPending = true
+    } else {
+      listProc.running = true
+    }
   }
 
   function refreshLog() {
@@ -85,20 +109,73 @@ Panel {
   function applyList(raw) {
     try {
       var d = JSON.parse(raw)
-      secretsModel.clear()
-      for (var i = 0; i < d.length; i++) {
-        secretsModel.append({
-          service: d[i].service || "",
-          account: d[i].account || "",
-          label: d[i].label || ""
-        })
-      }
-      if (root.selectedIndex >= secretsModel.count) {
-        root.selectedIndex = Math.max(0, secretsModel.count - 1)
-      }
+      root.allSecrets = d
+      root.rebuildModel()
     } catch (e) {
       root.notice = "Failed to parse secret list"
     }
+  }
+
+  function rebuildModel() {
+    var f = root.searchFilter.trim().toLowerCase()
+    // Preserve selection by identity: indexes shift under filtering/reloads.
+    var selKey = ""
+    if (root.selectedIndex >= 0 && root.selectedIndex < secretsModel.count) {
+      var cur = secretsModel.get(root.selectedIndex)
+      selKey = root.secretKey(cur.service, cur.account)
+    }
+    var newIdx = -1
+    secretsModel.clear()
+    for (var i = 0; i < root.allSecrets.length; i++) {
+      var it = root.allSecrets[i]
+      if (f !== "") {
+        var hay = ((it.service || "") + "/" + (it.account || "") + " " + (it.label || "")).toLowerCase()
+        if (hay.indexOf(f) === -1) continue
+      }
+      var row = {
+        service: it.service || "",
+        account: it.account || "",
+        label: it.label || ""
+      }
+      secretsModel.append(row)
+      if (selKey !== "" && root.secretKey(row.service, row.account) === selKey) {
+        newIdx = secretsModel.count - 1
+      }
+    }
+    if (newIdx >= 0) {
+      root.selectedIndex = newIdx
+    } else if (root.selectedIndex >= secretsModel.count) {
+      root.selectedIndex = Math.max(0, secretsModel.count - 1)
+    }
+  }
+
+  function refreshAgentStatus() {
+    if (agentProc.running) {
+      root.agentStatusPending = true
+    } else {
+      agentProc.running = true
+    }
+  }
+
+  function applyAgentStatus(raw) {
+    try {
+      var d = JSON.parse(raw)
+      root.agentMode = d.mode || ""
+      root.agentSessionActive = d.session_active === true
+      root.agentSessionExpires = d.session_expires || ""
+      root.agentKeepAlive = d.keep_alive === true
+      root.fprintdAvailable = d.fprintd_available !== false
+    } catch (e) {
+      root.agentMode = ""
+      root.agentSessionActive = false
+      root.agentSessionExpires = ""
+      root.agentKeepAlive = false
+      root.fprintdAvailable = true
+    }
+  }
+
+  function unlockAgent() {
+    if (!unlockProc.running) unlockProc.running = true
   }
 
   function applyLogs(raw) {
@@ -118,6 +195,7 @@ Panel {
   }
 
   function saveSecret() {
+    if (root.saving) return
     var service = serviceField.text.trim()
     var account = accountField.text.trim()
     var secret = secretField.text
@@ -125,6 +203,7 @@ Panel {
       root.notice = "Fill in service, account, and secret"
       return
     }
+    root.saving = true
     root.notice = "Saving..."
     var proc = setProcComponent.createObject(root)
     proc.command = ["omaseal", "set", service, account]
@@ -135,38 +214,77 @@ Panel {
         root.refresh()
         root.statusChanged()
       } else {
-        root.notice = "Save failed"
+        var detail = ""
+        var lines = (proc.stderr.text || "").split("\n")
+        for (var i = 0; i < lines.length; i++) {
+          var l = lines[i].trim()
+          if (l.indexOf("error:") === 0) { detail = l; break }
+        }
+        root.notice = detail !== "" ? "Save failed: " + detail : "Save failed"
       }
+      root.saving = false
       proc.destroy()
     })
+    proc.started.connect(function() {
+      proc.write(secret)
+      proc.stdinEnabled = false
+    })
     proc.running = true
-    proc.write(secret)
-    proc.stdinEnabled = false
   }
 
+  // Delete confirmation is armed by identity, not index: a list rebuild can
+  // reshuffle rows, and the confirm must still target the armed secret.
   function deleteSecret(index, service, account) {
-    if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
-      root.pendingDeleteIndex = -1
+    var key = root.secretKey(service, account)
+    if (root.pendingDeleteKey !== "" && root.pendingDeleteKey !== key) {
+      root.pendingDeleteKey = ""
       deleteConfirmTimer.stop()
       root.notice = "Delete confirmation cancelled"
       return
     }
-    if (root.pendingDeleteIndex !== index) {
-      root.pendingDeleteIndex = index
+    if (root.pendingDeleteKey !== key) {
+      root.pendingDeleteKey = key
       deleteConfirmTimer.restart()
       root.notice = "Press delete again to confirm deletion"
       return
     }
     deleteConfirmTimer.stop()
-    root.pendingDeleteIndex = -1
+    root.pendingDeleteKey = ""
+    if (delProc.running) {
+      root.pendingDel = {service: service, account: account}
+      root.notice = "Delete queued"
+      return
+    }
     root.notice = "Deleting..."
     delProc.command = ["omaseal", "del", service, account]
-    if (!delProc.running) delProc.running = true
+    delProc.running = true
   }
 
   function copySecret(service, account) {
+    if (getProc.running) {
+      // Coalesce: run the newest request after the in-flight get exits.
+      root.pendingCopy = {service: service, account: account}
+      return
+    }
     getProc.command = ["omaseal", "get", service, account]
-    if (!getProc.running) getProc.running = true
+    getProc.running = true
+  }
+
+  function runPendingCopy() {
+    if (root.pendingCopy === null) return
+    var c = root.pendingCopy
+    root.pendingCopy = null
+    getProc.command = ["omaseal", "get", c.service, c.account]
+    getProc.running = true
+  }
+
+  function runPendingDel() {
+    if (root.pendingDel === null) return
+    var d = root.pendingDel
+    root.pendingDel = null
+    root.notice = "Deleting..."
+    delProc.command = ["omaseal", "del", d.service, d.account]
+    delProc.running = true
   }
 
   function clearAddForm() {
@@ -179,7 +297,12 @@ Panel {
   Timer {
     id: deleteConfirmTimer
     interval: 5000
-    onTriggered: root.pendingDeleteIndex = -1
+    onTriggered: {
+      if (root.pendingDeleteKey !== "") {
+        root.pendingDeleteKey = ""
+        root.notice = "Delete confirmation expired"
+      }
+    }
   }
 
   Process {
@@ -193,6 +316,10 @@ Panel {
       if (exitCode !== 0) {
         root.notice = "Failed to list secrets"
       }
+      if (root.refreshPending) {
+        root.refreshPending = false
+        root.refresh()
+      }
     }
   }
 
@@ -200,25 +327,29 @@ Panel {
     id: getProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: {
-        var proc = copyProcComponent.createObject(root)
-        proc.exited.connect(function(exitCode) {
-          if (exitCode === 0) {
-            root.notice = "Copied to clipboard (clears in 30s)"
-          } else {
-            root.notice = "Copy failed"
-          }
-          proc.destroy()
-        })
-        proc.running = true
-        proc.write(text)
-        proc.stdinEnabled = false
-      }
+      onStreamFinished: root.getText = text
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0) {
+      // Capture-and-clear: the clipboard payload must not race a queued get.
+      var secret = root.getText
+      root.getText = ""
+      // Only a successful get reaches the clipboard — a failed or empty
+      // read must never clobber what the user already has.
+      if (exitCode === 0 && secret !== "") {
+        var proc = copyProcComponent.createObject(root)
+        proc.exited.connect(function(ec) {
+          root.notice = ec === 0 ? "Copied to clipboard (clears in 30s)" : "Copy failed"
+          proc.destroy()
+        })
+        proc.started.connect(function() {
+          proc.write(secret)
+          proc.stdinEnabled = false
+        })
+        proc.running = true
+      } else {
         root.notice = "Copy failed"
       }
+      root.runPendingCopy()
     }
   }
 
@@ -226,12 +357,13 @@ Panel {
     id: delProc
     onExited: function(exitCode) {
       if (exitCode === 0) {
+        root.refresh() // clears notice
         root.notice = "Deleted"
-        root.refresh()
         root.statusChanged()
       } else {
         root.notice = "Delete failed"
       }
+      root.runPendingDel()
     }
   }
 
@@ -240,6 +372,41 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.applyLogs(text)
+    }
+  }
+
+  Process {
+    id: agentProc
+    command: ["omaseal", "agent", "status", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyAgentStatus(text)
+    }
+    onExited: function(exitCode) {
+      if (root.agentStatusPending) {
+        root.agentStatusPending = false
+        root.refreshAgentStatus()
+      }
+    }
+  }
+
+  Process {
+    id: unlockProc
+    command: ["omaseal", "agent", "unlock"]
+    stderr: StdioCollector {}
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.refreshAgentStatus()
+      } else {
+        var lines = (unlockProc.stderr.text || "").split("\n")
+        var detail = ""
+        for (var i = 0; i < lines.length; i++) {
+          var l = lines[i].trim()
+          if (l.indexOf("error:") === 0) { detail = l; break }
+        }
+        root.notice = detail !== "" ? "Unlock failed: " + detail : "Unlock failed"
+        root.refreshAgentStatus()
+      }
     }
   }
 
@@ -371,7 +538,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus
+      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus || searchField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
@@ -396,6 +563,7 @@ Panel {
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
         else if (t === "a" || t === "A") root.isAdding = !root.isAdding
+        else if (t === "/" && searchField.visible) searchField.forceActiveFocus()
       }
 
       Column {
@@ -469,6 +637,7 @@ Panel {
               width: parent.width
               placeholderText: "Service (e.g. openrouter, github)"
               foreground: root.fg
+              Keys.onEscapePressed: root.clearAddForm()
             }
 
             TextField {
@@ -476,6 +645,7 @@ Panel {
               width: parent.width
               placeholderText: "Account (e.g. default, personal)"
               foreground: root.fg
+              Keys.onEscapePressed: root.clearAddForm()
             }
 
             TextField {
@@ -485,6 +655,7 @@ Panel {
               placeholderText: "Secret payload"
               foreground: root.fg
               Keys.onReturnPressed: root.saveSecret()
+              Keys.onEscapePressed: root.clearAddForm()
             }
 
             RowLayout {
@@ -504,9 +675,59 @@ Panel {
             }
           }
 
+          // Agent trust status — the Keychain-style lock indicator.
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.agentMode !== ""
+
+            Text {
+              text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
+                    (root.agentKeepAlive ? " · KA" : "") +
+                    (root.agentMode === "ask" && root.agentSessionActive
+                      ? " · UNLOCKED" + (root.agentSessionExpires
+                          ? " " + Qt.formatTime(new Date(root.agentSessionExpires), "HH:mm")
+                          : "")
+                      : "")
+              color: (root.agentMode === "open" || root.agentSessionActive) ? root.accent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+              visible: root.agentMode === "ask" && !root.agentSessionActive
+              text: "Unlock"
+              bordered: true
+              onClicked: root.unlockAgent()
+            }
+          }
+
+          // fprintd availability notice — only relevant when ask mode gates on it.
+          Text {
+            visible: root.agentMode === "ask" && !root.fprintdAvailable
+            width: parent.width
+            text: "no fingerprint reader — unlock is ungated"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          // Search field — Keychain Access style filtering.
+          TextField {
+            id: searchField
+            width: parent.width
+            placeholderText: "Search secrets  (press /)"
+            foreground: root.fg
+            visible: root.allSecrets.length > 0
+            Keys.onReleased: root.searchFilter = searchField.text
+            Keys.onEscapePressed: searchField.focus = false
+          }
+
           // Secret List Section Header
           PanelSectionHeader {
-            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  enter copy  ·  x del"
+            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  / search  ·  enter copy  ·  x del"
             foreground: root.fg
           }
         }
@@ -515,7 +736,7 @@ Panel {
         Flickable {
           id: listFlickable
           width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          implicitHeight: Math.min(secretsCol.implicitHeight, Style.space(420))
+          implicitHeight: Math.min(secretsCol.implicitHeight, root.isAdding ? Style.space(220) : Style.space(420))
           height: implicitHeight
           contentHeight: secretsCol.implicitHeight
           clip: true
@@ -529,7 +750,7 @@ Panel {
             Text {
               visible: secretsModel.count === 0
               width: parent.width
-              text: "No secrets stored in keyring."
+              text: root.allSecrets.length > 0 ? "No matches." : "No secrets stored in keyring."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -557,9 +778,10 @@ Panel {
                   anchors.fill: parent
                   hoverEnabled: true
                   onEntered: {
-                    if (root.pendingDeleteIndex !== -1 && root.pendingDeleteIndex !== index) {
-                      root.pendingDeleteIndex = -1
+                    if (root.pendingDeleteKey !== "" && root.pendingDeleteKey !== root.secretKey(service, account)) {
+                      root.pendingDeleteKey = ""
                       deleteConfirmTimer.stop()
+                      root.notice = "Delete confirmation cancelled"
                     }
                     root.selectedIndex = index
                   }

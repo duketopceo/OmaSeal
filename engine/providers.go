@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/zalando/go-keyring"
@@ -19,7 +23,8 @@ const providerTimeout = 30 * time.Second
 
 // Resolver fetches a secret from the first available source and caches it in
 // the local keyring so the next call is fast. Sources are checked in order:
-// local keyring, 1Password, Bitwarden, then an interactive prompt (TTY only).
+// local keyring, 1Password, Bitwarden, then an interactive prompt (TTY, or a
+// masked GUI dialog when a graphical session exists without a TTY).
 func Resolve(ctx context.Context, service, account string, cache bool, prompt bool) (string, error) {
 	if service == "" || account == "" {
 		return "", errors.New("service and account must not be empty")
@@ -63,18 +68,73 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		if rerr != nil {
 			return "", rerr
 		}
-		if secret == "" {
-			return "", errors.New("secret cannot be empty")
-		}
-		if cache {
-			if serr := Set(service, account, secret); serr != nil {
-				return "", serr
+		return cachePromptedSecret(service, account, secret, cache)
+	}
+
+	// 5. Masked GUI prompt when a graphical session exists but no TTY does.
+	// IPC and MCP callers pass prompt=false and never reach this. A lockfile
+	// serializes concurrent resolvers so two processes cannot double-prompt;
+	// the loser re-checks the keyring and sees the winner's cached secret.
+	if prompt && graphicalSession() {
+		unlock, lerr := promptLock(service, account)
+		if lerr == nil {
+			defer unlock()
+			if v, err := Get(service, account); err == nil {
+				return v, nil
 			}
 		}
-		return secret, nil
+		secret, gerr := guiPromptSecret(ctx, service, account)
+		if gerr == nil {
+			return cachePromptedSecret(service, account, secret, cache)
+		}
+		if errors.Is(gerr, errPromptCancelled) {
+			return "", newError("prompt_cancelled", "omaseal resolve <service> <account>",
+				fmt.Errorf("no secret for %s/%s: %w", service, account, gerr))
+		}
+		if !errors.Is(gerr, errNoGUIPrompter) && !errors.Is(gerr, errGUIDisabled) {
+			return "", gerr
+		}
+		// No usable prompter (or disabled): fall through to not_found.
 	}
 
 	return "", newError("not_found", "omaseal set", fmt.Errorf("no secret found for %s/%s", service, account))
+}
+
+// promptLock serializes GUI prompts per credential: two concurrent resolvers
+// for one missing key must not each pop a dialog. The returned func releases
+// the flock; the lock file itself lives in the runtime dir and may persist.
+func promptLock(service, account string) (func(), error) {
+	sum := sha256.Sum256([]byte(service + "/" + account))
+	path := filepath.Join(agentRuntimeDir(), "prompt-"+hex.EncodeToString(sum[:8])+".lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// cachePromptedSecret validates an interactively-entered secret and stores it
+// in the local keyring when caching is enabled. If the cache write fails the
+// secret is still returned — the user already typed it into a dialog; making
+// them re-prompt for a storage problem is strictly worse.
+func cachePromptedSecret(service, account, secret string, cache bool) (string, error) {
+	if secret == "" {
+		return "", errors.New("secret cannot be empty")
+	}
+	if cache {
+		if err := Set(service, account, secret); err != nil {
+			WriteLog("cache write failed for %s/%s after prompt: %v", service, account, err)
+			fmt.Fprintf(os.Stderr, "warning: keyring cache write failed (%v); returning uncached secret\n", err)
+		}
+	}
+	return secret, nil
 }
 
 // ImportOnePassword lists all 1Password items in the default vault and stores

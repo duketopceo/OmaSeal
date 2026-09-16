@@ -16,6 +16,8 @@ import (
 func runMCP() {
 	// stdout is reserved for JSON-RPC; logging already goes to stderr + file.
 	scanner := bufio.NewScanner(os.Stdin)
+	// Secrets (PEM bundles, service-account JSON) can exceed the 64KB default.
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	enc := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -67,12 +69,17 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 		return nil
 	}
 
-	// Notifications have no id; some require a result.
+	// Notifications have no id and must never receive a response frame.
+	if len(msg.ID) == 0 {
+		return nil
+	}
 	switch msg.Method {
 	case "initialize":
 		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: initMCPResult()}
 	case "notifications/initialized":
 		return nil
+	case "ping":
+		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{}}
 	case "tools/list":
 		return &mcpResponse{JSONRPC: "2.0", ID: msg.ID, Result: mcpToolsResult}
 	case "tools/call":
@@ -94,6 +101,19 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 	}
 }
 
+// mcpInstructions tells every connecting agent how OmaSeal should be used.
+// It is returned in the initialize result so agents pick up the convention
+// automatically, without the user having to write rules files.
+const mcpInstructions = `OmaSeal is the system keyring on this Omarchy machine — think macOS Keychain for agents. ` +
+	`When you need an API key, token, password, or other credential, call omaseal_resolve or omaseal_get with a ` +
+	`service and account name (for example service="openrouter", account="default") instead of asking the user to ` +
+	`paste secrets, reading .env files, or grepping dotfiles. When the user gives you a new credential to keep, ` +
+	`store it with omaseal_set — never write secrets to files, dotfiles, shell arguments, or logs. ` +
+	`omaseal_list returns service/account metadata only (no values) and is safe for discovering what is stored. ` +
+	`A stored omaseal://<service>/<account> reference may be passed verbatim in the service field of any tool. ` +
+	`If a call fails with code agent_unauthorized, tell the user to run "omaseal agent unlock"; ` +
+	`for not_found, suggest "omaseal set <service> <account>" or omaseal_set.`
+
 func initMCPResult() map[string]any {
 	return map[string]any{
 		"protocolVersion": "2024-11-05",
@@ -104,6 +124,7 @@ func initMCPResult() map[string]any {
 			"name":    "omaseal",
 			"version": version,
 		},
+		"instructions": mcpInstructions,
 	}
 }
 
@@ -111,20 +132,20 @@ var mcpToolsResult = map[string]any{
 	"tools": []map[string]any{
 		{
 			"name":        "omaseal_get",
-			"description": "Retrieve a stored secret from the local OmaSeal keyring. Use this when the user or a provider needs the value at runtime. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate.",
+			"description": "Retrieve a stored secret from the local OmaSeal keyring. Use this when the user or a provider needs the value at runtime. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{
 			"name":        "omaseal_resolve",
-			"description": "Resolve a secret from local keyring, 1Password, or Bitwarden. Caches the result locally. Safe for noninteractive calls.",
+			"description": "Resolve a secret from local keyring, 1Password, or Bitwarden. Caches the result locally. Safe for noninteractive calls. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{
@@ -137,16 +158,16 @@ var mcpToolsResult = map[string]any{
 					"account": map[string]string{"type": "string"},
 					"secret":  map[string]string{"type": "string"},
 				},
-				"required": []string{"service", "account", "secret"},
+				"required": []string{"service", "secret"},
 			},
 		},
 		{
 			"name":        "omaseal_delete",
-			"description": "Delete a secret from the local keyring by service and account.",
+			"description": "Delete a secret from the local keyring by service and account. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{
@@ -155,6 +176,15 @@ var mcpToolsResult = map[string]any{
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}},
+				"required":   []string{},
+			},
+		},
+		{
+			"name":        "omaseal_status",
+			"description": "Report the agent trust policy and session state (mode, unlock status, expiry, keep-alive). Read-only and non-secret; unlocking stays a human-only action.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
 				"required":   []string{},
 			},
 		},
@@ -206,7 +236,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		v, err := Get(a.Service, a.Account)
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		v, err := Get(service, account)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -220,7 +254,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		v, err := Resolve(context.Background(), a.Service, a.Account, true, false)
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		v, err := Resolve(context.Background(), service, account, true, false)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -235,7 +273,13 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		if err := Set(a.Service, a.Account, a.Secret); err != nil {
+		// Writes are strict: new names must satisfy the shared charset so
+		// stored entries stay reachable and promptable everywhere.
+		service, account, err := refAwareCredentials(a.Service, a.Account, true)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if err := Set(service, account, a.Secret); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -248,7 +292,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := json.Unmarshal(req.Arguments, &a); err != nil {
 			return errResp(req, err)
 		}
-		if err := Delete(a.Service, a.Account); err != nil {
+		service, account, err := refAwareCredentials(a.Service, a.Account, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if err := Delete(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -262,7 +310,11 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 				return errResp(req, err)
 			}
 		}
-		items, err := List(a.Service)
+		service, err := refAwareService(a.Service, false)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		items, err := List(service)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -271,6 +323,15 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": string(b)})
+
+	case "omaseal_status":
+		// Ungated: the status payload is non-secret and must stay readable
+		// even while the agent policy is locked.
+		status, err := agentStatusJSON()
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		r.Content = append(r.Content, map[string]any{"type": "text", "text": status})
 
 	default:
 		return &mcpResponse{JSONRPC: "2.0", Error: newMCPError(-32602, "unknown tool: "+req.Name)}

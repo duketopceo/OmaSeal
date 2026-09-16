@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -28,26 +29,39 @@ Usage:
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
-  omaseal mcp install <claude|codex|cursor|devin|agy|hermes> [--dir <path>]
-                                           write mcp config for an agent
-  omaseal mcp install-all [path]            write mcp config for every known agent
+  omaseal mcp install <agent> [--dir .]    write mcp config for one agent
+  omaseal mcp install-detected             wire every detected + assigned agent
+  omaseal mcp install-all                  write mcp config for every known agent
+  omaseal mcp status [--json]              show detected/installed agent configs
   omaseal ipc <method> <json-args>         JSON IPC for other plugins
   omaseal ping                             health check (json with --json)
+  omaseal selftest                         keyring round-trip test
   omaseal doctor                           check the environment and dependencies
   omaseal logs [n]                         show recent non-secret log lines
-  omaseal setup                            onboarding guide and MCP config
+  omaseal setup [--yes]                    onboarding: doctor + agent wiring
   omaseal agent mode <open|ask|lock> [min] set agent/MCP trust mode
   omaseal agent unlock                     biometric unlock for ask mode
   omaseal agent lock                       revoke agent session
-  omaseal agent status                     show agent policy and session
+  omaseal agent status [--json]            show agent policy and session
+  omaseal agent keepalive [on|off]         session renews on activity (ask mode)
+  omaseal agent primary <name>             set your main agent
+  omaseal agent defaults [names...|--clear] set assigned default agents
+
+References:
+  Everywhere <service> <account> is accepted, a single omaseal://<service>/<account>
+  reference works too; the account may contain '/' (e.g. omaseal://browseros/
+  openrouter-work/apiKey). 'omaseal list' accepts omaseal://<service>[/].
 
 Examples:
   omaseal set openrouter default < secret.txt
   omaseal get openrouter default
+  omaseal get omaseal://openrouter/default
   omaseal reveal openrouter default
   omaseal del openrouter default
   omaseal list
+  omaseal list omaseal://browseros/
   omaseal resolve openrouter default
+  omaseal resolve omaseal://browseros/openrouter-work/apiKey
   omaseal import 1password pace-dev
   omaseal ipc ping '{}'
   omaseal ipc get '{"service":"openrouter","account":"default"}'
@@ -88,6 +102,10 @@ func main() {
 			handleMCPInstall()
 		} else if len(os.Args) >= 3 && os.Args[2] == "install-all" {
 			handleMCPInstallAll()
+		} else if len(os.Args) >= 3 && os.Args[2] == "install-detected" {
+			handleMCPInstallDetected()
+		} else if len(os.Args) >= 3 && os.Args[2] == "status" {
+			handleMCPStatus()
 		} else {
 			runMCP()
 		}
@@ -95,6 +113,8 @@ func main() {
 		handleIPC()
 	case "ping":
 		handlePing()
+	case "selftest":
+		handleSelfTest()
 	case "doctor":
 		handleDoctor()
 	case "logs":
@@ -112,11 +132,12 @@ func main() {
 }
 
 func handleSet() {
-	if len(os.Args) != 4 {
+	service, account, err := argCredentials(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
 		os.Exit(1)
 	}
-	service, account := os.Args[2], os.Args[3]
 	secret, err := readSecret()
 	if err != nil {
 		printError("reading secret: ", err)
@@ -135,11 +156,12 @@ func handleSet() {
 }
 
 func handleGet() {
-	if len(os.Args) != 4 {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
 		os.Exit(1)
 	}
-	service, account := os.Args[2], os.Args[3]
 	secret, err := Get(service, account)
 	if err != nil {
 		printError("retrieving secret: ", err)
@@ -150,11 +172,12 @@ func handleGet() {
 }
 
 func handleDel() {
-	if len(os.Args) != 4 {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
 		os.Exit(1)
 	}
-	service, account := os.Args[2], os.Args[3]
 	if err := Delete(service, account); err != nil {
 		printError("deleting secret: ", err)
 		os.Exit(1)
@@ -166,8 +189,7 @@ func handleDel() {
 func handleList() {
 	jsonOut := hasFlag(os.Args, "--json")
 
-	var service string
-	serviceSet := false
+	var positionals []string
 	for i := 2; i < len(os.Args); i++ {
 		if os.Args[i] == "--json" {
 			continue
@@ -176,12 +198,12 @@ func handleList() {
 			fmt.Fprintln(os.Stderr, "error: unknown flag:", os.Args[i])
 			os.Exit(1)
 		}
-		if serviceSet {
-			fmt.Fprintln(os.Stderr, "error: list accepts at most one service argument")
-			os.Exit(1)
-		}
-		service = os.Args[i]
-		serviceSet = true
+		positionals = append(positionals, os.Args[i])
+	}
+	service, err := argService(positionals)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
 	}
 
 	items, err := List(service)
@@ -211,20 +233,22 @@ func handleList() {
 }
 
 func handleReveal() {
-	if len(os.Args) != 4 {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
 		os.Exit(1)
 	}
-	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", os.Args[2], os.Args[3])); err != nil {
+	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", service, account)); err != nil {
 		printError("fingerprint gate: ", err)
 		os.Exit(1)
 	}
-	secret, err := Get(os.Args[2], os.Args[3])
+	secret, err := Get(service, account)
 	if err != nil {
 		printError("getting secret: ", err)
 		os.Exit(1)
 	}
-	WriteLog("reveal %s/%s", os.Args[2], os.Args[3])
+	WriteLog("reveal %s/%s", service, account)
 	fmt.Print(secret)
 }
 
@@ -240,16 +264,18 @@ func handleIPC() {
 }
 
 func handleResolve() {
-	if len(os.Args) != 4 {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()
 		os.Exit(1)
 	}
-	secret, err := Resolve(context.Background(), os.Args[2], os.Args[3], true, true)
+	secret, err := Resolve(context.Background(), service, account, true, true)
 	if err != nil {
 		printError("resolving secret: ", err)
 		os.Exit(1)
 	}
-	WriteLog("resolve %s/%s", os.Args[2], os.Args[3])
+	WriteLog("resolve %s/%s", service, account)
 	fmt.Print(secret)
 }
 
@@ -314,6 +340,65 @@ func handleLogs() {
 	}
 }
 
+// handleSelfTest runs a set/get/delete round-trip against the live keyring.
+// Agents and users can call it to verify the whole stack end to end.
+func handleSelfTest() {
+	service := "omaseal-selftest"
+	account := fmt.Sprintf("selftest-%d", os.Getpid())
+	secret := fmt.Sprintf("omaseal-selftest-%d", time.Now().UnixNano())
+
+	fail := func(step string, err error) {
+		printError("selftest "+step+": ", err)
+		os.Exit(1)
+	}
+
+	if err := Set(service, account, secret); err != nil {
+		fail("set", err)
+	}
+	got, err := Get(service, account)
+	if err != nil {
+		_ = Delete(service, account)
+		fail("get", err)
+	}
+	if got != secret {
+		_ = Delete(service, account)
+		fail("compare", fmt.Errorf("round-trip mismatch"))
+	}
+	if err := Delete(service, account); err != nil {
+		fail("delete", err)
+	}
+	// Only a not-found error proves the delete took effect; any other error
+	// (keyring outage, permission) would falsely pass the verification.
+	if _, err := Get(service, account); err == nil {
+		fail("verify-delete", fmt.Errorf("secret still readable after delete"))
+	} else if codeFromError(err) != "not_found" {
+		fail("verify-delete", err)
+	}
+	WriteLog("selftest passed")
+	fmt.Println("selftest ok: set/get/delete round-trip passed")
+}
+
+// readSecretDeadline reads stdin like readSecret but gives up after d, so
+// callers that cannot see their caller's stdin (IPC) fail instead of hanging
+// on a held-open pipe.
+func readSecretDeadline(d time.Duration) (string, error) {
+	type result struct {
+		s   string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		b, err := io.ReadAll(os.Stdin)
+		ch <- result{strings.TrimSuffix(string(b), "\n"), err}
+	}()
+	select {
+	case r := <-ch:
+		return r.s, r.err
+	case <-time.After(d):
+		return "", fmt.Errorf("timed out waiting for the secret on stdin")
+	}
+}
+
 // readSecret reads a secret from stdin without a trailing newline.
 func readSecret() (string, error) {
 	if !isStdinTTY() {
@@ -334,11 +419,11 @@ func readSecret() (string, error) {
 }
 
 func isStdinTTY() bool {
-	stat, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (stat.Mode() & os.ModeCharDevice) != 0
+	return isTerminal(os.Stdin)
+}
+
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func hasFlag(args []string, name string) bool {

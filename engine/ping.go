@@ -1,15 +1,10 @@
 package main
 
-import (
-	"encoding/json"
-	"fmt"
-	"os"
-)
-
 type pingCheck struct {
-	Name    string `json:"name"`
-	Ok      bool   `json:"ok"`
-	Message string `json:"message"`
+	Name     string `json:"name"`
+	Ok       bool   `json:"ok"`
+	Optional bool   `json:"optional,omitempty"`
+	Message  string `json:"message"`
 }
 
 type pingResult struct {
@@ -26,29 +21,5 @@ func handlePing() {
 }
 
 func runPing() {
-	results := doctorChecks()
-	checks := make([]pingCheck, len(results))
-	ok := true
-	for i, r := range results {
-		checks[i] = pingCheck{Name: r.name, Ok: r.ok, Message: r.message}
-		if !r.ok {
-			ok = false
-		}
-	}
-
-	res := pingResult{
-		Version: version,
-		Commit:  commit,
-		Target:  target(),
-		Ok:      ok,
-		Checks:  checks,
-		Help:    "omaseal doctor",
-	}
-
-	b, err := json.MarshalIndent(res, "", "  ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error marshaling ping result:", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(b))
+	emitCheckJSON(doctorChecks(), "omaseal doctor")
 }

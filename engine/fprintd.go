@@ -35,7 +35,7 @@ func fprintdAvailable(ctx context.Context) error {
 
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
-	if err := mgr.Call(fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
+	if err := mgr.CallWithContext(ctx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
 		return fmt.Errorf("fprintd has no default device: %w", err)
 	}
 	if devicePath == "" || devicePath == "/" {
