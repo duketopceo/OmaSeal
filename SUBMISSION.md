@@ -30,14 +30,15 @@ Key features:
 Installation:
 
 ```sh
-yay -S omaseal
-# or for the prebuilt binary
 yay -S omaseal-bin
 ```
 
 Removal:
 
 ```sh
+# packaged (AUR) install:
+sudo pacman -R omaseal-bin
+# install.sh install:
 omarchy plugin disable io.github.duketopceo.omaseal
 omarchy plugin remove io.github.duketopceo.omaseal
 rm -f ~/.local/bin/omaseal
