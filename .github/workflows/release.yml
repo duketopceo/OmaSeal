@@ -102,23 +102,25 @@ jobs:
   bump-packaging:
     needs: release
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    # Digest-pinned: this job holds contents:write + pull-requests:write, so
+    # the image that executes it must not be a mutable tag. Review and bump
+    # the digest deliberately (archlinux:latest rebuilds roughly monthly).
+    container: archlinux@sha256:204e91950fd364961088a01773eee9012243b7e965fed42b1d82d12416190782 # latest
     permissions:
       contents: write
       pull-requests: write
     steps:
-      # archlinux:latest ships no git, and without git in PATH checkout falls
-      # back to a REST-API tarball with no .git — every git/gh step below
-      # would die. Install git BEFORE checkout so it produces a real clone.
-      - name: Install git (required for checkout to produce a real .git)
-        run: pacman -Sy --noconfirm --needed git
+      # archlinux ships no git, and without git in PATH checkout falls back
+      # to a REST-API tarball with no .git — every git/gh step below would
+      # die. Install BEFORE checkout, and use -Syu (not -Sy): a partial
+      # upgrade can leave a git built against unsynced libraries.
+      # makepkg ships in pacman (already installed); no toolchain needed —
+      # bump.sh only runs makepkg --printsrcinfo, never a build.
+      - name: Full system upgrade + install git and gh
+        run: pacman -Syu --noconfirm --needed git github-cli
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Install tools
-        # makepkg ships in pacman (already installed); no toolchain needed —
-        # bump.sh only runs makepkg --printsrcinfo, never a build.
-        run: pacman -Syu --noconfirm --needed github-cli
       - name: Bump packaging and open PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

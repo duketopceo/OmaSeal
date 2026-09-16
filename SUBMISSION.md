@@ -37,7 +37,7 @@ Removal:
 
 ```sh
 # packaged (AUR) install:
-pacman -R omaseal-bin
+sudo pacman -R omaseal-bin
 # install.sh install:
 omarchy plugin disable io.github.duketopceo.omaseal
 omarchy plugin remove io.github.duketopceo.omaseal

@@ -60,6 +60,13 @@ case "$asc_code" in
   200)
     [ -n "${OMASEAL_SIGNING_FINGERPRINT:-}" ] \
       || die "release ${TAG} is signed but OMASEAL_SIGNING_FINGERPRINT is unset — cannot verify"
+    # Require a full fingerprint: a short key ID can resolve to a different
+    # key on the keyserver, and bare `gpg --verify` success only proves
+    # *some* key in the keyring signed — not the one we configured.
+    FP="${OMASEAL_SIGNING_FINGERPRINT//[[:space:]]/}"
+    FP="${FP^^}"
+    [[ "$FP" =~ ^[0-9A-F]{40}$|^[0-9A-F]{64}$ ]] \
+      || die "OMASEAL_SIGNING_FINGERPRINT must be a 40- or 64-char hex fingerprint: ${OMASEAL_SIGNING_FINGERPRINT}"
     command -v gpg >/dev/null || die "gpg not found — needed to verify the signed release"
     export GNUPGHOME="$TMP/gnupg"
     mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
@@ -67,12 +74,19 @@ case "$asc_code" in
     KEYSERVER="${OMASEAL_KEYSERVER:-keyserver.ubuntu.com}"
     gpg --batch --yes --no-default-keyring --keyring "$KEYRING" \
         --keyserver "$KEYSERVER" --keyserver-options timeout=10 \
-        --recv-keys "$OMASEAL_SIGNING_FINGERPRINT" >/dev/null 2>&1 \
-      || die "could not fetch signing key ${OMASEAL_SIGNING_FINGERPRINT} from ${KEYSERVER}"
-    gpg --batch --yes --no-default-keyring --keyring "$KEYRING" \
-        --verify "$TMP/sha256sums.txt.asc" "$TMP/sha256sums.txt" >/dev/null 2>&1 \
+        --recv-keys "$FP" >/dev/null 2>&1 \
+      || die "could not fetch signing key ${FP} from ${KEYSERVER}"
+    # --status-fd gives machine-parseable output. VALIDSIG carries the
+    # signing-key fpr at $3 and the primary-key fpr in the last field —
+    # check both so signing via a subkey still binds to the configured
+    # primary fingerprint.
+    status=$(gpg --batch --status-fd=1 --no-default-keyring --keyring "$KEYRING" \
+        --verify "$TMP/sha256sums.txt.asc" "$TMP/sha256sums.txt" 2>/dev/null) \
       || die "GPG signature verification failed for ${TAG}"
-    echo "GPG signature verified (fingerprint: ${OMASEAL_SIGNING_FINGERPRINT})."
+    awk -v fp="$FP" '$1=="[GNUPG:]" && $2=="VALIDSIG" && ($3==fp || $NF==fp) {ok=1} END{exit !ok}' \
+      <<<"$status" \
+      || die "signature valid but NOT from configured fingerprint ${FP}"
+    echo "GPG signature verified (fingerprint: ${FP})."
     ;;
   404)
     [ "$ALLOW_UNSIGNED" -eq 1 ] \

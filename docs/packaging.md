@@ -87,7 +87,7 @@ yourself rather than through an agent.
   the shell prefers over a same-ID copy in `~/.config/omarchy/plugins`.
   Installing the package silently switches which copy runs; removing it
   resurrects the stale user copy.
-- Removal of a packaged install is `pacman -R omaseal-bin`, not the
+- Removal of a packaged install is `sudo pacman -R omaseal-bin`, not the
   `rm ~/.local/bin/omaseal` path that applies to `install.sh` installs.
 - It coexists with upstream Omarchy's `secrets` panel under a different
   plugin ID.
