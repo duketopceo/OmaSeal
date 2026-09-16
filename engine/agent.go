@@ -39,7 +39,10 @@ func defaultAgentPolicy() AgentPolicy {
 	return AgentPolicy{Mode: "open", SessionMinutes: 15}
 }
 
-func agentConfigDir() string {
+// omasealConfigDir resolves $XDG_CONFIG_HOME/omaseal (or ~/.config/omaseal)
+// without creating it — write paths layer MkdirAll on top so reads never
+// conjure the directory as a side effect.
+func omasealConfigDir() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -48,7 +51,14 @@ func agentConfigDir() string {
 		}
 		base = filepath.Join(home, ".config")
 	}
-	dir := filepath.Join(base, agentConfigDirName)
+	return filepath.Join(base, agentConfigDirName)
+}
+
+func agentConfigDir() string {
+	dir := omasealConfigDir()
+	if dir == "" {
+		return ""
+	}
 	_ = os.MkdirAll(dir, 0700)
 	return dir
 }
@@ -188,18 +198,25 @@ func CheckAgentOperation(op string) error {
 	case "lock":
 		return newError("agent_locked", "omaseal agent mode open", fmt.Errorf("agent access is locked"))
 	case "ask":
-		expiry, ok := readSessionExpiry()
-		if ok && time.Now().UTC().Before(expiry) {
-			if p.KeepAlive {
-				// Sliding window: each authorized op renews the session for
-				// another SessionMinutes; it lapses after that much inactivity.
-				_ = renewSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
-			}
+		if agentSessionActive(p) {
 			return nil
 		}
 		return newError("agent_unauthorized", "omaseal agent unlock", fmt.Errorf("agent must unlock before %s", op))
 	}
 	return nil
+}
+
+// agentSessionActive reports whether an unlock session is currently valid.
+// With keep-alive on, each authorized check slides the window forward.
+func agentSessionActive(p AgentPolicy) bool {
+	expiry, ok := readSessionExpiry()
+	if !ok || !time.Now().UTC().Before(expiry) {
+		return false
+	}
+	if p.KeepAlive {
+		_ = renewSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
+	}
+	return true
 }
 
 // SetAgentMode changes the persistent agent policy, preserving keep-alive,
@@ -224,9 +241,6 @@ func UnlockAgent() error {
 	p, err := loadAgentPolicy()
 	if err != nil {
 		return err
-	}
-	if p.Mode == "open" {
-		return fmt.Errorf("agent mode is already open; unlocking is not needed")
 	}
 	if p.Mode == "lock" {
 		return fmt.Errorf("agent mode is locked; run `omaseal agent mode ask` (or open) first")

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -111,7 +112,11 @@ const mcpInstructions = `OmaSeal is the system keyring on this Omarchy machine �
 	`store it with omaseal_set — never write secrets to files, dotfiles, shell arguments, or logs. ` +
 	`omaseal_list returns service/account metadata only (no values) and is safe for discovering what is stored. ` +
 	`A stored omaseal://<service>/<account> reference may be passed verbatim in the service field of any tool. ` +
+	`omaseal_stats reports per-secret access counts so you can find the credential the user means by its usage. ` +
+	`Per-secret access is governed by ~/.config/omaseal/ai-manifest.txt: ALLOW secrets read freely, ` +
+	`ASK secrets need an unlocked session, DENY secrets are refused with code manifest_denied. ` +
 	`If a call fails with code agent_unauthorized, tell the user to run "omaseal agent unlock"; ` +
+	`for manifest_denied, do not retry — suggest the user review the rule with "omaseal manifest check <service> <account>"; ` +
 	`for not_found, suggest "omaseal set <service> <account>" or omaseal_set.`
 
 func initMCPResult() map[string]any {
@@ -172,10 +177,22 @@ var mcpToolsResult = map[string]any{
 		},
 		{
 			"name":        "omaseal_list",
-			"description": "List secrets in the local keyring. Optionally filter by service. Returns metadata only; no secret values.",
+			"description": "List secrets in the local keyring. Optionally filter by service and sort by usage. Returns metadata only; no secret values. Each item carries access_count, last_accessed, and owned (true when OmaSeal wrote it).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"service": map[string]string{"type": "string"},
+					"sort":    map[string]string{"type": "string", "enum": "used|recent|name"},
+				},
+				"required": []string{},
+			},
+		},
+		{
+			"name":        "omaseal_stats",
+			"description": "Report keyring usage analytics: total accesses and per-secret access counts/last-accessed times, most-used first. Metadata only; no secret values.",
 			"inputSchema": map[string]any{
 				"type":       "object",
-				"properties": map[string]any{"service": map[string]string{"type": "string"}},
+				"properties": map[string]any{},
 				"required":   []string{},
 			},
 		},
@@ -211,10 +228,77 @@ func toolOperation(name string) string {
 		return "set"
 	case "omaseal_delete":
 		return "delete"
-	case "omaseal_list":
+	case "omaseal_list", "omaseal_stats":
 		return "list"
 	}
 	return ""
+}
+
+// checkManifestPolicy enforces the per-secret AI access manifest on agent
+// reads and writes. DENY rejects outright; ASK requires an unlocked session
+// even when the global agent mode is open; ALLOW proceeds. A missing or
+// empty manifest applies no per-secret policy.
+func checkManifestPolicy(service, account string) error {
+	m, err := LoadManifest()
+	if err != nil {
+		return newError("manifest_error", "omaseal manifest",
+			fmt.Errorf("AI manifest unreadable; refusing agent access: %w", err))
+	}
+	if m == nil || len(m.Rules) == 0 {
+		return nil
+	}
+	policy, desc := m.CheckPolicy(service, account)
+	switch policy {
+	case PolicyDeny:
+		return newError("manifest_denied", "omaseal manifest check "+service+" "+account,
+			fmt.Errorf("AI manifest denies agent access to %s/%s (%s)", service, account, desc))
+	case PolicyAsk:
+		p, _ := loadAgentPolicy()
+		if !agentSessionActive(p) {
+			return newError("agent_unauthorized", "omaseal agent unlock",
+				fmt.Errorf("manifest requires confirmation for %s/%s (%s)", service, account, desc))
+		}
+	}
+	return nil
+}
+
+// loadManifestClosed loads the AI manifest for enumeration filtering. A
+// missing or empty manifest denies nothing; an unreadable manifest fails
+// closed — callers surface the error rather than enumerate secrets they
+// cannot filter correctly.
+func loadManifestClosed() (*Manifest, error) {
+	m, err := LoadManifest()
+	if err != nil {
+		return nil, newError("manifest_error", "omaseal manifest",
+			fmt.Errorf("AI manifest unreadable; refusing agent access: %w", err))
+	}
+	return m, nil
+}
+
+// manifestDenies reports whether the manifest denies a specific credential,
+// evaluating pattern rules (including wildcard forms) per item.
+func manifestDenies(m *Manifest, service, account string) bool {
+	if m == nil {
+		return false
+	}
+	policy, _ := m.CheckPolicy(service, account)
+	return policy == PolicyDeny
+}
+
+// manifestDeniesPayload evaluates a raw "service/account" log payload. When
+// a name contains "/" the split point is ambiguous; a DENY on any valid
+// decomposition hides the entry — over-hiding a stat row is cosmetic, while
+// under-hiding leaks a denied credential's existence.
+func manifestDeniesPayload(m *Manifest, payload string) bool {
+	if m == nil {
+		return false
+	}
+	for i := 0; i < len(payload); i++ {
+		if payload[i] == '/' && manifestDenies(m, payload[:i], payload[i+1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func callMCPTool(req mcpToolCall) *mcpResponse {
@@ -240,10 +324,14 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if err := checkManifestPolicy(service, account); err != nil {
+			return toolErrorResp(req, err)
+		}
 		v, err := Get(service, account)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		WriteLog("access %s/%s", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
 	case "omaseal_resolve":
@@ -258,10 +346,14 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if err := checkManifestPolicy(service, account); err != nil {
+			return toolErrorResp(req, err)
+		}
 		v, err := Resolve(context.Background(), service, account, true, false)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		WriteLog("access %s/%s", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 
 	case "omaseal_set":
@@ -277,6 +369,9 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		// stored entries stay reachable and promptable everywhere.
 		service, account, err := refAwareCredentials(a.Service, a.Account, true)
 		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if err := checkManifestPolicy(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
 		if err := Set(service, account, a.Secret); err != nil {
@@ -296,6 +391,9 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if err := checkManifestPolicy(service, account); err != nil {
+			return toolErrorResp(req, err)
+		}
 		if err := Delete(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -304,6 +402,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 	case "omaseal_list":
 		var a struct {
 			Service string `json:"service"`
+			Sort    string `json:"sort"`
 		}
 		if len(req.Arguments) > 0 {
 			if err := json.Unmarshal(req.Arguments, &a); err != nil {
@@ -314,11 +413,43 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
-		items, err := List(service)
+		items, err := listWithUsage(service, a.Sort)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
+		if m, err := loadManifestClosed(); err != nil {
+			return toolErrorResp(req, err)
+		} else {
+			visible := items[:0]
+			for _, it := range items {
+				if !manifestDenies(m, it.Service, it.Account) {
+					visible = append(visible, it)
+				}
+			}
+			items = visible
+		}
 		b, err := json.Marshal(items)
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		r.Content = append(r.Content, map[string]any{"type": "text", "text": string(b)})
+
+	case "omaseal_stats":
+		statsMap, err := ParseAccessLogs()
+		if err != nil {
+			return toolErrorResp(req, err)
+		}
+		if m, err := loadManifestClosed(); err != nil {
+			return toolErrorResp(req, err)
+		} else if m != nil {
+			for k := range statsMap {
+				if manifestDeniesPayload(m, k) {
+					delete(statsMap, k)
+				}
+			}
+		}
+		report := BuildAnalyticsReport(statsMap)
+		b, err := json.Marshal(report)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}

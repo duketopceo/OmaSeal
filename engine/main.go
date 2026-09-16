@@ -24,7 +24,10 @@ Usage:
   omaseal get <service> <account>          print stored secret
   omaseal reveal <service> <account>       print secret after fprintd gate
   omaseal del <service> <account>          delete stored secret
-  omaseal list [service] [--json]          list stored secrets
+  omaseal list [service] [--json] [--sort=used|recent|name]
+                                           list stored secrets (optionally sorted)
+  omaseal stats [--json]                   display access analytics & usage leaderboard
+  omaseal manifest [show|init|check|path]  AI agent access policy (robots.txt format)
   omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
@@ -58,8 +61,11 @@ Examples:
   omaseal get omaseal://openrouter/default
   omaseal reveal openrouter default
   omaseal del openrouter default
-  omaseal list
+  omaseal list --sort=used
   omaseal list omaseal://browseros/
+  omaseal stats
+  omaseal manifest
+  omaseal manifest check openrouter default
   omaseal resolve openrouter default
   omaseal resolve omaseal://browseros/openrouter-work/apiKey
   omaseal import 1password pace-dev
@@ -93,8 +99,14 @@ func main() {
 		handleDel()
 	case "list":
 		handleList()
+	case "stats", "analytics":
+		handleStats()
+	case "manifest", "robots":
+		handleManifest()
 	case "resolve":
 		handleResolve()
+	case "clipclear":
+		handleClipclear()
 	case "import":
 		handleImport()
 	case "mcp":
@@ -190,15 +202,21 @@ func handleList() {
 	jsonOut := hasFlag(os.Args, "--json")
 
 	var positionals []string
+	sortMode := ""
 	for i := 2; i < len(os.Args); i++ {
-		if os.Args[i] == "--json" {
-			continue
-		}
-		if strings.HasPrefix(os.Args[i], "-") {
-			fmt.Fprintln(os.Stderr, "error: unknown flag:", os.Args[i])
+		arg := os.Args[i]
+		switch {
+		case arg == "--json":
+		case arg == "--hits":
+			sortMode = "used"
+		case strings.HasPrefix(arg, "--sort=") || strings.HasPrefix(arg, "--sort-by="):
+			sortMode = arg[strings.Index(arg, "=")+1:]
+		case strings.HasPrefix(arg, "-"):
+			fmt.Fprintln(os.Stderr, "error: unknown flag:", arg)
 			os.Exit(1)
+		default:
+			positionals = append(positionals, arg)
 		}
-		positionals = append(positionals, os.Args[i])
 	}
 	service, err := argService(positionals)
 	if err != nil {
@@ -206,7 +224,7 @@ func handleList() {
 		os.Exit(1)
 	}
 
-	items, err := List(service)
+	items, err := listWithUsage(service, sortMode)
 	if err != nil {
 		printError("listing secrets: ", err)
 		os.Exit(1)
@@ -225,9 +243,20 @@ func handleList() {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SERVICE\tACCOUNT\tLABEL")
-	for _, it := range items {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", it.Service, it.Account, it.Label)
+	if sortMode == "used" || sortMode == "hits" || sortMode == "recent" {
+		fmt.Fprintln(w, "SERVICE\tACCOUNT\tHITS\tLAST ACCESSED\tLABEL")
+		for _, it := range items {
+			last := "-"
+			if it.LastAccessed != nil {
+				last = it.LastAccessed.Format("2006-01-02 15:04:05")
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", sanitizeField(it.Service), sanitizeField(it.Account), it.AccessCount, last, sanitizeField(it.Label))
+		}
+	} else {
+		fmt.Fprintln(w, "SERVICE\tACCOUNT\tLABEL")
+		for _, it := range items {
+			fmt.Fprintf(w, "%s\t%s\t%s\n", sanitizeField(it.Service), sanitizeField(it.Account), sanitizeField(it.Label))
+		}
 	}
 	w.Flush()
 }
@@ -340,41 +369,48 @@ func handleLogs() {
 	}
 }
 
-// handleSelfTest runs a set/get/delete round-trip against the live keyring.
-// Agents and users can call it to verify the whole stack end to end.
-func handleSelfTest() {
+// selftestRoundTrip runs a set/get/delete round-trip against the live keyring.
+// The probe uses a fixed name and is removed before writing, so a key left
+// behind by a timed-out or killed run is cleaned up on the next run.
+func selftestRoundTrip() error {
 	service := "omaseal-selftest"
-	account := fmt.Sprintf("selftest-%d", os.Getpid())
+	account := "selftest"
 	secret := fmt.Sprintf("omaseal-selftest-%d", time.Now().UnixNano())
 
-	fail := func(step string, err error) {
-		printError("selftest "+step+": ", err)
-		os.Exit(1)
-	}
-
+	_ = Delete(service, account) // clear any orphan from a previous timed-out run
 	if err := Set(service, account, secret); err != nil {
-		fail("set", err)
+		return fmt.Errorf("set: %w", err)
 	}
 	got, err := Get(service, account)
 	if err != nil {
 		_ = Delete(service, account)
-		fail("get", err)
+		return fmt.Errorf("get: %w", err)
 	}
 	if got != secret {
 		_ = Delete(service, account)
-		fail("compare", fmt.Errorf("round-trip mismatch"))
+		return fmt.Errorf("compare: round-trip mismatch")
 	}
 	if err := Delete(service, account); err != nil {
-		fail("delete", err)
+		return fmt.Errorf("delete: %w", err)
 	}
 	// Only a not-found error proves the delete took effect; any other error
 	// (keyring outage, permission) would falsely pass the verification.
 	if _, err := Get(service, account); err == nil {
-		fail("verify-delete", fmt.Errorf("secret still readable after delete"))
+		return fmt.Errorf("verify-delete: secret still readable after delete")
 	} else if codeFromError(err) != "not_found" {
-		fail("verify-delete", err)
+		return fmt.Errorf("verify-delete: %w", err)
 	}
 	WriteLog("selftest passed")
+	return nil
+}
+
+// handleSelfTest runs a set/get/delete round-trip against the live keyring.
+// Agents and users can call it to verify the whole stack end to end.
+func handleSelfTest() {
+	if err := selftestRoundTrip(); err != nil {
+		printError("selftest ", err)
+		os.Exit(1)
+	}
 	fmt.Println("selftest ok: set/get/delete round-trip passed")
 }
 

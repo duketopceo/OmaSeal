@@ -44,7 +44,13 @@ Each agent's real config path is used (for example Codex's
 keys in those files are preserved, and writes are atomic so a crash cannot
 truncate the file.
 
-Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`, `omaseal_status` (read-only agent/session state).
+Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list` (with `sort: used|recent|name`), `omaseal_stats` (usage analytics), `omaseal_status` (read-only agent/session state).
+
+**Shared namespace:** OmaSeal addresses items by `service`/`account` attributes only — reads, updates, and deletes do not require OmaSeal to have written the item, so credentials stored by other tools (`omarchy-secrets-*`, keytar, seahorse) are visible to `omaseal get`/`list`, `omaseal set` updates them in place, and `omaseal del` removes them. Items OmaSeal creates carry an `app=oma-ring` attribute purely as provenance — list output flags them `owned: true`; foreign rows show `external` in the panel. Note this widens `omaseal_list`: it enumerates every `service`/`account` item in the keyring, including ones written by other applications — those are already readable by any same-user process via `secret-tool`, so no new exposure is introduced, but agent trust modes (`omaseal agent …`) now gate access to foreign items too.
+
+**Per-secret AI policy (ai-manifest):** `~/.config/omaseal/ai-manifest.txt` is a robots.txt-style file governing agent (MCP) access per secret: `ALLOW` reads freely, `ASK` requires an unlocked session even in open mode (`omaseal agent unlock` creates one), `DENY` refuses the call with code `manifest_denied` and hides the credential from `omaseal_list`/`omaseal_stats`. Generate a starting manifest with `omaseal manifest init`, inspect it with `omaseal manifest`, and query a rule with `omaseal manifest check <service> <account>`.
+
+Scope: the manifest and agent trust modes gate **agent channels only** — the MCP server that wired agents use. The CLI and the JSON IPC channel are trusted local surfaces for the user, the panel, and shell plugins; they bypass agent modes and the manifest, and should only be invoked by same-user programs. An agent with unrestricted shell access can bypass the policy entirely — DENY governs the sanctioned agent path, it is not OS-level confinement.
 
 Agents should:
 - call `omaseal_set` or `omaseal_resolve` rather than reading dotfiles

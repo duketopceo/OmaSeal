@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // runSetup is the guided onboarding path: verify the environment, show which
@@ -74,7 +75,26 @@ func runSetup() {
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "=== Verify ===")
-	fmt.Fprintln(os.Stderr, "Run `omaseal selftest` for a keyring round-trip check.")
+	// The round-trip may block on a keyring unlock prompt; bound it so a
+	// headless or unattended setup cannot hang forever.
+	testCh := make(chan error, 1)
+	go func() { testCh <- selftestRoundTrip() }()
+	select {
+	case err := <-testCh:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "selftest failed: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "selftest ok: set/get/delete round-trip passed")
+		}
+	case <-time.After(30 * time.Second):
+		fmt.Fprintln(os.Stderr, "selftest timed out (keyring may be locked) — run `omaseal selftest` after unlocking")
+		// The abandoned round-trip may still land its probe Set after the
+		// prompt resolves; remove it once it would have finished.
+		go func() {
+			time.Sleep(60 * time.Second)
+			_ = Delete("omaseal-selftest", "selftest")
+		}()
+	}
 	fmt.Fprintln(os.Stderr, "Agents pick up OmaSeal on their next start; the MCP server tells them to use it.")
 	if loadAgentPolicyOrDefault().Mode == "open" {
 		fmt.Fprintln(os.Stderr)

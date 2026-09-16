@@ -37,6 +37,19 @@ Panel {
   property bool agentKeepAlive: false
   property bool fprintdAvailable: true
 
+  // Organization state
+  property bool expanded: false
+  onExpandedChanged: root.rebuildModel()
+  property string serviceFilter: ""      // "" = all vaults
+  onServiceFilterChanged: root.rebuildModel()
+  property string sortMode: "used"       // "used" | "recent" | "name"
+  onSortModeChanged: root.rebuildModel()
+  property int collapsedLimit: 14
+  property var serviceGroups: []         // SearchableDropdown options
+  property int hiddenCount: 0
+  property int totalAccesses: 0
+  property string topSecretLabel: ""
+
   Component {
     id: setProcComponent
     Process {
@@ -51,8 +64,26 @@ Panel {
     id: copyProcComponent
     Process {
       stdinEnabled: true
-      command: ["wl-copy", "--sensitive", "--clear-after", "30"]
+      command: ["wl-copy", "--sensitive"]
     }
+  }
+
+  // This wl-clipboard build has no --clear-after flag, so the panel clears
+  // the selection itself 30s after a successful copy. `omaseal clipclear`
+  // clears only when the clipboard still holds that secret, so a stale
+  // timer cannot wipe whatever the user copied in the meantime.
+  property var lastCopied: null
+  Timer {
+    id: clipboardClearTimer
+    interval: 30000
+    onTriggered: {
+      if (root.lastCopied === null) return
+      clipboardClearProc.command = ["omaseal", "clipclear", root.lastCopied.service, root.lastCopied.account]
+      clipboardClearProc.running = true
+    }
+  }
+  Process {
+    id: clipboardClearProc
   }
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
@@ -90,6 +121,30 @@ Panel {
     return service + "\u0001" + account
   }
 
+  function ago(iso) {
+    if (!iso) return ""
+    var d = new Date(iso)
+    if (isNaN(d.getTime())) return ""
+    var s = (Date.now() - d.getTime()) / 1000
+    if (s < 0) s = 0
+    if (s < 90) return "now"
+    if (s < 3600) return Math.floor(s / 60) + "m"
+    if (s < 86400) return Math.floor(s / 3600) + "h"
+    if (s < 86400 * 30) return Math.floor(s / 86400) + "d"
+    if (s < 86400 * 365) return Math.floor(s / (86400 * 30)) + "mo"
+    return Math.floor(s / (86400 * 365)) + "y"
+  }
+
+  function sortLabel() {
+    if (root.sortMode === "used") return "⇅ Used"
+    if (root.sortMode === "recent") return "⇅ Recent"
+    return "⇅ Name"
+  }
+
+  function cycleSort() {
+    root.sortMode = root.sortMode === "used" ? "recent" : (root.sortMode === "recent" ? "name" : "used")
+  }
+
   function refresh() {
     root.notice = ""
     root.pendingDeleteKey = ""
@@ -116,26 +171,102 @@ Panel {
     }
   }
 
+  // rebuildModel owns filtering, grouping, sorting, and the collapsed limit.
+  // Ordering: service filter -> text filter -> sort -> limit. Selection is
+  // preserved by identity across rebuilds.
   function rebuildModel() {
     var f = root.searchFilter.trim().toLowerCase()
-    // Preserve selection by identity: indexes shift under filtering/reloads.
     var selKey = ""
     if (root.selectedIndex >= 0 && root.selectedIndex < secretsModel.count) {
       var cur = secretsModel.get(root.selectedIndex)
       selKey = root.secretKey(cur.service, cur.account)
     }
-    var newIdx = -1
-    secretsModel.clear()
+
+    // Vault groups: one entry per distinct service, sorted by size.
+    var counts = {}
+    var names = []
+    for (var g = 0; g < root.allSecrets.length; g++) {
+      var gs = root.allSecrets[g].service || ""
+      if (!(gs in counts)) { counts[gs] = 0; names.push(gs) }
+      counts[gs]++
+    }
+    names.sort(function(a, b) {
+      var d = counts[b] - counts[a]
+      return d !== 0 ? d : (a.toLowerCase() < b.toLowerCase() ? -1 : 1)
+    })
+    var groups = [{ value: "", label: "All vaults", description: root.allSecrets.length + " secrets" }]
+    for (var n = 0; n < names.length; n++) {
+      groups.push({ value: names[n], label: names[n], description: counts[names[n]] + (counts[names[n]] === 1 ? " secret" : " secrets") })
+    }
+    root.serviceGroups = groups
+    if (root.serviceFilter !== "" && !(root.serviceFilter in counts)) {
+      root.serviceFilter = ""  // vault vanished — fall back to all
+    }
+
+    // Header stats strip (expanded view).
+    var accesses = 0, topHits = 0, topName = ""
+    for (var t = 0; t < root.allSecrets.length; t++) {
+      var h = root.allSecrets[t].access_count || 0
+      accesses += h
+      if (h > topHits) {
+        topHits = h
+        topName = (root.allSecrets[t].service || "") + "/" + (root.allSecrets[t].account || "")
+      }
+    }
+    root.totalAccesses = accesses
+    root.topSecretLabel = topName !== "" ? topName + " ×" + topHits : "—"
+
+    // Filter.
+    var rows = []
     for (var i = 0; i < root.allSecrets.length; i++) {
       var it = root.allSecrets[i]
+      if (root.serviceFilter !== "" && (it.service || "") !== root.serviceFilter) continue
       if (f !== "") {
         var hay = ((it.service || "") + "/" + (it.account || "") + " " + (it.label || "")).toLowerCase()
         if (hay.indexOf(f) === -1) continue
       }
+      rows.push(it)
+    }
+
+    // Sort — decorate once so the comparator never reparses dates or
+    // rebuilds key strings per comparison (O(n log n) calls otherwise).
+    for (var d = 0; d < rows.length; d++) {
+      rows[d]._key = ((rows[d].service || "") + "/" + (rows[d].account || "")).toLowerCase()
+      var t = rows[d].last_accessed ? +new Date(rows[d].last_accessed) : 0
+      rows[d]._ts = isNaN(t) ? 0 : t
+    }
+    rows.sort(function(a, b) {
+      if (root.sortMode === "name") {
+        return a._key < b._key ? -1 : (a._key > b._key ? 1 : 0)
+      }
+      if (root.sortMode === "recent") {
+        if (a._ts !== b._ts) return b._ts - a._ts
+      } else {
+        var ha = a.access_count || 0, hb = b.access_count || 0
+        if (ha !== hb) return hb - ha
+        if (a._ts !== b._ts) return b._ts - a._ts
+      }
+      return a._key < b._key ? -1 : (a._key > b._key ? 1 : 0)
+    })
+
+    // Collapsed limit — bypassed while searching or filtering a vault.
+    root.hiddenCount = 0
+    var shown = rows
+    if (!root.expanded && f === "" && root.serviceFilter === "" && rows.length > root.collapsedLimit) {
+      shown = rows.slice(0, root.collapsedLimit)
+      root.hiddenCount = rows.length - shown.length
+    }
+
+    var newIdx = -1
+    secretsModel.clear()
+    for (var r = 0; r < shown.length; r++) {
       var row = {
-        service: it.service || "",
-        account: it.account || "",
-        label: it.label || ""
+        service: shown[r].service || "",
+        account: shown[r].account || "",
+        label: shown[r].label || "",
+        hits: shown[r].access_count || 0,
+        lastTs: shown[r].last_accessed || "",
+        owned: shown[r].owned !== false
       }
       secretsModel.append(row)
       if (selKey !== "" && root.secretKey(row.service, row.account) === selKey) {
@@ -251,6 +382,10 @@ Panel {
     deleteConfirmTimer.stop()
     root.pendingDeleteKey = ""
     if (delProc.running) {
+      if (root.pendingDel !== null) {
+        root.notice = "Delete already queued — wait for it to finish"
+        return
+      }
       root.pendingDel = {service: service, account: account}
       root.notice = "Delete queued"
       return
@@ -338,7 +473,13 @@ Panel {
       if (exitCode === 0 && secret !== "") {
         var proc = copyProcComponent.createObject(root)
         proc.exited.connect(function(ec) {
-          root.notice = ec === 0 ? "Copied to clipboard (clears in 30s)" : "Copy failed"
+          if (ec === 0) {
+            root.notice = "Copied to clipboard (clears in 30s)"
+            root.lastCopied = {service: service, account: account}
+            clipboardClearTimer.restart()
+          } else {
+            root.notice = "Copy failed"
+          }
           proc.destroy()
         })
         proc.started.connect(function() {
@@ -532,13 +673,13 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(380), 460)
-    contentHeight: panel.fittedContentHeight(root.showLogs ? (logLoader.item ? logLoader.item.implicitHeight + Style.space(28) : Style.space(28)) : contentColumn.implicitHeight, 640)
+    contentWidth: root.expanded ? panel.fittedContentWidth(Style.space(920), 1180) : panel.fittedContentWidth(Style.space(380), 460)
+    contentHeight: panel.fittedContentHeight(root.showLogs ? (logLoader.item ? logLoader.item.implicitHeight + Style.space(28) : Style.space(28)) : contentColumn.implicitHeight, root.expanded ? 840 : 640)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus || searchField.activeFocus
+      blocked: serviceField.activeFocus || accountField.activeFocus || secretField.activeFocus || searchField.activeFocus || vaultDropdown.popupOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
@@ -563,6 +704,9 @@ Panel {
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
         else if (t === "a" || t === "A") root.isAdding = !root.isAdding
+        else if (t === "e" || t === "E") root.expanded = !root.expanded
+        else if (t === "s" || t === "S") root.cycleSort()
+        else if (t === "v" || t === "V") vaultDropdown.toggle()
         else if (t === "/" && searchField.visible) searchField.forceActiveFocus()
       }
 
@@ -576,272 +720,444 @@ Panel {
         bottomPadding: Style.space(14)
         spacing: Style.space(10)
 
-        // Static header area
-        Column {
-          id: headerCol
+        // Header
+        RowLayout {
           width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          spacing: Style.space(10)
+          spacing: Style.space(8)
 
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Text {
-              text: "󰌋 OmaSeal"
-              color: root.fg
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.heading
-              font.bold: true
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Button {
-              text: root.isAdding ? "Cancel" : "+ Add"
-              bordered: true
-              onClicked: root.isAdding = !root.isAdding
-            }
-
-            Button {
-              text: "Logs"
-              bordered: true
-              onClicked: root.showLogs = !root.showLogs
-            }
-
-            PanelActionButton {
-              iconText: "󰑐"
-              tooltipText: "Refresh secrets (r)"
-              foreground: root.fg
-              onClicked: root.refresh()
-            }
+          Text {
+            text: "󰌋 OmaSeal"
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.heading
+            font.bold: true
           }
 
-          PanelSeparator {
+          Text {
+            text: root.allSecrets.length + ""
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            visible: root.allSecrets.length > 0
+          }
+
+          Item { Layout.fillWidth: true }
+
+          Button {
+            text: root.isAdding ? "Cancel" : "+ Add"
+            bordered: true
+            onClicked: root.isAdding = !root.isAdding
+          }
+
+          Button {
+            text: "Logs"
+            bordered: true
+            onClicked: root.showLogs = !root.showLogs
+          }
+
+          PanelActionButton {
+            iconText: root.expanded ? "󰅃" : "󰅀"
+            tooltipText: root.expanded ? "Collapse panel (e)" : "Expand panel — vaults + full list (e)"
             foreground: root.fg
-            width: parent.width
+            onClicked: root.expanded = !root.expanded
           }
 
-          // Add Secret Form Collapsible
+          PanelActionButton {
+            iconText: "󰑐"
+            tooltipText: "Refresh secrets (r)"
+            foreground: root.fg
+            onClicked: root.refresh()
+          }
+        }
+
+        PanelSeparator {
+          foreground: root.fg
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+        }
+
+        // Expanded stats strip: totals at a glance.
+        Text {
+          visible: root.expanded
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          text: root.allSecrets.length + " SECRETS · " + root.totalAccesses + " ACCESSES · TOP: " + root.topSecretLabel
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+
+        RowLayout {
+          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
+          spacing: Style.space(12)
+
+          // Vault sidebar — expanded mode only. One row per service.
           Column {
-            width: parent.width
-            spacing: Style.space(8)
-            visible: root.isAdding
+            visible: root.expanded
+            Layout.preferredWidth: Style.space(190)
+            Layout.alignment: Qt.AlignTop
+            spacing: Style.space(4)
 
             PanelSectionHeader {
-              text: "STORE NEW SECRET"
+              text: "VAULTS"
               foreground: root.fg
             }
 
-            TextField {
-              id: serviceField
+            Flickable {
               width: parent.width
-              placeholderText: "Service (e.g. openrouter, github)"
-              foreground: root.fg
-              Keys.onEscapePressed: root.clearAddForm()
-            }
+              height: Math.min(vaultCol.implicitHeight, Style.space(560))
+              contentHeight: vaultCol.implicitHeight
+              clip: true
 
-            TextField {
-              id: accountField
-              width: parent.width
-              placeholderText: "Account (e.g. default, personal)"
-              foreground: root.fg
-              Keys.onEscapePressed: root.clearAddForm()
-            }
+              Column {
+                id: vaultCol
+                width: parent.width
+                spacing: Style.space(2)
 
-            TextField {
-              id: secretField
-              width: parent.width
-              password: true
-              placeholderText: "Secret payload"
-              foreground: root.fg
-              Keys.onReturnPressed: root.saveSecret()
-              Keys.onEscapePressed: root.clearAddForm()
-            }
+                Repeater {
+                  model: root.serviceGroups
+                  delegate: BorderSurface {
+                    required property var modelData
+                    width: vaultCol.width
+                    implicitHeight: Style.space(30)
+                    radius: Style.cornerRadius
+                    color: root.serviceFilter === modelData.value ? Style.selectedFillFor(root.fg, root.accent) : Style.controlFill(false, vaultMouse.containsMouse, root.fg, root.accent)
+                    borderSpec: Border.controlSpec(root.serviceFilter === modelData.value ? "selected" : (vaultMouse.containsMouse ? "hover-cursor" : "normal"), root.fg, root.accent)
 
-            RowLayout {
+                    MouseArea {
+                      id: vaultMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      onClicked: root.serviceFilter = modelData.value
+                    }
+
+                    RowLayout {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(8)
+                      anchors.rightMargin: Style.space(8)
+
+                      Text {
+                        Layout.fillWidth: true
+                        text: modelData.label
+                        color: root.fg
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        elide: Text.ElideRight
+                      }
+                      Text {
+                        text: modelData.description.replace(" secrets", "").replace(" secret", "")
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Main column
+          Column {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignTop
+            spacing: Style.space(10)
+
+            // Add Secret Form Collapsible
+            Column {
               width: parent.width
-              Item { Layout.fillWidth: true }
-              Button {
-                text: "Save Secret"
-                bordered: true
-                accent: root.accent
-                onClicked: root.saveSecret()
+              spacing: Style.space(8)
+              visible: root.isAdding
+
+              PanelSectionHeader {
+                text: "STORE NEW SECRET"
+                foreground: root.fg
+              }
+
+              TextField {
+                id: serviceField
+                width: parent.width
+                placeholderText: "Service (e.g. openrouter, github)"
+                foreground: root.fg
+                Keys.onEscapePressed: root.clearAddForm()
+              }
+
+              TextField {
+                id: accountField
+                width: parent.width
+                placeholderText: "Account (e.g. default, personal)"
+                foreground: root.fg
+                Keys.onEscapePressed: root.clearAddForm()
+              }
+
+              TextField {
+                id: secretField
+                width: parent.width
+                password: true
+                placeholderText: "Secret payload"
+                foreground: root.fg
+                Keys.onReturnPressed: root.saveSecret()
+                Keys.onEscapePressed: root.clearAddForm()
+              }
+
+              RowLayout {
+                width: parent.width
+                Item { Layout.fillWidth: true }
+                Button {
+                  text: "Save Secret"
+                  bordered: true
+                  accent: root.accent
+                  onClicked: root.saveSecret()
+                }
+              }
+
+              PanelSeparator {
+                foreground: root.fg
+                width: parent.width
               }
             }
 
-            PanelSeparator {
-              foreground: root.fg
+            // Agent trust status — the Keychain-style lock indicator.
+            RowLayout {
               width: parent.width
+              spacing: Style.space(8)
+              visible: root.agentMode !== ""
+
+              Text {
+                text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
+                      (root.agentKeepAlive ? " · KA" : "") +
+                      (root.agentMode === "ask" && root.agentSessionActive
+                        ? " · UNLOCKED" + (root.agentSessionExpires
+                            ? " " + Qt.formatTime(new Date(root.agentSessionExpires), "HH:mm")
+                            : "")
+                        : "")
+                color: (root.agentMode === "open" || root.agentSessionActive) ? root.accent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Button {
+                visible: root.agentMode === "ask" && !root.agentSessionActive
+                text: "Unlock"
+                bordered: true
+                onClicked: root.unlockAgent()
+              }
             }
-          }
 
-          // Agent trust status — the Keychain-style lock indicator.
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            visible: root.agentMode !== ""
-
+            // fprintd availability notice — only relevant when ask mode gates on it.
             Text {
-              text: "󰌆 AGENTS " + root.agentMode.toUpperCase() +
-                    (root.agentKeepAlive ? " · KA" : "") +
-                    (root.agentMode === "ask" && root.agentSessionActive
-                      ? " · UNLOCKED" + (root.agentSessionExpires
-                          ? " " + Qt.formatTime(new Date(root.agentSessionExpires), "HH:mm")
-                          : "")
-                      : "")
-              color: (root.agentMode === "open" || root.agentSessionActive) ? root.accent : root.dim
+              visible: root.agentMode === "ask" && !root.fprintdAvailable
+              width: parent.width
+              text: "no fingerprint reader — unlock is ungated"
+              color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
 
-            Item { Layout.fillWidth: true }
-
-            Button {
-              visible: root.agentMode === "ask" && !root.agentSessionActive
-              text: "Unlock"
-              bordered: true
-              onClicked: root.unlockAgent()
-            }
-          }
-
-          // fprintd availability notice — only relevant when ask mode gates on it.
-          Text {
-            visible: root.agentMode === "ask" && !root.fprintdAvailable
-            width: parent.width
-            text: "no fingerprint reader — unlock is ungated"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          // Search field — Keychain Access style filtering.
-          TextField {
-            id: searchField
-            width: parent.width
-            placeholderText: "Search secrets  (press /)"
-            foreground: root.fg
-            visible: root.allSecrets.length > 0
-            Keys.onReleased: root.searchFilter = searchField.text
-            Keys.onEscapePressed: searchField.focus = false
-          }
-
-          // Secret List Section Header
-          PanelSectionHeader {
-            text: "SECRETS (" + secretsModel.count + ")  ·  j/k nav  ·  / search  ·  enter copy  ·  x del"
-            foreground: root.fg
-          }
-        }
-
-        // Scrollable secrets list
-        Flickable {
-          id: listFlickable
-          width: parent.width - contentColumn.leftPadding - contentColumn.rightPadding
-          implicitHeight: Math.min(secretsCol.implicitHeight, root.isAdding ? Style.space(220) : Style.space(420))
-          height: implicitHeight
-          contentHeight: secretsCol.implicitHeight
-          clip: true
-
-          Column {
-            id: secretsCol
-            width: parent.width
-            spacing: Style.space(6)
-
-            // Empty State
-            Text {
-              visible: secretsModel.count === 0
+            // Toolbar: vault picker + sort + search.
+            RowLayout {
               width: parent.width
-              text: root.allSecrets.length > 0 ? "No matches." : "No secrets stored in keyring."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              horizontalAlignment: Text.AlignHCenter
-              topPadding: Style.space(12)
-              bottomPadding: Style.space(12)
+              spacing: Style.space(6)
+              visible: root.allSecrets.length > 0
+
+              SearchableDropdown {
+                id: vaultDropdown
+                Layout.fillWidth: true
+                showLabel: false
+                placeholderText: "Vault…"
+                triggerLabel: "All vaults"
+                options: root.serviceGroups
+                value: root.serviceFilter
+                foreground: root.fg
+                accent: root.accent
+                fontFamily: root.fontFamily
+                onChanged: function(v) { root.serviceFilter = v }
+              }
+
+              Button {
+                text: root.sortLabel()
+                bordered: true
+                tooltipText: "Sort order (s)"
+                onClicked: root.cycleSort()
+              }
             }
 
-            // Secrets Repeater
-            Repeater {
-              model: secretsModel
-              delegate: BorderSurface {
-                required property int index
-                required property string service
-                required property string account
-                required property string label
-                width: secretsCol.width
-                implicitHeight: Style.space(42)
-                radius: Style.cornerRadius
-                color: index === root.selectedIndex ? Style.selectedFillFor(root.fg, root.accent) : Style.controlFill(false, rowMouse.containsMouse, root.fg, root.accent)
-                borderSpec: Border.controlSpec(index === root.selectedIndex ? "selected" : (rowMouse.containsMouse ? "hover-cursor" : "normal"), root.fg, root.accent)
+            // Search field — Keychain Access style filtering.
+            TextField {
+              id: searchField
+              width: parent.width
+              placeholderText: "Search secrets  (press /)"
+              foreground: root.fg
+              visible: root.allSecrets.length > 0
+              onTextChanged: root.searchFilter = text
+              Keys.onEscapePressed: searchField.focus = false
+            }
 
-                MouseArea {
-                  id: rowMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  onEntered: {
-                    if (root.pendingDeleteKey !== "" && root.pendingDeleteKey !== root.secretKey(service, account)) {
-                      root.pendingDeleteKey = ""
-                      deleteConfirmTimer.stop()
-                      root.notice = "Delete confirmation cancelled"
-                    }
-                    root.selectedIndex = index
-                  }
-                  onClicked: root.copySecret(service, account)
+            PanelSectionHeader {
+              text: "SECRETS (" + secretsModel.count + (root.hiddenCount > 0 ? "+" + root.hiddenCount : "") + ")  ·  j/k nav  ·  / search  ·  v vault  ·  s sort  ·  enter copy  ·  x del  ·  e " + (root.expanded ? "collapse" : "expand")
+              foreground: root.fg
+            }
+
+            // Scrollable secrets list
+            Flickable {
+              id: listFlickable
+              width: parent.width
+              implicitHeight: Math.min(secretsCol.implicitHeight,
+                root.expanded ? Style.space(640)
+                  : (root.isAdding ? Style.space(220) : Style.space(420)))
+              height: implicitHeight
+              contentHeight: secretsCol.implicitHeight
+              clip: true
+
+              Column {
+                id: secretsCol
+                width: parent.width
+                spacing: Style.space(6)
+
+                // Empty State
+                Text {
+                  visible: secretsModel.count === 0
+                  width: parent.width
+                  text: root.allSecrets.length > 0 ? "No matches." : "No secrets yet — press a or + Add to store one, or run: omaseal import 1password"
+                  wrapMode: Text.WordWrap
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  horizontalAlignment: Text.AlignHCenter
+                  topPadding: Style.space(12)
+                  bottomPadding: Style.space(12)
                 }
 
-                RowLayout {
-                  anchors.fill: parent
-                  anchors.leftMargin: Style.space(10)
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(8)
+                // Secrets Repeater
+                Repeater {
+                  model: secretsModel
+                  delegate: BorderSurface {
+                    required property int index
+                    required property string service
+                    required property string account
+                    required property string label
+                    required property int hits
+                    required property string lastTs
+                    required property bool owned
+                    width: secretsCol.width
+                    implicitHeight: Style.space(42)
+                    radius: Style.cornerRadius
+                    color: index === root.selectedIndex ? Style.selectedFillFor(root.fg, root.accent) : Style.controlFill(false, rowMouse.containsMouse, root.fg, root.accent)
+                    borderSpec: Border.controlSpec(index === root.selectedIndex ? "selected" : (rowMouse.containsMouse ? "hover-cursor" : "normal"), root.fg, root.accent)
 
-                  Text {
-                    text: "󰌋"
-                    color: index === root.selectedIndex ? root.accent : root.dim
-                    font.pixelSize: Style.font.bodySmall
-                  }
-
-                  Column {
-                    Layout.fillWidth: true
-                    spacing: Style.space(2)
-
-                    Text {
-                      width: parent.width
-                      text: service + " / " + account
-                      color: root.fg
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      font.bold: true
-                      elide: Text.ElideRight
-                    }
-
-                    Text {
-                      width: parent.width
-                      text: label || ""
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                      visible: text !== ""
-                    }
-                  }
-
-                  Row {
-                    spacing: Style.space(4)
-
-                    PanelActionButton {
-                      iconText: "󰆏"
-                      tooltipText: "Copy to clipboard (sensitive)"
-                      foreground: root.fg
+                    MouseArea {
+                      id: rowMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      onEntered: {
+                        if (root.pendingDeleteKey !== "" && root.pendingDeleteKey !== root.secretKey(service, account)) {
+                          root.pendingDeleteKey = ""
+                          deleteConfirmTimer.stop()
+                          root.notice = "Delete confirmation cancelled"
+                        }
+                        root.selectedIndex = index
+                      }
                       onClicked: root.copySecret(service, account)
                     }
 
-                    PanelActionButton {
-                      iconText: "󰆴"
-                      tooltipText: "Delete secret"
-                      hoverColor: root.urgent
-                      foreground: root.fg
-                      onClicked: root.deleteSecret(index, service, account)
+                    RowLayout {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(10)
+                      anchors.rightMargin: Style.space(8)
+                      spacing: Style.space(8)
+
+                      Text {
+                        text: "󰌋"
+                        color: index === root.selectedIndex ? root.accent : root.dim
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      Column {
+                        Layout.fillWidth: true
+                        spacing: Style.space(2)
+
+                        Text {
+                          width: parent.width
+                          text: service + " / " + account
+                          color: root.fg
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          font.bold: true
+                          elide: Text.ElideRight
+                        }
+
+                        Text {
+                          width: parent.width
+                          text: {
+                            var parts = []
+                            if (!owned) parts.push("external")
+                            if (label) parts.push(label)
+                            if (lastTs) parts.push("used " + root.ago(lastTs))
+                            return parts.join(" · ")
+                          }
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideRight
+                          visible: text !== ""
+                        }
+                      }
+
+                      // Usage tally — how often this secret has been read.
+                      Text {
+                        visible: hits > 0
+                        text: "×" + hits
+                        color: root.accent
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Row {
+                        spacing: Style.space(4)
+
+                        PanelActionButton {
+                          iconText: "󰆏"
+                          tooltipText: "Copy to clipboard (sensitive)"
+                          foreground: root.fg
+                          onClicked: root.copySecret(service, account)
+                        }
+
+                        PanelActionButton {
+                          iconText: "󰆴"
+                          tooltipText: "Delete secret"
+                          hoverColor: root.urgent
+                          foreground: root.fg
+                          onClicked: root.deleteSecret(index, service, account)
+                        }
+                      }
                     }
+                  }
+                }
+
+                // Truncation footer — click or press e to expand.
+                BorderSurface {
+                  visible: root.hiddenCount > 0
+                  width: secretsCol.width
+                  implicitHeight: Style.space(30)
+                  radius: Style.cornerRadius
+                  color: Style.controlFill(false, moreMouse.containsMouse, root.fg, root.accent)
+                  borderSpec: Border.controlSpec(moreMouse.containsMouse ? "hover-cursor" : "normal", root.fg, root.accent)
+
+                  MouseArea {
+                    id: moreMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: root.expanded = true
+                  }
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: "… " + root.hiddenCount + " more — expand for full list"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
