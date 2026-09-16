@@ -137,20 +137,20 @@ var mcpToolsResult = map[string]any{
 	"tools": []map[string]any{
 		{
 			"name":        "omaseal_get",
-			"description": "Retrieve a stored secret from the local OmaSeal keyring. Use this when the user or a provider needs the value at runtime. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate.",
+			"description": "Retrieve a stored secret from the local OmaSeal keyring. Use this when the user or a provider needs the value at runtime. Does not fall back to 1Password/Bitwarden and does not trigger a fingerprint gate. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{
 			"name":        "omaseal_resolve",
-			"description": "Resolve a secret from local keyring, 1Password, or Bitwarden. Caches the result locally. Safe for noninteractive calls.",
+			"description": "Resolve a secret from local keyring, 1Password, or Bitwarden. Caches the result locally. Safe for noninteractive calls. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{
@@ -163,16 +163,16 @@ var mcpToolsResult = map[string]any{
 					"account": map[string]string{"type": "string"},
 					"secret":  map[string]string{"type": "string"},
 				},
-				"required": []string{"service", "account", "secret"},
+				"required": []string{"service", "secret"},
 			},
 		},
 		{
 			"name":        "omaseal_delete",
-			"description": "Delete a secret from the local keyring by service and account.",
+			"description": "Delete a secret from the local keyring by service and account. A stored omaseal://<service>/<account> reference may be passed verbatim in the service field.",
 			"inputSchema": map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"service": map[string]string{"type": "string"}, "account": map[string]string{"type": "string"}},
-				"required":   []string{"service", "account"},
+				"required":   []string{"service"},
 			},
 		},
 		{

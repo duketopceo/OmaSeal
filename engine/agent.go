@@ -149,8 +149,10 @@ func renewSessionExpiry(expiry time.Time) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = f.Write([]byte(sessionExpiryText(expiry)))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	return err
 }
 

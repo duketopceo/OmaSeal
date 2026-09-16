@@ -393,8 +393,12 @@ func selftestRoundTrip() error {
 	if err := Delete(service, account); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
+	// Only a not-found error proves the delete took effect; any other error
+	// (keyring outage, permission) would falsely pass the verification.
 	if _, err := Get(service, account); err == nil {
 		return fmt.Errorf("verify-delete: secret still readable after delete")
+	} else if codeFromError(err) != "not_found" {
+		return fmt.Errorf("verify-delete: %w", err)
 	}
 	WriteLog("selftest passed")
 	return nil

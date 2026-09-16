@@ -444,12 +444,13 @@ func installMCP(agent, dir string) (string, error) {
 }
 
 // readConfigPreservingMode returns the file's contents and permission bits in
-// one open. A missing file yields nil data and 0644 so callers can write fresh.
+// one open. A missing file yields nil data and 0600 so a freshly created
+// user-level config is never world-readable on a traversable path.
 func readConfigPreservingMode(path string) (data []byte, mode os.FileMode, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, 0o644, nil
+			return nil, 0o600, nil
 		}
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)
 	}
