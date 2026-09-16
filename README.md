@@ -44,10 +44,11 @@ keys to dotfiles. OmaSeal is the one standard interface for secrets: ask for
 ### From AUR (recommended on Omarchy/Arch)
 
 ```sh
-yay -S omaseal        # build from source
-# or
 yay -S omaseal-bin    # prebuilt multi-arch binary
 ```
+
+(A source-build `omaseal` package is maintained in `packaging/aur/` but
+not yet published to AUR.)
 
 ### From a release tarball (verified)
 

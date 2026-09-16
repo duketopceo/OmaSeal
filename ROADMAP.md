@@ -9,41 +9,50 @@
 - [x] 1Password and Bitwarden import/fallback
 - [x] Persistent, user-visible `~/.local/state/omaseal/omaseal.log`
 - [x] Marketplace-ready packaging and manifest
-
-## v0.3.0 — Agent setup that just works
-
-- Auto-detect installed agents (Claude, Cursor, Codex, Devin, OpenCode, etc.).
-- `omaseal mcp install-detected` to wire the MCP server into every detected
-  agent without overwriting unrelated servers.
-- `omaseal setup` reports detected/installed/missing agents and next steps.
-- Goal: one command after install, every agent can use OmaSeal.
-
-## v0.4.0 — Biometric and session polish
-
-- Panel status for current `agent mode`, `unlock until` time, and unlock action.
-- `fprintd` availability notice in the panel and `doctor` output.
-- Optional session keep-alive with inactivity timeout.
-
-## v0.5.0 — BrowserOS and plugin ecosystem
-
-- [x] `omaseal://service/account` reference format — accepted by every CLI
-  command; account may span `/`.
-- [ ] BrowserOS resolves the real secret at request time, stores only the
-  reference. (Deferred: pending `omarchy-browser` checkout.)
-- [x] Shared `service/account` namespace guide — `docs/namespaces.md`
-  (provisional until exercised by a real consumer).
-- [x] Masked graphical prompt for `resolve` in GUI sessions without a TTY
-  (pinentry/zenity, `OMASEAL_GUI_PROMPT` override).
+- [x] Agent auto-detect + `omaseal mcp install-detected` — one command wires
+  every installed agent (Claude, Cursor, Codex, Devin, OpenCode, …)
+- [x] `omaseal setup` with self-verifying keyring round-trip (30s bounded)
+- [x] `omaseal://service/account` references accepted by every command
+- [x] Masked GUI prompt for `resolve` without a TTY (pinentry, `OMASEAL_GUI_PROMPT`)
+- [x] fprintd biometric gate for `reveal`/agent unlock; panel shows
+  mode/unlock state; session keep-alive
+- [x] Shared `service/account` namespace with other writers
+  (`omarchy-secrets-*`, keytar, seahorse): `owned` provenance flag,
+  duplicate-safe set/delete
+- [x] Enforced AI manifest — `omaseal manifest` robots.txt-style
+  ALLOW/ASK/DENY per secret on the agent (MCP) channel; DENY also hides the
+  credential from `omaseal_list`/`omaseal_stats`
+- [x] Usage analytics — every read path (CLI, IPC, MCP) counted;
+  `omaseal stats`, sort by `used|recent|name`, `access_count`/`last_accessed`
+  in list output
+- [x] Organized secrets panel — expand/collapse, vault sidebar with
+  per-service counts, search, sort modes, usage badges, `external` badges,
+  30s conditional clipboard clear (`omaseal clipclear`)
+- [x] Bounded D-Bus calls, pooled metadata reads (~0.7s at ~700 items),
+  capped access log, atomic config writes
 
 ## v0.6.0 — Marketplace stable
 
 - Close repository issues #2, #3, #4.
-- CI build/lint workflow.
-- First-party Omarchy integration PR.
-- AUR package and release automation hardened.
+- First-party Omarchy integration: `omarchy-secrets-*` commands +
+  `omarchy.secrets` panel + menu entry → Discussion + PR to
+  `omacom/omarchy-mac` (base `quattro`); phased fallback (commands + menu
+  only) if the panel is the sticking point.
+- AUR package (`omaseal-bin`) and release automation hardened.
+- Land the PR stack: #6 (refs/GUI prompt/hardening) → #8 (organized panel,
+  analytics, enforced manifest).
+
+## v0.7.0 — BrowserOS and plugin ecosystem
+
+- BrowserOS resolves the real secret at request time, stores only the
+  `omaseal://` reference. (Deferred: pending `omarchy-browser` checkout.)
+- `docs/namespaces.md` conventions exercised by a real consumer.
 
 ## v1.0.0 — First-party
 
-- Shipped as an official Omarchy keyring option.
-- Stable API, documented `service/account` conventions, and third-party plugin
-  adoption.
+- Shipped as an official Omarchy keyring option (port to `omacom/omarchy`
+  x86 once the omarchy-mac surface lands — the code is platform-agnostic).
+- Stable API, documented `service/account` conventions, and third-party
+  plugin adoption.
+- Panel component extraction (the single-file panel has outgrown its
+  structure) and first-run `manifest init` prompt.
