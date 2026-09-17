@@ -1,13 +1,13 @@
-# OmaSeal ↔ BrowserOS integration (planned)
+# OmaSeal ↔ BrowserOS integration
 
-> This integration is **deferred** to a follow-up `omarchy-browser` PR. It is not
-> implemented in this release. The sections below describe the planned
-> convention and fail-closed behavior so the implementation can be added later.
+> Implemented in `omarchy-browser` (fork PR #1), with fail-closed resolution
+> fixed in `omarchy-browser` PR #5.
 
-When implemented, BrowserOS will store AI provider credentials in OmaSeal
-instead of its own SQLite database. When the option is enabled, BrowserOS will
-keep only an `omaseal://` reference in the provider row and resolve the real key
-from OmaSeal just before each outbound LLM request.
+BrowserOS stores AI provider credentials in OmaSeal instead of its own SQLite
+database. When the option is enabled, BrowserOS keeps only an `omaseal://`
+reference in the provider row and resolves the real key from OmaSeal just
+before each outbound LLM request. If resolution fails, the request is aborted
+with a local configuration error before contacting the provider.
 
 ## Supported credentials
 
@@ -42,29 +42,27 @@ value through unchanged. The grammar, charset, and shared parser test vectors
 live in [`../namespaces.md`](../namespaces.md); this app-owned convention is
 the `<app>/<context>/<field>` pattern described there.
 
-## Enabling in BrowserOS (planned)
-
-When the integration lands, the planned enablement flow is:
+## Enabling in BrowserOS
 
 1. Build and install `omaseal` so it is on `PATH` (default install location is `~/.local/bin/omaseal`).
 2. Start BrowserOS. The server will look for `omaseal` in `OMASEAL_PATH`, on `PATH`, in the login-shell `PATH`, and finally at `~/.local/bin/omaseal`.
 3. Open **Settings → AI Providers → Add/Edit Provider**.
-4. Check **Store credentials in OmaSeal** and enter the API key.
-5. Save. The key will be written to OmaSeal and the reference stored in BrowserOS.
+4. Check **Keep API keys in the Omarchy keyring** and enter the API key.
+5. Save. The key is written to OmaSeal and the reference stored in BrowserOS.
 
-If OmaSeal is not available when the checkbox is enabled, the save must fail
-with a clear error and nothing may be written.
+If OmaSeal is not available when the checkbox is enabled, the save fails
+with a clear error and nothing is written.
 
-## Migrating existing plaintext keys (planned)
+## Migrating existing plaintext keys
 
-When implemented, editing an existing provider, re-entering the key, and
-checking **Store credentials in OmaSeal** will call `omaseal set` and replace
-the plaintext key with the reference. The key will then be available for other
-Omarchy apps that use the same `service/account`.
+Editing an existing provider, re-entering the key, and checking **Keep API
+keys in the Omarchy keyring** calls `omaseal set` and replaces the plaintext
+key with the reference. The key is then available for other Omarchy apps that
+use the same `service/account`.
 
-## Manual verification (planned)
+## Manual verification
 
-Once the integration lands, you will be able to verify stored references with:
+Verify stored references with:
 
 ```sh
 omaseal list browseros --json
