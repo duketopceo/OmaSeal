@@ -62,6 +62,7 @@ func doctorChecks() []checkResult {
 	checks := []func() checkResult{
 		checkBinary,
 		checkSecretService,
+		checkKeyringEncryption,
 		checkFprintd,
 		checkOnePassword,
 		checkBitwarden,
@@ -169,6 +170,82 @@ func containsLine(text, needle string) bool {
 		}
 	}
 	return false
+}
+
+// keyringsDir returns the directory holding gnome-keyring *.keyring files.
+func keyringsDir() string {
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return filepath.Join(xdg, "keyrings")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "keyrings")
+}
+
+// countPlainSecrets scans gnome-keyring .keyring content for `secret=` values
+// stored as printable text. A password-protected keyring writes the secret as
+// an encrypted binary blob; an empty-password keyring (common on autologin
+// setups where no password reaches PAM) writes the literal secret value.
+// Returns (plaintext count, total secrets seen).
+func countPlainSecrets(data []byte) (plain, total int) {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("secret=")) {
+			continue
+		}
+		v := bytes.TrimSpace(line[len("secret="):])
+		if len(v) == 0 {
+			continue
+		}
+		total++
+		if bytes.IndexFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e }) < 0 {
+			plain++
+		}
+	}
+	return plain, total
+}
+
+// checkKeyringEncryption verifies secrets are not stored plaintext on disk.
+// OmaSeal enforces its manifest policy on the Secret Service API path; a
+// plaintext keyring file bypasses that policy entirely for anyone who can
+// read the file, so this surfaces as a loud warning even though functionally
+// everything still works.
+func checkKeyringEncryption() checkResult {
+	dir := keyringsDir()
+	if dir == "" {
+		return checkResult{name: "keyring-encryption", ok: true, optional: true,
+			message: "cannot determine keyring directory"}
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "*.keyring"))
+	if err != nil || len(files) == 0 {
+		return checkResult{name: "keyring-encryption", ok: true, optional: true,
+			message: "no keyring files yet — nothing stored"}
+	}
+	var plain, total int
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		p, t := countPlainSecrets(data)
+		plain += p
+		total += t
+	}
+	if plain == 0 {
+		return checkResult{name: "keyring-encryption", ok: true,
+			message: "keyring secrets are encrypted at rest"}
+	}
+	return checkResult{
+		name:     "keyring-encryption",
+		ok:       false,
+		optional: true,
+		message: fmt.Sprintf("%d/%d stored secrets are PLAINTEXT on disk (%s)\n", plain, total, dir) +
+			"  - The keyring has an empty password — common on autologin setups where no password reaches PAM.\n" +
+			"  - Fix: `yay -S seahorse`, then Seahorse → your keyring → Change Password.\n" +
+			"  - Set it to your login password so PAM auto-unlocks; with autologin it will prompt once per session instead.\n" +
+			"  - Note: full-disk encryption still protects the file when powered off; this gap is for local readers while running.",
+	}
 }
 
 func checkFprintd() checkResult {
