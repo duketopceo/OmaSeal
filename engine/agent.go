@@ -19,7 +19,8 @@ const (
 
 // AgentPolicy is the user-controlled gate for agent/MCP access.
 // mode:
-//   - "open"  : agents can read and write secrets freely.
+//   - "open"  : agents can read and write secrets freely. Opt-in only — the
+//     default for a missing policy is "ask", never "open".
 //   - "ask"   : agents must run `omaseal agent unlock` (biometric if available)
 //     before any MCP tool that touches secrets.
 //   - "lock"  : agents cannot access secrets at all.
@@ -35,8 +36,12 @@ type AgentPolicy struct {
 	Agents         []string `json:"agents,omitempty"`
 }
 
+// defaultAgentPolicy is the fail-closed baseline: a missing policy file means
+// agents must unlock before touching secrets. "open" exists only when the
+// user writes it explicitly. An invalid mode in a present file also resolves
+// to this default, so corruption fails closed too.
 func defaultAgentPolicy() AgentPolicy {
-	return AgentPolicy{Mode: "open", SessionMinutes: 15}
+	return AgentPolicy{Mode: "ask", SessionMinutes: 15}
 }
 
 // omasealConfigDir resolves $XDG_CONFIG_HOME/omaseal (or ~/.config/omaseal)
