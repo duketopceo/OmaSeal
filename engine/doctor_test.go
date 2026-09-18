@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,11 +42,15 @@ func TestCheckKeyringEncryption(t *testing.T) {
 		t.Fatalf("no keyring files should pass, got %+v", r)
 	}
 
-	// Plaintext secrets → warn.
+	// Plaintext secrets → warn, with remediation pointing at the in-product fix.
 	os.WriteFile(filepath.Join(kr, "Default_keyring.keyring"),
 		[]byte("[1]\nitem-type=0\nsecret=hunter2\n"), 0o600)
-	if r := checkKeyringEncryption(); r.ok || !r.optional {
+	r := checkKeyringEncryption()
+	if r.ok || !r.optional {
 		t.Fatalf("plaintext keyring should be an optional warn, got %+v", r)
+	}
+	if !strings.Contains(r.message, "omaseal keyring migrate") || strings.Contains(r.message, "seahorse") {
+		t.Fatalf("remediation should route to keyring migrate, got: %s", r.message)
 	}
 
 	// Encrypted blob → ok.
