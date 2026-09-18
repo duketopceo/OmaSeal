@@ -145,6 +145,10 @@ omaseal list openrouter --json
 omaseal import 1password pace-dev
 omaseal import bitwarden
 
+# Re-encrypt a plaintext (empty-password) keyring at rest
+omaseal keyring status
+omaseal keyring migrate [--dry-run] [--delete-old] [-y]
+
 # Everywhere <service> <account> works, an omaseal:// reference works too
 omaseal get omaseal://openrouter/default
 omaseal resolve omaseal://browseros/openrouter-work/apiKey
@@ -186,7 +190,14 @@ and `omaseal://` reference grammar every consumer should follow.
 ## Security model
 
 - Secrets live in the Secret Service default/login collection, encrypted at
-  rest by `gnome-keyring`.
+  rest by `gnome-keyring` — *when the keyring has a password*. On
+  display-manager autologin setups no password reaches `pam_gnome_keyring`,
+  leaving an empty-password keyring whose `.keyring` file is plaintext.
+  `omaseal doctor` detects this (`keyring-encryption` check); fix it with
+  `omaseal keyring migrate`, which re-stores everything into an encrypted
+  `login` keyring via the Secret Service API — the daemon prompts for the
+  new password itself (use your login password so PAM auto-unlocks), and
+  `--delete-old` removes the plaintext file after verification.
 - OmaSeal only ever sees secrets in memory; it never writes them to files,
   logs, argv, or persists them in the panel state. The secret is held only by
   the active input field until `set` completes and is then cleared.
