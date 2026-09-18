@@ -30,10 +30,28 @@
   30s conditional clipboard clear (`omaseal clipclear`)
 - [x] Bounded D-Bus calls, pooled metadata reads (~0.7s at ~700 items),
   capped access log, atomic config writes
+- [x] `omaseal doctor` `keyring-encryption` check — detects plaintext
+  `secret=` values in `~/.local/share/keyrings/*.keyring` (the
+  empty-password-keyring/autologin gap)
+- [x] `omaseal keyring migrate` — in-product re-encryption: copies an
+  unlocked plaintext keyring into an encrypted `login` collection via the
+  Secret Service API alone (`--dry-run`, opt-in `--delete-old`, headless
+  guard, bounded prompt waits, self-migrate protection)
+- [x] Fail-closed agent policy — a missing `agent.json` now defaults to
+  `ask`, never `open`; `open` is explicit opt-in only (marketplace
+  security finding)
 
 ## v0.6.0 — Marketplace stable
 
 - Close repository issues #2, #3, #4.
+- Marketplace validation: `f8ef3ac` attested (Sept-17) with one security
+  finding — agent policy defaulted to `open` without a policy file.
+  Resolved in #17; re-validation requested at frozen HEAD `20a19ae`
+  (includes #14 detection + #15 remediation). **Do not push `main` until
+  the baseline attests that SHA** — every HEAD move has reset review.
+- Follow-ups queued: #13 (provider negative caching — stops `resolve`
+  polling external vaults on missing keys), #12 (AUR submission blocked
+  by AUR account-registration freeze).
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
   `omarchy.secrets` panel + menu entry → Discussion + PR to
   `omacom/omarchy-mac` (base `quattro`); phased fallback (commands + menu
