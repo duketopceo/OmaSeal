@@ -136,3 +136,36 @@ func TestSetAgentModePreservesPolicy(t *testing.T) {
 		t.Fatalf("mode change clobbered policy: %+v", p)
 	}
 }
+
+// Missing policy file must default to "ask" — never "open". Regression test
+// for the marketplace security finding: a fresh install authorized every MCP
+// operation with no user grant.
+func TestDefaultPolicyIsAskNotOpen(t *testing.T) {
+	setupAgentEnv(t) // no policy file written
+
+	p, err := loadAgentPolicy()
+	if err != nil {
+		t.Fatalf("loadAgentPolicy: %v", err)
+	}
+	if p.Mode != "ask" {
+		t.Fatalf("missing policy must default to ask, got %q", p.Mode)
+	}
+	if err := CheckAgentOperation("get"); err == nil {
+		t.Fatal("agent ops must be denied without unlock on a fresh install")
+	}
+}
+
+// An invalid mode in a present policy file must also fail closed.
+func TestInvalidModeFailsClosed(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "bogus", SessionMinutes: 15}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	p, err := loadAgentPolicy()
+	if err != nil {
+		t.Fatalf("loadAgentPolicy: %v", err)
+	}
+	if p.Mode != "ask" {
+		t.Fatalf("invalid mode must resolve to ask, got %q", p.Mode)
+	}
+}

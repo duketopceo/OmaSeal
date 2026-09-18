@@ -8,7 +8,11 @@ import (
 
 func callTool(t *testing.T, name, argsJSON string) *mcpResponse {
 	t.Helper()
-	setupAgentEnv(t) // default open policy: tools ungated
+	setupAgentEnv(t)
+	// Ungated tools require an explicit open policy now — the default is ask.
+	if err := saveAgentPolicy(AgentPolicy{Mode: "open"}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
 	resp := callMCPTool(mcpToolCall{Name: name, Arguments: json.RawMessage(argsJSON)})
 	if resp == nil || resp.Error != nil {
 		t.Fatalf("%s: protocol error %v", name, resp)
