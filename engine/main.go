@@ -129,6 +129,8 @@ func main() {
 		handleSelfTest()
 	case "doctor":
 		handleDoctor()
+	case "keyring":
+		runKeyring(os.Args[2:])
 	case "logs":
 		handleLogs()
 	case "setup":

@@ -242,8 +242,8 @@ func checkKeyringEncryption() checkResult {
 		optional: true,
 		message: fmt.Sprintf("%d/%d stored secrets are PLAINTEXT on disk (%s)\n", plain, total, dir) +
 			"  - The keyring has an empty password — common on autologin setups where no password reaches PAM.\n" +
-			"  - Fix: `yay -S seahorse`, then Seahorse → your keyring → Change Password.\n" +
-			"  - Set it to your login password so PAM auto-unlocks; with autologin it will prompt once per session instead.\n" +
+			"  - Fix: `omaseal keyring migrate` (graphical session required — the daemon prompts for the new password).\n" +
+			"  - Use your login password so PAM auto-unlocks; disable autologin or it will prompt once per session.\n" +
 			"  - Note: full-disk encryption still protects the file when powered off; this gap is for local readers while running.",
 	}
 }
