@@ -192,8 +192,8 @@ func suggestChanges(findings []AuditFinding) []ProposalChange {
 	for _, f := range findings {
 		if f.Kind == "dead_rule" {
 			changes = append(changes, ProposalChange{
-				Action:   "remove",
-				Pattern:  f.Target,
+				Action:    "remove",
+				Pattern:   f.Target,
 				Rationale: "rule matches no keyring item",
 			})
 		}
