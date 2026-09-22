@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""omaseal-jev-audit — optional Jev companion for `omaseal manifest audit`.
+
+Reads the local audit findings (metadata only — service/account names, rule
+patterns, access stats; NEVER secret values), asks OpenRouter's Jev decisions
+endpoint for a recommendation + confidence per finding, and writes a proposal
+JSON for human review. Applying is still `omaseal manifest apply <file>` —
+Jev proposes, only a human applies.
+
+Gate: exits silently-doing-nothing unless ~/.config/omaseal/jev.json has
+"enabled": true (`omaseal jev enable`). While disabled nothing here runs and
+no network call is ever made.
+
+Usage: omaseal-jev-audit [--out <path>] [--limit N]
+"""
+import hashlib, json, os, re, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+
+STATE_FILE = os.path.expanduser("~/.config/omaseal/jev.json")
+PROPOSAL_DIR = os.path.expanduser("~/.local/state/omaseal/proposals")
+DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
+MODEL = "~typesafe/jev-latest"
+
+QUESTIONS = {
+    "recommend": {
+        "type": "choice",
+        "instructions": "What should a human do with this secrets-policy finding?",
+        "criteria": {
+            "none": "leave it; the finding is acceptable as-is",
+            "remove_rule": "delete the manifest rule named by the finding",
+            "add_deny": "add a DENY rule covering the item",
+            "add_ask": "add an ASK rule covering the item",
+            "add_allow": "add an ALLOW rule covering the item",
+        },
+    },
+    "confidence": {
+        "type": "noul",
+        "instructions": "How confident are you in that recommendation?",
+    },
+}
+
+RANK = {"DENY": 0, "ASK": 1, "ALLOW": 2}
+
+
+def enabled():
+    try:
+        with open(STATE_FILE) as fh:
+            return json.load(fh).get("enabled") is True
+    except Exception:
+        return False
+
+
+def run_audit():
+    r = subprocess.run(["omaseal", "manifest", "audit", "--json"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"omaseal manifest audit failed: {r.stderr.strip()[:200]}")
+    return json.loads(r.stdout)
+
+
+def get_key():
+    for acct in ("jev", "default"):
+        r = subprocess.run(["omaseal", "get", "openrouter", acct],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    sys.exit("no openrouter key in omaseal (tried jev, default)")
+
+
+def jev(key, state):
+    body = {"model": MODEL, "state": state, "questions": QUESTIONS}
+    req = Request(DECISIONS_URL, data=json.dumps(body).encode(),
+                  headers={"Authorization": "Bearer " + key,
+                           "Content-Type": "application/json"})
+    try:
+        return json.loads(urlopen(req, timeout=45).read())["answers"]
+    except HTTPError as e:
+        return {"error": f"{e.code}: {e.read()[:160].decode(errors='replace')}"}
+    except Exception as e:
+        return {"error": str(e)[:160]}
+
+
+def manifest_sha256(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def manifest_policies(path):
+    """pattern -> policy map from the manifest file (comments/space-separated)."""
+    policies = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                f = line.split("#", 1)[0].split()
+                if len(f) >= 2 and f[0].upper() in RANK:
+                    policies[f[1]] = f[0].upper()
+    except OSError:
+        pass
+    return policies
+
+
+def item_pattern(target):
+    """service/account finding target -> service/* rule pattern."""
+    svc = target.split("/", 1)[0]
+    return svc + "/*" if svc and re.fullmatch(r"[A-Za-z0-9_.-]+", svc) else None
+
+
+def expands_access(action, policy, pattern, policies):
+    """Local recompute — mirrors `omaseal manifest apply`; display hint only,
+    apply never trusts this field."""
+    old = policies.get(pattern, "ASK")
+    if action == "remove":
+        return old == "DENY"
+    if action in ("add", "set"):
+        return RANK.get(policy or "", -1) > RANK.get(old, 1)
+    return False
+
+
+def change_for(finding, recommend, confidence, policies):
+    kind, target, detail = finding["kind"], finding["target"], finding.get("detail", "")
+    base = {"rationale": f"jev recommend={recommend} confidence={confidence:.2f} — {detail}",
+            "confidence": round(confidence, 3)}
+    if recommend == "remove_rule" and kind == "dead_rule":
+        return {"action": "remove", "policy": "", "pattern": target,
+                "description": detail, "expands_access": expands_access("remove", "", target, policies), **base}
+    if recommend in ("add_deny", "add_ask", "add_allow") and kind in ("uncovered", "stale", "advisory"):
+        pattern = item_pattern(target)
+        if not pattern:
+            return None
+        policy = recommend[4:].upper()
+        return {"action": "add", "policy": policy, "pattern": pattern,
+                "description": f"cover {target}", "expands_access": expands_access("add", policy, pattern, policies), **base}
+    return None
+
+
+def main():
+    if not enabled():
+        # Hard gate: nothing runs, nothing phones home while disabled.
+        print("jev is disabled — `omaseal jev enable` to opt in", file=sys.stderr)
+        return 0
+
+    out_path = None
+    limit = 0
+    args = sys.argv[1:]
+    if "--out" in args:
+        out_path = args[args.index("--out") + 1]
+    if "--limit" in args:
+        limit = int(args[args.index("--limit") + 1])
+
+    audit = run_audit()
+    findings = audit.get("findings") or []
+    if limit:
+        findings = findings[:limit]
+    manifest_path = audit["manifest"]
+    policies = manifest_policies(manifest_path)
+
+    print(f"manifest audit: {len(findings)} findings over {audit['items']} items / {audit['rules']} rules",
+          file=sys.stderr)
+    if not findings:
+        print("no findings — nothing to propose")
+        return 0
+
+    key = get_key()
+
+    def ask(f):
+        state = f"Finding kind: {f['kind']}\nTarget: {f['target']}\nDetail: {f.get('detail', '')}"
+        return f, jev(key, state)
+
+    changes, skipped = [], 0
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for f, answers in ex.map(ask, findings):
+            if "error" in answers:
+                skipped += 1
+                continue  # silent skip on Jev failure — finding stays local-only
+            rec = answers.get("recommend", {})
+            conf = answers.get("confidence", {})
+            if not isinstance(rec, dict) or not isinstance(conf, dict):
+                skipped += 1
+                continue
+            ch = change_for(f, rec.get("choice", "none"), float(conf.get("noul", 0)), policies)
+            if ch:
+                changes.append(ch)
+
+    proposal = {
+        "version": 1,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "generator": "jev",
+        "manifest_sha256": manifest_sha256(manifest_path),
+        "findings": findings,
+        "changes": changes,
+    }
+
+    if not out_path:
+        os.makedirs(PROPOSAL_DIR, exist_ok=True)
+        out_path = os.path.join(PROPOSAL_DIR, f"jev-{int(time.time())}.json")
+    fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(proposal, fh, indent=2)
+        fh.write("\n")
+
+    print(f"\nwrote {out_path}  ({len(changes)} proposed changes, {skipped} jev-skip/errors)")
+    for c in changes:
+        exp = " EXPANDS" if c["expands_access"] else ""
+        print(f"  {c['action']:6} {c.get('policy') or '-':5} {c['pattern']:24} conf={c['confidence']:.2f}{exp}")
+    print(f"\nreview the file, then: omaseal manifest apply {out_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
