@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -37,6 +36,7 @@ type ProposalChange struct {
 	Rationale     string  `json:"rationale,omitempty"`
 	Confidence    float64 `json:"confidence,omitempty"`
 	ExpandsAccess bool    `json:"expands_access"`
+	ReducesAccess bool    `json:"reduces_access,omitempty"`
 }
 
 // Proposal is the file passed between `manifest audit --proposal` (or the Jev
@@ -96,8 +96,25 @@ func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
 		}
 	}
 
+	// Duplicate targets: the same service/account listed more than once — a
+	// leftover from imports or retries that confuses resolve/list surfaces.
+	dupCount := map[string]int{}
+	for _, it := range items {
+		dupCount[it.Service+"/"+it.Account]++
+	}
+	reportedDup := map[string]bool{}
+
 	for _, it := range items {
 		target := it.Service + "/" + it.Account
+
+		if dupCount[target] > 1 && !reportedDup[target] {
+			reportedDup[target] = true
+			findings = append(findings, AuditFinding{
+				Kind:   "advisory",
+				Target: target,
+				Detail: fmt.Sprintf("listed %d times — duplicate entries", dupCount[target]),
+			})
+		}
 
 		// Uncovered: governed only by the catch-all fallback — no explicit rule.
 		covered := false
@@ -164,15 +181,6 @@ func manifestFileSHA256(path string) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// jevStateDir resolves ~/.local/state/omaseal/jev for proposal artifacts.
-func jevStateDir() (string, error) {
-	dir, err := ensureLogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "jev"), nil
 }
 
 // writeProposal serializes a proposal atomically at 0600.

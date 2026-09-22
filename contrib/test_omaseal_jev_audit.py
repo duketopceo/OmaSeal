@@ -82,15 +82,18 @@ class TestChangeMapping(unittest.TestCase):
         self.assertEqual(ch["action"], "remove")
         self.assertEqual(ch["pattern"], "gone/x")
         self.assertFalse(ch["expands_access"])
+        self.assertTrue(ch["reduces_access"])  # removing an ASK rule removes a grant
 
     def test_remove_deny_expands(self):
         ch = mod.change_for(FINDING_DEAD, "remove_rule", 0.9, {"gone/x": "DENY"})
         self.assertTrue(ch["expands_access"])
+        self.assertNotIn("reduces_access", ch)
 
     def test_uncovered_add_deny(self):
         ch = mod.change_for(FINDING_UNCOVERED, "add_deny", 0.8, {})
         self.assertEqual((ch["action"], ch["policy"], ch["pattern"]), ("add", "DENY", "bank/*"))
         self.assertFalse(ch["expands_access"])
+        self.assertTrue(ch["reduces_access"])
 
     def test_uncovered_add_allow_expands(self):
         ch = mod.change_for(FINDING_UNCOVERED, "add_allow", 0.8, {})
@@ -166,6 +169,11 @@ class TestMainFlow(unittest.TestCase):
             self.assertEqual(len(p["manifest_sha256"]), 64)
             self.assertEqual(len(p["changes"]), 1)
             self.assertEqual(p["changes"][0]["action"], "remove")
+
+            # R10: the run stamps last_run_at into jev.json, preserving other fields.
+            st = json.load(open(state))
+            self.assertTrue(st["enabled"])
+            self.assertIn("last_run_at", st)
 
 
 @unittest.skipUnless(os.environ.get("OMASEAL_JEV_IT"), "live check: set OMASEAL_JEV_IT=1")

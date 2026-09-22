@@ -126,6 +126,26 @@ func TestAuditAdvisories(t *testing.T) {
 	}
 }
 
+func TestAuditDuplicateAdvisory(t *testing.T) {
+	items := []Item{
+		{Service: "dup", Account: "svc", AccessCount: 1},
+		{Service: "dup", Account: "svc", AccessCount: 1},
+		{Service: "solo", Account: "one", AccessCount: 1},
+	}
+	kinds := findingKinds(auditManifest(&Manifest{Rules: []ManifestRule{{Policy: PolicyAsk, Pattern: "*"}}}, items, time.Now()))
+	var dup, solo bool
+	for _, target := range kinds["advisory"] {
+		dup = dup || target == "dup/svc"
+		solo = solo || target == "solo/one"
+	}
+	if !dup {
+		t.Fatalf("expected duplicate advisory for dup/svc, got %+v", kinds["advisory"])
+	}
+	if solo {
+		t.Fatal("non-duplicate item flagged as duplicate")
+	}
+}
+
 func TestAuditCatchAllNeverDead(t *testing.T) {
 	m := &Manifest{Rules: []ManifestRule{{Policy: PolicyAsk, Pattern: "*"}}}
 	findings := auditManifest(m, nil, time.Now())

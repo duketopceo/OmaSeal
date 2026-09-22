@@ -118,20 +118,57 @@ def expands_access(action, policy, pattern, policies):
     return False
 
 
+def reduces_access(action, policy, pattern, policies):
+    """R8 annotation: removing a non-DENY rule removes a grant; a lower-rank
+    add/set tightens an existing grant."""
+    old = policies.get(pattern, "ASK")
+    if action == "remove":
+        return old != "DENY"
+    if action in ("add", "set"):
+        return RANK.get(policy or "", -1) < RANK.get(old, 1)
+    return False
+
+
+def stamp_last_run():
+    """Best-effort last_run_at in jev.json so `omaseal jev status`/doctor can
+    tell enabled-and-producing from enabled-but-never-ran. Preserves all other
+    state fields."""
+    try:
+        st = {}
+        try:
+            with open(STATE_FILE) as fh:
+                st = json.load(fh)
+        except Exception:
+            pass
+        st["last_run_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        fd = os.open(STATE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(st, fh, indent=2)
+            fh.write("\n")
+    except Exception:
+        pass
+
+
 def change_for(finding, recommend, confidence, policies):
     kind, target, detail = finding["kind"], finding["target"], finding.get("detail", "")
     base = {"rationale": f"jev recommend={recommend} confidence={confidence:.2f} — {detail}",
             "confidence": round(confidence, 3)}
     if recommend == "remove_rule" and kind == "dead_rule":
-        return {"action": "remove", "policy": "", "pattern": target,
-                "description": detail, "expands_access": expands_access("remove", "", target, policies), **base}
+        ch = {"action": "remove", "policy": "", "pattern": target,
+              "description": detail, "expands_access": expands_access("remove", "", target, policies), **base}
+        if reduces_access("remove", "", target, policies):
+            ch["reduces_access"] = True
+        return ch
     if recommend in ("add_deny", "add_ask", "add_allow") and kind in ("uncovered", "stale", "advisory"):
         pattern = item_pattern(target)
         if not pattern:
             return None
         policy = recommend[4:].upper()
-        return {"action": "add", "policy": policy, "pattern": pattern,
-                "description": f"cover {target}", "expands_access": expands_access("add", policy, pattern, policies), **base}
+        ch = {"action": "add", "policy": policy, "pattern": pattern,
+              "description": f"cover {target}", "expands_access": expands_access("add", policy, pattern, policies), **base}
+        if reduces_access("add", policy, pattern, policies):
+            ch["reduces_access"] = True
+        return ch
     return None
 
 
@@ -182,6 +219,8 @@ def main():
             ch = change_for(f, rec.get("choice", "none"), float(conf.get("noul", 0)), policies)
             if ch:
                 changes.append(ch)
+
+    stamp_last_run()
 
     proposal = {
         "version": 1,

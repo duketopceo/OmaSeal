@@ -18,6 +18,9 @@ type JevState struct {
 	Enabled   bool      `json:"enabled"`
 	Decided   bool      `json:"decided"` // user expressed a preference; setup stops offering
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastRunAt is stamped by the companion after each run so doctor/status can
+	// distinguish "enabled and producing" from "enabled but never ran".
+	LastRunAt time.Time `json:"last_run_at,omitempty"`
 }
 
 func jevStatePath() string {
@@ -97,13 +100,17 @@ func handleJev() {
 			fmt.Fprintln(os.Stderr, "warning: no openrouter/* item found in the keyring —")
 			fmt.Fprintln(os.Stderr, "         the companion needs one (e.g. omaseal set openrouter default).")
 		}
-		if err := saveJevState(JevState{Enabled: true, Decided: true}); err != nil {
+		st := loadJevState()
+		st.Enabled, st.Decided = true, true
+		if err := saveJevState(st); err != nil {
 			fmt.Fprintf(os.Stderr, "could not save state: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stderr, "jev: enabled")
 	case "disable":
-		if err := saveJevState(JevState{Enabled: false, Decided: true}); err != nil {
+		st := loadJevState()
+		st.Enabled, st.Decided = false, true
+		if err := saveJevState(st); err != nil {
 			fmt.Fprintf(os.Stderr, "could not save state: %v\n", err)
 			os.Exit(1)
 		}
@@ -114,6 +121,9 @@ func handleJev() {
 		fmt.Printf("decided:    %v\n", st.Decided)
 		if !st.UpdatedAt.IsZero() {
 			fmt.Printf("updated_at: %s\n", st.UpdatedAt.Format(time.RFC3339))
+		}
+		if !st.LastRunAt.IsZero() {
+			fmt.Printf("last_run:   %s\n", st.LastRunAt.Format(time.RFC3339))
 		}
 		fmt.Printf("credential: %v\n", jevCredentialPresent())
 		fmt.Printf("state_file: %s\n", jevStatePath())
@@ -140,14 +150,16 @@ func maybeOfferJev(yes bool) {
 		return
 	}
 	if confirmExplicit("Enable Jev? [y/N] ") {
-		if err := saveJevState(JevState{Enabled: true, Decided: true}); err != nil {
+		st.Enabled, st.Decided = true, true
+		if err := saveJevState(st); err != nil {
 			fmt.Fprintf(os.Stderr, "  could not save state: %v\n", err)
 			return
 		}
 		fmt.Fprintln(os.Stderr, "  jev: enabled")
 		return
 	}
-	if err := saveJevState(JevState{Enabled: false, Decided: true}); err != nil {
+	st.Decided = true
+	if err := saveJevState(st); err != nil {
 		fmt.Fprintf(os.Stderr, "  could not save state: %v\n", err)
 		return
 	}
@@ -189,6 +201,10 @@ func checkJev() checkResult {
 		return checkResult{name: "jev", ok: false, optional: true,
 			message: strings.Join(problems, "\n")}
 	}
+	lastRun := "never run"
+	if !st.LastRunAt.IsZero() {
+		lastRun = "last run " + st.LastRunAt.Format("2006-01-02 15:04")
+	}
 	return checkResult{name: "jev", ok: true, optional: true,
-		message: "enabled — metadata-only audits via OpenRouter"}
+		message: "enabled — metadata-only audits via OpenRouter (" + lastRun + ")"}
 }
