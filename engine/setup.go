@@ -49,6 +49,7 @@ func runSetup() {
 	if isStdinTTY() || yes {
 		maybeInstallDetected(detected, yes)
 		maybeSetPrimary(rows, p, yes)
+		maybeOfferJev(yes)
 	} else {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Run `omaseal setup --yes` to auto-wire every detected agent,")
