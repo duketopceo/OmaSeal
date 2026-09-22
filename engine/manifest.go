@@ -173,6 +173,12 @@ func defaultPolicyFor(service string) (RulePolicy, string) {
 	return PolicyAsk, fmt.Sprintf("%s credential", service)
 }
 
+// formatRuleLine renders one rule in the canonical column layout shared by
+// manifest init and manifest apply.
+func formatRuleLine(policy RulePolicy, pattern, desc string) string {
+	return fmt.Sprintf("%-6s %-35s - %s", policy, pattern, desc)
+}
+
 // GenerateDefaultManifest builds a starter robots.txt manifest from existing
 // items and reports the service/account names skipped because whitespace
 // would corrupt the space-separated rule format.
@@ -206,7 +212,7 @@ func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 		seen[target] = true
 
 		policy, desc := defaultPolicyFor(service)
-		line := fmt.Sprintf("%-6s %-35s - %s\n", policy, target, sanitizeField(desc))
+		line := formatRuleLine(policy, target, sanitizeField(desc)) + "\n"
 
 		switch policy {
 		case PolicyAllow:

@@ -48,6 +48,53 @@ func TestIsExpansionChange(t *testing.T) {
 	}
 }
 
+func TestIsReductionChange(t *testing.T) {
+	m := &Manifest{Rules: []ManifestRule{
+		{Policy: PolicyDeny, Pattern: "bank/*"},
+		{Policy: PolicyAsk, Pattern: "github/*"},
+		{Policy: PolicyAllow, Pattern: "openrouter/default"},
+	}}
+	cases := []struct {
+		name string
+		c    ProposalChange
+		want bool
+	}{
+		{"remove ask", ProposalChange{Action: "remove", Pattern: "github/*"}, true},
+		{"remove allow", ProposalChange{Action: "remove", Pattern: "openrouter/default"}, true},
+		{"allow to ask", ProposalChange{Action: "set", Policy: "ASK", Pattern: "openrouter/default"}, true},
+		{"ask to deny", ProposalChange{Action: "set", Policy: "DENY", Pattern: "github/*"}, true},
+		{"new deny", ProposalChange{Action: "add", Policy: "DENY", Pattern: "new/svc"}, true},
+		{"ask to allow", ProposalChange{Action: "set", Policy: "ALLOW", Pattern: "github/*"}, false},
+		{"new allow", ProposalChange{Action: "add", Policy: "ALLOW", Pattern: "new/svc"}, false},
+		{"set ask to ask", ProposalChange{Action: "set", Policy: "ASK", Pattern: "github/*"}, false},
+	}
+	for _, tc := range cases {
+		if got := isReductionChange(m, tc.c); got != tc.want {
+			t.Errorf("%s: isReductionChange = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestValidProposalAction(t *testing.T) {
+	cases := []struct {
+		c    ProposalChange
+		want bool
+	}{
+		{ProposalChange{Action: "remove", Pattern: "a/b"}, true},
+		{ProposalChange{Action: "add", Policy: "ALLOW", Pattern: "a/*"}, true},
+		{ProposalChange{Action: "set", Policy: "deny", Pattern: "a/*"}, true},
+		{ProposalChange{Action: "add", Policy: "PERMIT", Pattern: "a/*"}, false},
+		{ProposalChange{Action: "add", Pattern: "a/*"}, false},
+		{ProposalChange{Action: "delete", Pattern: "a/b"}, false},
+		{ProposalChange{Action: "", Pattern: "a/b"}, false},
+	}
+	for i, tc := range cases {
+		if got := validProposalAction(tc.c); got != tc.want {
+			t.Errorf("case %d: validProposalAction(%+v) = %v, want %v", i, tc.c, got, tc.want)
+		}
+	}
+}
+
 func TestApplyChanges(t *testing.T) {
 	content := `# header comment
 ALLOW  openrouter/default               - key

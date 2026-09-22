@@ -33,6 +33,17 @@ func governsJevCredential(pattern string) bool {
 	return p == "openrouter" || strings.HasPrefix(p, "openrouter/")
 }
 
+// ruleRankFor finds the restrictiveness rank of the manifest rule governing a
+// pattern; the ASK fallback applies when no same-pattern rule exists.
+func ruleRankFor(m *Manifest, pattern string) int {
+	for _, r := range m.Rules {
+		if strings.EqualFold(r.Pattern, pattern) {
+			return policyRank(r.Policy)
+		}
+	}
+	return policyRank(PolicyAsk)
+}
+
 // isExpansionChange recomputes whether a change grants more access — the
 // proposal's expands_access flag is a display hint and is never trusted.
 func isExpansionChange(m *Manifest, c ProposalChange) bool {
@@ -46,17 +57,35 @@ func isExpansionChange(m *Manifest, c ProposalChange) bool {
 		}
 		return false
 	case "add", "set":
-		newRank := policyRank(RulePolicy(strings.ToUpper(c.Policy)))
-		oldRank := policyRank(PolicyAsk) // fallback when no same-pattern rule exists
-		for _, r := range m.Rules {
-			if strings.EqualFold(r.Pattern, c.Pattern) {
-				oldRank = policyRank(r.Policy)
-				break
-			}
-		}
 		// Rank increase covers every expansion shape: ASK→ALLOW, DENY→anything,
 		// and a new ALLOW wildcard (fallback oldRank=ASK < ALLOW).
-		return newRank > oldRank
+		return policyRank(RulePolicy(strings.ToUpper(c.Policy))) > ruleRankFor(m, c.Pattern)
+	}
+	return false
+}
+
+// isReductionChange reports whether a change removes a grant — annotated
+// "reduce" in the render so the human sees the direction of every change.
+func isReductionChange(m *Manifest, c ProposalChange) bool {
+	switch c.Action {
+	case "remove":
+		return true // removing any non-DENY rule (DENY removals are expansions)
+	case "add", "set":
+		return policyRank(RulePolicy(strings.ToUpper(c.Policy))) < ruleRankFor(m, c.Pattern)
+	}
+	return false
+}
+
+// validProposalAction gates the change vocabulary apply understands.
+func validProposalAction(c ProposalChange) bool {
+	switch c.Action {
+	case "remove":
+		return true
+	case "add", "set":
+		switch strings.ToUpper(c.Policy) {
+		case "ALLOW", "ASK", "DENY":
+			return true
+		}
 	}
 	return false
 }
@@ -80,12 +109,12 @@ func applyChanges(content string, changes []ProposalChange) string {
 			for i, ln := range lines {
 				f := strings.Fields(ln)
 				if len(f) >= 2 && !strings.HasPrefix(ln, "#") && strings.EqualFold(f[1], c.Pattern) {
-					lines[i] = fmt.Sprintf("%-6s %-35s - %s", strings.ToUpper(c.Policy), c.Pattern, c.Description)
+					lines[i] = formatRuleLine(RulePolicy(strings.ToUpper(c.Policy)), c.Pattern, c.Description)
 					break
 				}
 			}
 		case "add":
-			line := fmt.Sprintf("%-6s %-35s - %s", strings.ToUpper(c.Policy), c.Pattern, c.Description)
+			line := formatRuleLine(RulePolicy(strings.ToUpper(c.Policy)), c.Pattern, c.Description)
 			// Insert before a trailing empty line when present, else append.
 			if n := len(lines); n > 0 && strings.TrimSpace(lines[n-1]) == "" {
 				lines = append(lines[:n-1], line, "")
@@ -117,6 +146,10 @@ func handleManifestApply(args []string, yes bool) {
 		printError("parsing proposal: ", err)
 		os.Exit(1)
 	}
+	if p.Version != 1 {
+		fmt.Fprintf(os.Stderr, "unsupported proposal version %d (expected 1) — regenerate with `omaseal manifest audit --proposal <path>`\n", p.Version)
+		os.Exit(1)
+	}
 	if len(p.Changes) == 0 {
 		fmt.Println("proposal contains no changes — nothing to apply")
 		return
@@ -137,9 +170,14 @@ func handleManifestApply(args []string, yes bool) {
 		os.Exit(1)
 	}
 
-	// R6: a proposal touching Jev's credential path is rejected wholesale —
-	// partial application would let the unsafe change ride along.
+	// Fail closed on anything the change vocabulary doesn't cover, and on R6:
+	// a proposal touching Jev's credential path is rejected wholesale so a bad
+	// change can never ride along with safe ones.
 	for _, c := range p.Changes {
+		if !validProposalAction(c) {
+			fmt.Fprintf(os.Stderr, "refusing proposal: unknown or malformed change (action %q policy %q)\n", c.Action, c.Policy)
+			os.Exit(1)
+		}
 		if governsJevCredential(c.Pattern) {
 			fmt.Fprintf(os.Stderr, "refusing proposal: change to %q would govern openrouter/* (Jev's credential path)\nedit ai-manifest.txt by hand if this is genuinely intended\n", c.Pattern)
 			os.Exit(1)
@@ -155,7 +193,7 @@ func handleManifestApply(args []string, yes bool) {
 		tag := "keep"
 		if expanding[i] {
 			tag = "EXPAND"
-		} else if c.Action == "remove" || (c.Action == "set" && policyRank(RulePolicy(strings.ToUpper(c.Policy))) < policyRank(PolicyAsk)) {
+		} else if isReductionChange(m, c) {
 			tag = "reduce"
 		}
 		fmt.Printf("  %d. [%s] %s %s %s\n", i+1, tag, c.Action, strings.ToUpper(c.Policy), c.Pattern)
@@ -187,7 +225,7 @@ func handleManifestApply(args []string, yes bool) {
 	} else {
 		for i, c := range p.Changes {
 			if expanding[i] {
-				if confirm(fmt.Sprintf("apply expansion %d: %s %s %s? [y/N] ", i+1, c.Action, strings.ToUpper(c.Policy), c.Pattern)) {
+				if confirmExplicit(fmt.Sprintf("apply expansion %d: %s %s %s? [y/N] ", i+1, c.Action, strings.ToUpper(c.Policy), c.Pattern)) {
 					accepted = append(accepted, c)
 				} else {
 					skipped = append(skipped, c)
