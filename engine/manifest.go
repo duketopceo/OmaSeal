@@ -256,8 +256,11 @@ func handleManifest() {
 	var subcmd string
 	var extraArgs []string
 	for _, a := range os.Args[2:] {
-		if a == "--json" || a == "--force" || a == "-f" {
+		if a == "--json" || a == "--force" || a == "-f" || a == "--yes" || a == "-y" {
 			continue
+		}
+		if strings.HasPrefix(a, "--proposal") {
+			continue // value flag, parsed by flagValue
 		}
 		if subcmd == "" {
 			subcmd = a
@@ -369,8 +372,14 @@ func handleManifest() {
 		}
 		fmt.Println(p)
 
+	case "audit":
+		handleManifestAudit(os.Args[2:], jsonOut)
+
+	case "apply":
+		handleManifestApply(extraArgs, hasFlag(os.Args, "--yes") || hasFlag(os.Args, "-y"))
+
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: omaseal manifest [show|init|check|path] [--json]")
+		fmt.Fprintln(os.Stderr, "Usage: omaseal manifest [show|init|check|path|audit|apply] [--json] [--proposal <path>] [--yes]")
 		os.Exit(1)
 	}
 }
