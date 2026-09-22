@@ -28,6 +28,7 @@ Key features:
 - JSON IPC surface for other Quickshell/Omarchy plugins.
 - Agent access modes (`open`, `ask`, `lock`) with presence-gated unlock;
   ungated `ask` is a separate deliberate opt-out (`--ungated`).
+- Local `manifest audit`/`apply` lint + human-gated policy changes, with an optional Jev decision layer (opt-in — see privacy).
 
 Installation:
 
@@ -57,6 +58,8 @@ Privacy / consent:
 - Secrets are stored only in the local Secret Service collection; no cloud or network is used by the core keyring.
 - 1Password/Bitwarden calls are local CLI invocations; the bridge caches the secret in `gnome-keyring` after the first resolution.
 - `list` returns metadata only; secret values are never printed by default.
+- `omaseal manifest audit` lints the agent-access manifest fully locally.
+- Optional Jev decision layer (off by default, `omaseal jev enable` to opt in): a local companion script may send keyring *metadata* — service/account names, access counts, manifest rules, never secret values — to OpenRouter. While disabled, nothing Jev-related runs or uses the network.
 
 License: MIT
 
