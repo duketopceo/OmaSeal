@@ -182,7 +182,7 @@ var mcpToolsResult = map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"service": map[string]string{"type": "string"},
-					"sort":    map[string]string{"type": "string", "enum": "used|recent|name"},
+					"sort":    map[string]any{"type": "string", "enum": []string{"used", "recent", "name"}},
 				},
 				"required": []string{},
 			},
