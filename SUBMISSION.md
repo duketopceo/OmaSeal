@@ -21,11 +21,13 @@ OmaSeal is a first-party Omarchy keyring that gives the desktop a macOS Keychain
 Key features:
 - `get / set / delete / list` over `gnome-keyring`.
 - `resolve` with automatic fallback to 1Password (`op`) and Bitwarden (`bw`), caching locally.
-- `reveal` with a best-effort `fprintd` fingerprint gate.
+- `reveal` behind a fail-closed user-presence gate (`fprintd`, else a GUI
+  confirm via pinentry/zenity; denies when no mechanism exists).
 - Quickshell bar widget and panel for browse/add/copy/delete.
 - MCP stdio server for agents: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delete`, `omaseal_list`.
 - JSON IPC surface for other Quickshell/Omarchy plugins.
-- Agent access modes (`open`, `ask`, `lock`) with biometric unlock.
+- Agent access modes (`open`, `ask`, `lock`) with presence-gated unlock;
+  ungated `ask` is a separate deliberate opt-out (`--ungated`).
 
 Installation:
 
@@ -47,7 +49,8 @@ rm -f ~/.local/bin/omaseal
 Permissions / dependencies:
 - Requires `gnome-keyring-daemon` (Secret Service provider). Already on Omarchy.
 - Optional 1Password CLI (`op`) or Bitwarden CLI (`bw`) for import/resolve.
-- Optional `fprintd` for the biometric `reveal` and `agent unlock` gate.
+- Optional `fprintd` for fingerprint confirmation; pinentry or zenity provide
+  the GUI-confirm fallback. Without either, gated paths deny by default.
 - Uses `wl-copy` for the panel's copy-to-clipboard action.
 
 Privacy / consent:
