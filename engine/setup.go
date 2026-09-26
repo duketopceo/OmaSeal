@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,6 +108,16 @@ func runSetup() {
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintln(os.Stderr, "=== Fingerprint ===")
 			fmt.Fprintln(os.Stderr, "Enroll a finger with `fprintd-enroll` to enable biometric reveal.")
+		}
+		if p := loadAgentPolicyOrDefault(); p.Mode == "ask" {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			mech := presenceMechanism(ctx, p)
+			cancel()
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "Presence gate for `agent unlock`: %s\n", mech)
+			if strings.HasPrefix(mech, "none") {
+				fmt.Fprintln(os.Stderr, "  Install fprintd or a GUI prompter (pinentry/zenity), or run `omaseal agent mode ask --ungated` to opt out deliberately.")
+			}
 		}
 	}
 }

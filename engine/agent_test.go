@@ -125,7 +125,7 @@ func TestSetAgentModePreservesPolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save policy: %v", err)
 	}
-	if err := SetAgentMode("lock", 0); err != nil {
+	if err := SetAgentMode("lock", 0, false); err != nil {
 		t.Fatalf("set mode: %v", err)
 	}
 	p, err := loadAgentPolicy()

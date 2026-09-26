@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os/exec"
 	"time"
 
@@ -17,6 +16,7 @@ const (
 	fprintManagerIface  = "net.reactivated.Fprint.Manager"
 	fprintDeviceIface   = "net.reactivated.Fprint.Device"
 	fprintVerifyTimeout = 15 * time.Second
+	fprintProbeTimeout  = 5 * time.Second
 )
 
 // fprintdAvailable returns nil if the fprintd service is active and has at
@@ -44,37 +44,27 @@ func fprintdAvailable(ctx context.Context) error {
 	return nil
 }
 
-// FprintdVerify starts a best-effort fprintd fingerprint verification.
-//
-// If the fprintd daemon is not available or no reader is enrolled, it returns
-// nil so that the caller can proceed without a fingerprint gate. This mirrors
-// the macOS Touch ID best-effort posture: protect where possible, but do not
-// hard-fail on machines without biometric hardware.
-//
-// If a default device is present, any setup failure (Claim, AddMatch,
-// VerifyStart) is treated as a verification failure and an error is returned.
-// The secret is only released when the user explicitly matches or when no
-// biometric hardware is present at all.
-func FprintdVerify(ctx context.Context, reason string) error {
-	WriteLog("fprintd: verify for %s", reason)
+// fprintdUsable reports whether a real fingerprint verification device is
+// reachable right now: service active, name on the bus, default device
+// present. False means "no biometric mechanism", not "denied" — callers run
+// their next presence mechanism instead of failing.
+func fprintdUsable(ctx context.Context) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, fprintProbeTimeout)
+	defer cancel()
 
-	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
-	defer verifyCancel()
-
-	// Quick active check; skip the whole D-Bus dance if the daemon isn't running.
-	if err := exec.CommandContext(verifyCtx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
-		return nil
+	if err := exec.CommandContext(probeCtx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
+		return false
 	}
 
 	conn, err := dbus.SystemBus()
 	if err != nil {
-		return nil
+		return false
 	}
 	defer conn.Close()
 
 	var names []string
-	if err := conn.BusObject().CallWithContext(verifyCtx, "org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
-		return nil
+	if err := conn.BusObject().CallWithContext(probeCtx, "org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		return false
 	}
 	found := false
 	for _, n := range names {
@@ -84,17 +74,43 @@ func FprintdVerify(ctx context.Context, reason string) error {
 		}
 	}
 	if !found {
-		return nil
+		return false
 	}
 
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
-	if err := mgr.CallWithContext(verifyCtx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
-		log.Printf("omaseal: fprintd not available, skipping biometric prompt (%v)", err)
-		return nil
+	if err := mgr.CallWithContext(probeCtx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
+		return false
 	}
-	if devicePath == "" || devicePath == "/" {
-		return nil
+	return devicePath != "" && devicePath != "/"
+}
+
+// FprintdVerify performs a real fingerprint verification and fails closed:
+// it returns an error when no reader is usable and on every verification
+// failure. Callers wanting a fallback should probe with fprintdUsable first.
+//
+// A device present but unenrolled lands here and fails closed at verify time.
+// The secret is only released when the user explicitly matches.
+func FprintdVerify(ctx context.Context, reason string) error {
+	WriteLog("fprintd: verify for %s", reason)
+
+	if !fprintdUsable(ctx) {
+		return errors.New("fingerprint reader not available")
+	}
+
+	verifyCtx, verifyCancel := context.WithTimeout(ctx, fprintVerifyTimeout)
+	defer verifyCancel()
+
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return errors.New("cannot connect to the D-Bus system bus")
+	}
+	defer conn.Close()
+
+	mgr := conn.Object(fprintBusName, fprintManagerPath)
+	var devicePath dbus.ObjectPath
+	if err := mgr.CallWithContext(verifyCtx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
+		return fmt.Errorf("fprintd has no default device: %w", err)
 	}
 
 	dev := conn.Object(fprintBusName, devicePath)
