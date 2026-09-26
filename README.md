@@ -207,9 +207,9 @@ and `omaseal://` reference grammar every consumer should follow.
   `fprintd` when a reader is enrolled, else a GUI confirm dialog (pinentry or
   zenity) when a graphical session and prompter exist. When neither is
   available the gate **fails closed** — the only bypass is the deliberate
-  opt-out `omaseal agent mode ask --ungated` (or `open` mode). The calling
-  process's stdin is never consulted, so an MCP-connected agent cannot
-  confirm its own unlock.
+  opt-out `omaseal agent mode ask --ungated`. (`open` mode skips `agent
+  unlock` but `reveal` still gates.) The calling process's stdin is never
+  consulted, so an MCP-connected agent cannot confirm its own unlock.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault.
 - When `resolve` needs to prompt, it uses the TTY when one exists; in a

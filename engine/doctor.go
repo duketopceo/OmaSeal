@@ -301,7 +301,7 @@ func checkPresenceGate() checkResult {
 			"  - `omaseal agent unlock` will not ask for user presence — any local process can open a session.\n" +
 			"  - Re-gate with `omaseal agent mode ask`."}
 	}
-	return checkResult{name: "presence-gate", ok: false, message: "no user-presence mechanism for `omaseal agent unlock` — unlock will fail closed.\n" +
+	return checkResult{name: "presence-gate", ok: false, optional: true, message: "no user-presence mechanism for `omaseal agent unlock` — unlock will fail closed.\n" +
 		"  - Enroll a fingerprint (fprintd-enroll), or install pinentry/zenity for a GUI confirm dialog.\n" +
 		"  - Deliberate opt-out for headless machines: `omaseal agent mode ask --ungated`."}
 }
