@@ -20,8 +20,8 @@ const (
 )
 
 // fprintdAvailable returns nil if the fprintd service is active and has at
-// least one usable device. It is used by `omaseal doctor` to report hardware
-// availability.
+// least one usable device. It is the single probe behind both `omaseal
+// doctor`'s hardware report and the presence gate's fprintdUsable check.
 func fprintdAvailable(ctx context.Context) error {
 	if err := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
 		return errors.New("fprintd.service is not active")
@@ -32,6 +32,21 @@ func fprintdAvailable(ctx context.Context) error {
 		return errors.New("cannot connect to the D-Bus system bus")
 	}
 	defer conn.Close()
+
+	var names []string
+	if err := conn.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
+		return fmt.Errorf("cannot list D-Bus names: %w", err)
+	}
+	found := false
+	for _, n := range names {
+		if n == fprintBusName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return errors.New("fprintd is not on the system bus")
+	}
 
 	mgr := conn.Object(fprintBusName, fprintManagerPath)
 	var devicePath dbus.ObjectPath
@@ -44,45 +59,13 @@ func fprintdAvailable(ctx context.Context) error {
 	return nil
 }
 
-// fprintdUsable reports whether a real fingerprint verification device is
-// reachable right now: service active, name on the bus, default device
-// present. False means "no biometric mechanism", not "denied" — callers run
-// their next presence mechanism instead of failing.
+// fprintdUsable is the bounded boolean form of fprintdAvailable for the
+// presence chain: false means "no biometric mechanism", not "denied" — the
+// caller runs its next mechanism instead of failing.
 func fprintdUsable(ctx context.Context) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, fprintProbeTimeout)
 	defer cancel()
-
-	if err := exec.CommandContext(probeCtx, "systemctl", "is-active", "--quiet", "fprintd.service").Run(); err != nil {
-		return false
-	}
-
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-
-	var names []string
-	if err := conn.BusObject().CallWithContext(probeCtx, "org.freedesktop.DBus.ListNames", 0).Store(&names); err != nil {
-		return false
-	}
-	found := false
-	for _, n := range names {
-		if n == fprintBusName {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return false
-	}
-
-	mgr := conn.Object(fprintBusName, fprintManagerPath)
-	var devicePath dbus.ObjectPath
-	if err := mgr.CallWithContext(probeCtx, fprintManagerIface+".GetDefaultDevice", 0).Store(&devicePath); err != nil {
-		return false
-	}
-	return devicePath != "" && devicePath != "/"
+	return fprintdAvailable(probeCtx) == nil
 }
 
 // FprintdVerify performs a real fingerprint verification and fails closed:

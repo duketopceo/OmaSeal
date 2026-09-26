@@ -111,7 +111,7 @@ func runSetup() {
 		}
 		if p := loadAgentPolicyOrDefault(); p.Mode == "ask" {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			mech := presenceMechanism(ctx, p)
+			mech := presenceMechanism(ctx, p, fprintdUsableFunc(ctx))
 			cancel()
 			fmt.Fprintln(os.Stderr)
 			fmt.Fprintf(os.Stderr, "Presence gate for `agent unlock`: %s\n", mech)

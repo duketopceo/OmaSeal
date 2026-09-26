@@ -316,7 +316,7 @@ func PrintAgentStatus() {
 	}
 	if p.Mode == "ask" {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		fmt.Fprintf(os.Stderr, "presence gate:    %s\n", presenceMechanism(ctx, p))
+		fmt.Fprintf(os.Stderr, "presence gate:    %s\n", presenceMechanism(ctx, p, fprintdUsableFunc(ctx)))
 		cancel()
 		if p.AllowUngated {
 			fmt.Fprintln(os.Stderr, "allow_ungated:    on (deliberate — unlock proceeds without confirmation when no mechanism is available)")
@@ -351,10 +351,11 @@ func agentStatusJSON() (string, error) {
 	}
 	// The presence probe spawns subprocesses; only ask mode consumes the fields.
 	if p.Mode == "ask" {
-		out["fprintd_available"] = fprintdProbeOK()
-		out["allow_ungated"] = p.AllowUngated
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		out["presence_gate"] = presenceMechanism(ctx, p)
+		usable := fprintdUsableFunc(ctx)
+		out["fprintd_available"] = usable
+		out["allow_ungated"] = p.AllowUngated
+		out["presence_gate"] = presenceMechanism(ctx, p, usable)
 		cancel()
 	}
 	if expiry, ok := readSessionExpiry(); ok && time.Now().UTC().Before(expiry) {
@@ -366,14 +367,6 @@ func agentStatusJSON() (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-// fprintdProbeOK reports whether a usable fingerprint reader is enrolled,
-// bounded so status paths stay fast when fprintd is absent.
-func fprintdProbeOK() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return fprintdAvailable(ctx) == nil
 }
 
 func unknownAgentError(name string) error {

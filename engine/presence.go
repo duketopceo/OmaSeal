@@ -63,10 +63,11 @@ func requireUserPresence(ctx context.Context, reason string, p AgentPolicy) erro
 }
 
 // presenceMechanism names what would gate an unlock on this machine right
-// now, for status/doctor surfaces. "none" means unlock fails closed unless
-// the policy opted out. The caller bounds ctx (status paths stay fast).
-func presenceMechanism(ctx context.Context, p AgentPolicy) string {
-	if fprintdUsableFunc(ctx) {
+// now, for status/doctor surfaces. Callers pass the result of their own
+// fprintdUsableFunc probe so status paths probe once. "none" means unlock
+// fails closed unless the policy opted out.
+func presenceMechanism(ctx context.Context, p AgentPolicy, fprintdUsableNow bool) string {
+	if fprintdUsableNow {
 		return "fprintd"
 	}
 	if graphicalSession() {

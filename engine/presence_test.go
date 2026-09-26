@@ -166,19 +166,14 @@ func TestPresenceMechanismLabels(t *testing.T) {
 	t.Setenv("DISPLAY", "")
 	t.Setenv("OMASEAL_GUI_PROMPT", "off") // pinentry/zenity probes disabled
 
-	oldU := fprintdUsableFunc
-	defer func() { fprintdUsableFunc = oldU }()
-
-	fprintdUsableFunc = func(context.Context) bool { return true }
-	if got := presenceMechanism(context.Background(), AgentPolicy{}); got != "fprintd" {
+	ctx := context.Background()
+	if got := presenceMechanism(ctx, AgentPolicy{}, true); got != "fprintd" {
 		t.Errorf("mechanism = %q, want fprintd", got)
 	}
-
-	fprintdUsableFunc = func(context.Context) bool { return false }
-	if got := presenceMechanism(context.Background(), AgentPolicy{}); !strings.HasPrefix(got, "none") {
+	if got := presenceMechanism(ctx, AgentPolicy{}, false); !strings.HasPrefix(got, "none") {
 		t.Errorf("mechanism = %q, want none-*", got)
 	}
-	if got := presenceMechanism(context.Background(), AgentPolicy{AllowUngated: true}); !strings.HasPrefix(got, "ungated") {
+	if got := presenceMechanism(ctx, AgentPolicy{AllowUngated: true}, false); !strings.HasPrefix(got, "ungated") {
 		t.Errorf("mechanism = %q, want ungated*", got)
 	}
 }
