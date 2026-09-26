@@ -297,7 +297,7 @@ func checkPresenceGate() checkResult {
 		}
 	}
 	if p.AllowUngated {
-		return checkResult{name: "presence-gate", ok: false, message: "ask mode is running ungated (allow_ungated set).\n" +
+		return checkResult{name: "presence-gate", ok: false, optional: true, message: "ask mode is running ungated (allow_ungated set).\n" +
 			"  - `omaseal agent unlock` will not ask for user presence — any local process can open a session.\n" +
 			"  - Re-gate with `omaseal agent mode ask`."}
 	}

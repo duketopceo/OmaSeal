@@ -12,6 +12,12 @@ import (
 // the caller could not have forged. errors.Is lets callers report it cleanly.
 var errPresenceDenied = errors.New("user presence not confirmed")
 
+// errNoPresenceMechanism means every mechanism was unavailable — distinct
+// from a denial: the user was never asked. requireUserPresence maps it to
+// allow_ungated-or-deny; the agent-mode gate maps it to warn-and-allow so a
+// headless machine can still change policy.
+var errNoPresenceMechanism = errors.New("no user-presence mechanism available")
+
 // Test seams — mirrors the pinentryCandidatePaths/zenityCandidatePaths stub
 // pattern in guiprompt.go so unit tests can drive every chain step without
 // D-Bus services or spawned dialogs.
@@ -21,17 +27,18 @@ var (
 	guiPresenceConfirmFunc = guiPresenceConfirm
 )
 
-// requireUserPresence gates a privileged action behind proof that the local
-// user physically responded. Order is fixed: real biometric when a reader is
-// usable, a GUI confirm dialog omaseal spawns on the display server, then —
-// only when the policy deliberately opted out — an ungated allow. Anything
-// else denies. Caller stdin/TTY/argv never counts: the calling process gets a
-// verdict, never a channel it can answer through.
+// runPresenceChain asks the local user to confirm reason through the first
+// mechanism that exists. Order is fixed: real biometric when a reader is
+// usable, then a GUI confirm dialog omaseal spawns on the display server.
+// Returns nil on confirmation, errPresenceDenied when the user answered no
+// (or let it lapse), and errNoPresenceMechanism when nothing could ask.
+// Caller stdin/TTY/argv never counts: the calling process gets a verdict,
+// never a channel it can answer through.
 //
 // Deny semantics: a failed fingerprint or a dismissed/denied dialog stops the
 // chain (re-prompting elsewhere invites click-fatigue bypass). Only
 // mechanism-unavailable errors fall through to the next step.
-func requireUserPresence(ctx context.Context, reason string, p AgentPolicy) error {
+func runPresenceChain(ctx context.Context, reason string) error {
 	if fprintdUsableFunc(ctx) {
 		if err := fprintdVerifyFunc(ctx, reason); err != nil {
 			WriteLog("presence: fingerprint failed for %s: %v", reason, err)
@@ -50,16 +57,24 @@ func requireUserPresence(ctx context.Context, reason string, p AgentPolicy) erro
 		return fmt.Errorf("%w: confirmation declined or timed out", errPresenceDenied)
 	default:
 		WriteLog("presence: no usable gui prompter for %s: %v", reason, err)
-		// fall through — mechanism unavailable, not a refusal
+		return errNoPresenceMechanism
 	}
+}
 
+// requireUserPresence gates a privileged action behind proof that the local
+// user physically responded. When no mechanism exists at all it denies —
+// unless the policy carries the deliberate allow_ungated opt-out.
+func requireUserPresence(ctx context.Context, reason string, p AgentPolicy) error {
+	err := runPresenceChain(ctx, reason)
+	if !errors.Is(err, errNoPresenceMechanism) {
+		return err
+	}
 	if p.AllowUngated {
 		WriteLog("presence: allow_ungated policy permits %s without confirmation", reason)
 		fmt.Fprintln(os.Stderr, "warning: no user-presence mechanism available; proceeding because the agent policy sets allow_ungated")
 		return nil
 	}
-
-	return fmt.Errorf("%w: no user-presence mechanism available — enroll a fingerprint (fprintd-enroll), install pinentry or zenity for a GUI confirm, or run `omaseal agent mode ask --ungated` to deliberately opt out", errPresenceDenied)
+	return fmt.Errorf("%w: %w — enroll a fingerprint (fprintd-enroll), install pinentry or zenity for a GUI confirm, or run `omaseal agent mode ask --ungated` to deliberately opt out", errPresenceDenied, err)
 }
 
 // presenceMechanism names what would gate an unlock on this machine right

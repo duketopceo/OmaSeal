@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,6 +251,46 @@ func SetAgentMode(mode string, sessionMinutes int, allowUngated bool) error {
 	return saveAgentPolicy(p)
 }
 
+// modeChangeWeakens reports whether switching policy p to (mode, ungated)
+// lowers the protection the agent boundary currently has. Those transitions
+// are what a prompt-injected agent would run to defeat ask mode, so they go
+// through the presence gate; strengthening changes are always free.
+func modeChangeWeakens(p AgentPolicy, mode string, ungated bool) bool {
+	switch {
+	case mode == "open" && p.Mode != "open":
+		return true
+	case ungated && !p.AllowUngated:
+		return true // opting ask out of presence confirmation weakens it
+	case p.Mode == "lock" && mode == "ask":
+		return true // lock -> ask re-enables agent access
+	}
+	return false
+}
+
+// gateModeChange runs the presence chain for weakening mode transitions.
+// When no mechanism exists it warns and allows — a headless machine cannot
+// prove human intent, and blocking would lock the user out of every remedy
+// (including setting the ungated opt-out). A refused confirmation blocks.
+func gateModeChange(ctx context.Context, p AgentPolicy, mode string, ungated bool) error {
+	if !modeChangeWeakens(p, mode, ungated) {
+		return nil
+	}
+	reason := "change agent mode to " + mode
+	if ungated {
+		reason += " --ungated"
+	}
+	switch err := runPresenceChain(ctx, reason); {
+	case err == nil:
+		return nil
+	case errors.Is(err, errNoPresenceMechanism):
+		WriteLog("presence: no mechanism to confirm mode change to %s", mode)
+		fmt.Fprintln(os.Stderr, "warning: no user-presence mechanism available to confirm this change; applying anyway.")
+		return nil
+	default:
+		return err
+	}
+}
+
 // UnlockAgent creates a time-bounded session after a user-presence
 // confirmation the calling process cannot answer itself (fingerprint, then
 // GUI confirm). With no presence mechanism it fails closed unless the policy
@@ -261,6 +302,10 @@ func UnlockAgent() error {
 	}
 	if p.Mode == "lock" {
 		return fmt.Errorf("agent mode is locked; run `omaseal agent mode ask` (or open) first")
+	}
+	if p.Mode == "open" {
+		fmt.Println("Agent mode is open; unlock is not needed.")
+		return nil
 	}
 
 	if err := requireUserPresence(context.Background(), "agent unlock", p); err != nil {
@@ -457,6 +502,10 @@ func handleAgent() {
 		}
 		if ungated && mode != "ask" {
 			fmt.Fprintln(os.Stderr, "error: --ungated only applies to `agent mode ask`")
+			os.Exit(1)
+		}
+		if err := gateModeChange(context.Background(), loadAgentPolicyOrDefault(), mode, ungated); err != nil {
+			fmt.Fprintf(os.Stderr, "error: mode change denied: %v\n", err)
 			os.Exit(1)
 		}
 		if err := SetAgentMode(mode, mins, ungated); err != nil {

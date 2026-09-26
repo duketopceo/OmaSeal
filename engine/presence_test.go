@@ -178,6 +178,85 @@ func TestPresenceMechanismLabels(t *testing.T) {
 	}
 }
 
+func TestUnlockAgentOpenModeIsNoOp(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "open", SessionMinutes: 15}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	stubPresence(t, false, nil, errNoGUIPrompter) // gate must not even run
+	if err := UnlockAgent(); err != nil {
+		t.Fatalf("open-mode unlock should be a no-op, got %v", err)
+	}
+}
+
+// --- mode-change gate ---
+
+func TestModeChangeWeakens(t *testing.T) {
+	ask := AgentPolicy{Mode: "ask"}
+	askUngated := AgentPolicy{Mode: "ask", AllowUngated: true}
+	open := AgentPolicy{Mode: "open"}
+	lock := AgentPolicy{Mode: "lock"}
+
+	cases := []struct {
+		name       string
+		p          AgentPolicy
+		mode       string
+		ungated    bool
+		wantWeaken bool
+	}{
+		{"ask->open", ask, "open", false, true},
+		{"ask->ask+ungated", ask, "ask", true, true},
+		{"lock->open", lock, "open", false, true},
+		{"lock->ask", lock, "ask", false, true},
+		{"open->open", open, "open", false, false},
+		{"ask+ungated->ask+ungated", askUngated, "ask", true, false},
+		{"open->ask", open, "ask", false, false},
+		{"ask->lock", ask, "lock", false, false},
+		{"ask+ungated->ask", askUngated, "ask", false, false},
+	}
+	for _, c := range cases {
+		if got := modeChangeWeakens(c.p, c.mode, c.ungated); got != c.wantWeaken {
+			t.Errorf("%s: modeChangeWeakens = %v, want %v", c.name, got, c.wantWeaken)
+		}
+	}
+}
+
+func TestGateModeChangeStrengtheningNeverAsks(t *testing.T) {
+	// A strengthening change must not touch the chain even when a fingerprint
+	// reader exists and would fail.
+	stubPresence(t, true, errors.New("must not run"), errors.New("must not run"))
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "lock", false); err != nil {
+		t.Fatalf("strengthening change should pass unguarded: %v", err)
+	}
+}
+
+func TestGateModeChangeWeakDeniedByUser(t *testing.T) {
+	stubPresence(t, false, nil, errPromptCancelled)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "open", false); !errors.Is(err, errPresenceDenied) {
+		t.Fatalf("user-declined mode change must deny, got %v", err)
+	}
+}
+
+func TestGateModeChangeWeakAllowedByGui(t *testing.T) {
+	stubPresence(t, false, nil, nil)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "open", false); err != nil {
+		t.Fatalf("gui-allowed mode change should pass: %v", err)
+	}
+}
+
+func TestGateModeChangeNoMechanismWarnsButAllows(t *testing.T) {
+	// Headless machines cannot prove human intent; blocking would also lock
+	// the user out of setting --ungated. Warn-and-allow is the ceiling.
+	stubPresence(t, false, nil, errNoGUIPrompter)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "ask", true); err != nil {
+		t.Fatalf("no-mechanism mode change should warn-and-allow, got %v", err)
+	}
+}
+
 // --- GUI confirm prompters ---
 
 // pinentryConfirmStub is pinentryStub specialized for CONFIRM: it replies
