@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,8 +71,18 @@ func LoadManifest() (*Manifest, error) {
 	}
 	defer f.Close()
 
+	rules, err := scanManifestRules(f)
+	if err != nil {
+		return nil, err
+	}
+	return &Manifest{Path: path, Rules: rules}, nil
+}
+
+// scanManifestRules parses manifest rule lines from any reader — shared by
+// LoadManifest and manifest apply's reparse-check of rendered output.
+func scanManifestRules(r io.Reader) ([]ManifestRule, error) {
 	var rules []ManifestRule
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -116,7 +127,7 @@ func LoadManifest() (*Manifest, error) {
 		})
 	}
 
-	return &Manifest{Path: path, Rules: rules}, scanner.Err()
+	return rules, scanner.Err()
 }
 
 // CheckPolicy determines whether an AI agent is ALLOW, DENY, or ASK for a secret.
@@ -173,6 +184,12 @@ func defaultPolicyFor(service string) (RulePolicy, string) {
 	return PolicyAsk, fmt.Sprintf("%s credential", service)
 }
 
+// formatRuleLine renders one rule in the canonical column layout shared by
+// manifest init and manifest apply.
+func formatRuleLine(policy RulePolicy, pattern, desc string) string {
+	return fmt.Sprintf("%-6s %-35s - %s", policy, pattern, desc)
+}
+
 // GenerateDefaultManifest builds a starter robots.txt manifest from existing
 // items and reports the service/account names skipped because whitespace
 // would corrupt the space-separated rule format.
@@ -206,7 +223,7 @@ func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 		seen[target] = true
 
 		policy, desc := defaultPolicyFor(service)
-		line := fmt.Sprintf("%-6s %-35s - %s\n", policy, target, sanitizeField(desc))
+		line := formatRuleLine(policy, target, sanitizeField(desc)) + "\n"
 
 		switch policy {
 		case PolicyAllow:
@@ -256,8 +273,11 @@ func handleManifest() {
 	var subcmd string
 	var extraArgs []string
 	for _, a := range os.Args[2:] {
-		if a == "--json" || a == "--force" || a == "-f" {
+		if a == "--json" || a == "--force" || a == "-f" || a == "--yes" || a == "-y" {
 			continue
+		}
+		if strings.HasPrefix(a, "--proposal") {
+			continue // value flag, parsed by flagValue
 		}
 		if subcmd == "" {
 			subcmd = a
@@ -369,8 +389,14 @@ func handleManifest() {
 		}
 		fmt.Println(p)
 
+	case "audit":
+		handleManifestAudit(os.Args[2:], jsonOut)
+
+	case "apply":
+		handleManifestApply(extraArgs, hasFlag(os.Args, "--yes") || hasFlag(os.Args, "-y"))
+
 	default:
-		fmt.Fprintln(os.Stderr, "Usage: omaseal manifest [show|init|check|path] [--json]")
+		fmt.Fprintln(os.Stderr, "Usage: omaseal manifest [show|init|check|path|audit|apply] [--json] [--proposal <path>] [--yes]")
 		os.Exit(1)
 	}
 }

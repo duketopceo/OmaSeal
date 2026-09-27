@@ -27,7 +27,8 @@ Usage:
   omaseal list [service] [--json] [--sort=used|recent|name]
                                            list stored secrets (optionally sorted)
   omaseal stats [--json]                   display access analytics & usage leaderboard
-  omaseal manifest [show|init|check|path]  AI agent access policy (robots.txt format)
+  omaseal manifest [show|init|check|path|audit|apply <file>]  AI agent access policy
+  omaseal jev [status|enable|disable]      optional Jev decision layer (off by default)
   omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
@@ -137,6 +138,8 @@ func main() {
 		runSetup()
 	case "agent":
 		handleAgent()
+	case "jev":
+		handleJev()
 	case "help", "-h", "--help":
 		usage()
 	default:

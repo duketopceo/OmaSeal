@@ -69,6 +69,7 @@ func doctorChecks() []checkResult {
 		checkBitwarden,
 		checkGUIPrompt,
 		checkPath,
+		checkJev,
 	}
 	results := make([]checkResult, len(checks))
 	var wg sync.WaitGroup

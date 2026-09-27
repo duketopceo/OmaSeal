@@ -212,6 +212,10 @@ and `omaseal://` reference grammar every consumer should follow.
   consulted, so an MCP-connected agent cannot confirm its own unlock.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault.
+- `manifest audit` lints the agent-access manifest fully locally — no network.
+- Jev (optional, off by default) may send keyring *metadata* — service/account
+  names, access counts, manifest rules, never secret values — to OpenRouter,
+  and only after `omaseal jev enable`. See "Manifest audit + Jev" below.
 - When `resolve` needs to prompt, it uses the TTY when one exists; in a
   graphical session with no TTY it opens a masked pinentry or zenity dialog
   instead. `OMASEAL_GUI_PROMPT=pinentry|zenity|off` controls the prompter;
@@ -244,6 +248,37 @@ Tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`,
 `omaseal_delete`, `omaseal_list`. The server also returns `instructions` at
 `initialize` time, so connected agents automatically know to resolve secrets
 through OmaSeal instead of asking for pastes or reading `.env` files.
+
+## Manifest audit + Jev (optional)
+
+`omaseal manifest audit` lints `ai-manifest.txt` against the live keyring —
+dead rules, uncovered items, stale secrets, advisories. Fully local, no
+network, no key needed; the unfiltered inventory is used so a bad DENY rule
+cannot hide evidence of itself.
+
+`omaseal manifest audit --proposal <path>` writes a JSON proposal of safe
+changes (dead-rule removals). `omaseal manifest apply <path>` renders the
+parsed changes and applies them after human confirmation — it refuses
+anything governing `openrouter/*` (the credential path Jev itself uses) and
+requires per-item confirmation for capability-expanding changes. Headless
+use: `apply --yes` applies only non-expanding changes and lists skipped
+expansions; a non-TTY invocation **without** `--yes` refuses to apply
+entirely. Apply is a CLI-only surface; no agent or MCP tool can reach it.
+
+Jev is an optional decision layer on top, **disabled by default**:
+
+- `omaseal jev status|enable|disable` controls it. Setup offers it once —
+  only when an `openrouter/*` item exists — and a decline is remembered.
+- While disabled, nothing Jev-related runs or touches the network.
+- When enabled, the `contrib/omaseal-jev-audit` companion may send keyring
+  *metadata* (service/account names, access counts, manifest rules — never
+  secret values) to OpenRouter for a per-finding recommendation and
+  confidence, then writes a proposal for the same human-gated apply.
+- Jev proposes; only a human applies. Nothing is ever auto-applied.
+
+To try it: `omaseal jev enable`, install the companion
+(`install -Dm755 contrib/omaseal-jev-audit ~/.local/bin/`), then run
+`omaseal-jev-audit` after an audit.
 
 ## License
 
