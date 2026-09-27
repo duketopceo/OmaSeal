@@ -14,8 +14,8 @@
 - [x] `omaseal setup` with self-verifying keyring round-trip (30s bounded)
 - [x] `omaseal://service/account` references accepted by every command
 - [x] Masked GUI prompt for `resolve` without a TTY (pinentry, `OMASEAL_GUI_PROMPT`)
-- [x] fprintd biometric gate for `reveal`/agent unlock; panel shows
-  mode/unlock state; session keep-alive
+- [x] Fail-closed user-presence gate for `reveal`/agent unlock — fprintd,
+  else GUI confirm, else deny; `agent mode ask --ungated` opt-out (v0.4.0)
 - [x] Shared `service/account` namespace with other writers
   (`omarchy-secrets-*`, keytar, seahorse): `owned` provenance flag,
   duplicate-safe set/delete
@@ -30,17 +30,21 @@
   30s conditional clipboard clear (`omaseal clipclear`)
 - [x] Bounded D-Bus calls, pooled metadata reads (~0.7s at ~700 items),
   capped access log, atomic config writes
+- [x] `omaseal keyring migrate` + doctor `keyring-encryption` check —
+  plaintext keyrings detected and re-encrypted into `login`
+- [x] Fail-closed agent policy — missing `agent.json` defaults to `ask`
 
 ## v0.6.0 — Marketplace stable
 
 - Close repository issues #2, #3, #4.
+- Marketplace: revalidation requested at `551d075` (v0.4.0) — both security
+  findings fixed (#17 default-open policy, #20 fail-open unlock).
+- Queued: #13 provider negative caching, #12 AUR (registration freeze).
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
   `omarchy.secrets` panel + menu entry → Discussion + PR to
   `omacom/omarchy-mac` (base `quattro`); phased fallback (commands + menu
   only) if the panel is the sticking point.
 - AUR package (`omaseal-bin`) and release automation hardened.
-- Land the PR stack: #6 (refs/GUI prompt/hardening) → #8 (organized panel,
-  analytics, enforced manifest).
 
 ## v0.7.0 — BrowserOS and plugin ecosystem
 
