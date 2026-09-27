@@ -1,6 +1,6 @@
 # Maintainer: Luke Kimball <kimballluke@gmail.com>
 pkgname=omaseal
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc="First-party Omarchy keyring manager"
 arch=('x86_64' 'aarch64')
@@ -18,7 +18,7 @@ source=("${pkgname}-${pkgver}.tar.gz::https://github.com/duketopceo/OmaSeal/arch
 # merge the CI bump PR) after each release — it updates this sum, pkgrel,
 # install.sh's pins, and both .SRCINFO files together. updpkgsums alone leaves
 # a half-bump. Do not publish this PKGBUILD with 'SKIP'.
-sha256sums=('adc1307e3ee8b51d075ec514ffb70b3327832cd956b573a078889c260293712d')
+sha256sums=('fb29491e516d5334428260e40a9491e838ee3ef1bca1cc31aab22cc8744cd69a')
 install=${pkgname}.install
 
 build() {
