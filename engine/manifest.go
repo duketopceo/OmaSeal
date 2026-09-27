@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,8 +71,18 @@ func LoadManifest() (*Manifest, error) {
 	}
 	defer f.Close()
 
+	rules, err := scanManifestRules(f)
+	if err != nil {
+		return nil, err
+	}
+	return &Manifest{Path: path, Rules: rules}, nil
+}
+
+// scanManifestRules parses manifest rule lines from any reader — shared by
+// LoadManifest and manifest apply's reparse-check of rendered output.
+func scanManifestRules(r io.Reader) ([]ManifestRule, error) {
 	var rules []ManifestRule
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -116,7 +127,7 @@ func LoadManifest() (*Manifest, error) {
 		})
 	}
 
-	return &Manifest{Path: path, Rules: rules}, scanner.Err()
+	return rules, scanner.Err()
 }
 
 // CheckPolicy determines whether an AI agent is ALLOW, DENY, or ASK for a secret.

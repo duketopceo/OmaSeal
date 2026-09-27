@@ -13,7 +13,7 @@ no network call is ever made.
 
 Usage: omaseal-jev-audit [--out <path>] [--limit N]
 """
-import hashlib, json, os, re, subprocess, sys, time
+import argparse, hashlib, json, math, os, re, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -75,11 +75,27 @@ def jev(key, state):
                   headers={"Authorization": "Bearer " + key,
                            "Content-Type": "application/json"})
     try:
-        return json.loads(urlopen(req, timeout=45).read())["answers"]
+        answers = json.loads(urlopen(req, timeout=45).read())["answers"]
+        if not isinstance(answers, dict):
+            return {"error": "malformed response: answers is not an object"}
+        return answers
     except HTTPError as e:
         return {"error": f"{e.code}: {e.read()[:160].decode(errors='replace')}"}
+    except (KeyError, json.JSONDecodeError):
+        return {"error": "malformed response from decisions endpoint"}
     except Exception as e:
         return {"error": str(e)[:160]}
+
+
+def answer_confidence(conf):
+    """noul confidence from a decisions answer -> finite float, or None when the
+    field is missing/non-numeric/non-finite. Boundary validation — a malformed
+    answer must skip the finding, never traceback."""
+    try:
+        v = float(conf.get("noul"))
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 def manifest_sha256(path):
@@ -178,13 +194,16 @@ def main():
         print("jev is disabled — `omaseal jev enable` to opt in", file=sys.stderr)
         return 0
 
-    out_path = None
-    limit = 0
-    args = sys.argv[1:]
-    if "--out" in args:
-        out_path = args[args.index("--out") + 1]
-    if "--limit" in args:
-        limit = int(args[args.index("--limit") + 1])
+    p = argparse.ArgumentParser(prog="omaseal-jev-audit",
+                                description="ask Jev to review manifest audit findings and write a proposal")
+    p.add_argument("--out", metavar="PATH", default=None,
+                   help="proposal output path (default: ~/.local/state/omaseal/proposals/)")
+    p.add_argument("--limit", metavar="N", type=int, default=0,
+                   help="only propose changes for the first N findings")
+    args = p.parse_args()
+    out_path, limit = args.out, args.limit
+    if limit < 0:
+        p.error("--limit must be non-negative")
 
     audit = run_audit()
     findings = audit.get("findings") or []
@@ -216,7 +235,12 @@ def main():
             if not isinstance(rec, dict) or not isinstance(conf, dict):
                 skipped += 1
                 continue
-            ch = change_for(f, rec.get("choice", "none"), float(conf.get("noul", 0)), policies)
+            conf_v = answer_confidence(conf)
+            choice = rec.get("choice")
+            if conf_v is None or not isinstance(choice, str):
+                skipped += 1
+                continue
+            ch = change_for(f, choice, conf_v, policies)
             if ch:
                 changes.append(ch)
 

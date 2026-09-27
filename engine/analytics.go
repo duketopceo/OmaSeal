@@ -203,13 +203,23 @@ func SortItemsByRecency(items []Item) {
 // IPC, and MCP list surfaces so all three return identical ordering.
 // sortMode is "used", "recent", "name", or "" (name order, the default).
 func listWithUsage(service, sortMode string) ([]Item, error) {
+	items, _, err := listWithUsageStatus(service, sortMode)
+	return items, err
+}
+
+// listWithUsageStatus is listWithUsage plus a usageAvailable flag: false means
+// the access log failed to parse and every usage field is a zero value —
+// callers that lint on usage must not report staleness they can't see.
+func listWithUsageStatus(service, sortMode string) ([]Item, bool, error) {
 	items, err := List(service)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	usageAvailable := true
 	stats, serr := ParseAccessLogs()
 	if serr != nil {
 		WriteLog("list: access-log parse failed, usage columns empty: %v", serr)
+		usageAvailable = false
 	} else if stats != nil {
 		items = EnrichItemsWithStats(items, stats)
 	}
@@ -221,10 +231,10 @@ func listWithUsage(service, sortMode string) ([]Item, error) {
 	case "", "name":
 		// List already returns name order.
 	default:
-		return nil, newError("invalid_sort", "omaseal list --sort=used|recent|name",
+		return nil, usageAvailable, newError("invalid_sort", "omaseal list --sort=used|recent|name",
 			fmt.Errorf("unknown sort %q", sortMode))
 	}
-	return items, nil
+	return items, usageAvailable, nil
 }
 
 // handleStats renders the usage analytics report.

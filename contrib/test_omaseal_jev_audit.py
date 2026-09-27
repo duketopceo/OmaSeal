@@ -142,20 +142,30 @@ class TestMainFlow(unittest.TestCase):
         open(manifest, "w").write("ASK * - fallback\n")
         return state, manifest
 
+    def _fake_jev(self, answers_by_target):
+        """Deterministic mock: return the answer for the finding's target parsed
+        from the state string — ThreadPoolExecutor scheduling order must not
+        decide which answer a finding gets."""
+        def fake(key, state):
+            for target, answers in answers_by_target.items():
+                if f"Target: {target}" in state:
+                    return answers
+            return {"error": "no mock answer"}
+        return fake
+
     def test_writes_proposal_and_skips_errors(self):
         with tempfile.TemporaryDirectory() as d:
             state, manifest = self._env(d)
             audit = {"manifest": manifest, "rules": 1, "items": 3,
                      "findings": [FINDING_DEAD, FINDING_UNCOVERED]}
-            answers = [{"recommend": {"choice": "remove_rule"}, "confidence": {"noul": 0.9}},
-                       {"error": "500: boom"}]
+            answers = {"gone/x": {"recommend": {"choice": "remove_rule"}, "confidence": {"noul": 0.9}},
+                       "bank/checking": {"error": "500: boom"}}
 
-            calls = iter(answers)
             with patch.object(mod, "STATE_FILE", state), \
                  patch.object(mod, "PROPOSAL_DIR", os.path.join(d, "prop")), \
                  patch.object(mod, "run_audit", lambda: audit), \
                  patch.object(mod, "get_key", lambda: "KEY"), \
-                 patch.object(mod, "jev", lambda key, state: next(calls)), \
+                 patch.object(mod, "jev", self._fake_jev(answers)), \
                  patch("sys.argv", ["omaseal-jev-audit"]), \
                  patch("sys.stderr", io.StringIO()):
                 self.assertEqual(mod.main(), 0)
@@ -174,6 +184,47 @@ class TestMainFlow(unittest.TestCase):
             st = json.load(open(state))
             self.assertTrue(st["enabled"])
             self.assertIn("last_run_at", st)
+
+    def test_malformed_answers_skipped_no_traceback(self):
+        """Non-numeric/non-finite confidence and non-dict answers must skip the
+        finding silently — malformed network data is not a crash."""
+        with tempfile.TemporaryDirectory() as d:
+            state, manifest = self._env(d)
+            audit = {"manifest": manifest, "rules": 1, "items": 4,
+                     "findings": [FINDING_DEAD, FINDING_UNCOVERED, FINDING_STALE]}
+            answers = {
+                "gone/x": {"recommend": {"choice": "remove_rule"}, "confidence": {"noul": "high"}},
+                "bank/checking": {"recommend": {"choice": "add_ask"}, "confidence": {"noul": float("nan")}},
+                "old/svc": {"recommend": {"choice": "add_deny"}, "confidence": {"noul": 0.8}},
+            }
+            with patch.object(mod, "STATE_FILE", state), \
+                 patch.object(mod, "PROPOSAL_DIR", os.path.join(d, "prop")), \
+                 patch.object(mod, "run_audit", lambda: audit), \
+                 patch.object(mod, "get_key", lambda: "KEY"), \
+                 patch.object(mod, "jev", self._fake_jev(answers)), \
+                 patch("sys.argv", ["omaseal-jev-audit"]), \
+                 patch("sys.stderr", io.StringIO()):
+                self.assertEqual(mod.main(), 0)
+            p = json.load(open(os.path.join(d, "prop", os.listdir(os.path.join(d, "prop"))[0])))
+            # only the well-formed old/svc answer produced a change
+            self.assertEqual(len(p["changes"]), 1)
+            self.assertEqual(p["changes"][0]["policy"], "DENY")
+
+    def test_cli_rejects_bad_args_without_traceback(self):
+        for argv in (["omaseal-jev-audit", "--limit", "abc"],
+                     ["omaseal-jev-audit", "--limit", "-3"],
+                     ["omaseal-jev-audit", "--out"],
+                     ["omaseal-jev-audit", "--bogus"]):
+            with tempfile.TemporaryDirectory() as d:
+                state, _ = self._env(d)
+                with patch.object(mod, "STATE_FILE", state), \
+                     patch("sys.argv", argv), \
+                     patch("sys.stderr", io.StringIO()):
+                    self.assertRaises(SystemExit, mod.main)
+                    try:
+                        mod.main()
+                    except SystemExit as e:
+                        self.assertEqual(e.code, 2)
 
 
 @unittest.skipUnless(os.environ.get("OMASEAL_JEV_IT"), "live check: set OMASEAL_JEV_IT=1")

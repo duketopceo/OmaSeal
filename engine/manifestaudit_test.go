@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func findingKinds(findings []AuditFinding) map[string][]string {
 }
 
 func TestAuditDeadRule(t *testing.T) {
-	kinds := findingKinds(auditManifest(auditManifestFixture(), auditItems(), time.Now()))
+	kinds := findingKinds(auditManifest(auditManifestFixture(), auditItems(), time.Now(), true))
 	found := false
 	for _, target := range kinds["dead_rule"] {
 		if target == "gone/dead" {
@@ -51,7 +52,7 @@ func TestAuditDeadRule(t *testing.T) {
 }
 
 func TestAuditUncovered(t *testing.T) {
-	kinds := findingKinds(auditManifest(auditManifestFixture(), auditItems(), time.Now()))
+	kinds := findingKinds(auditManifest(auditManifestFixture(), auditItems(), time.Now(), true))
 	found := false
 	for _, target := range kinds["uncovered"] {
 		if target == "lonely/svc" {
@@ -75,7 +76,7 @@ func TestAuditStale(t *testing.T) {
 		Item{Service: "old", Account: "thing", AccessCount: 5, LastAccessed: &old},
 		Item{Service: "never", Account: "used"},
 	)
-	kinds := findingKinds(auditManifest(auditManifestFixture(), items, time.Now()))
+	kinds := findingKinds(auditManifest(auditManifestFixture(), items, time.Now(), true))
 	var gotOld, gotNever bool
 	for _, target := range kinds["stale"] {
 		gotOld = gotOld || target == "old/thing"
@@ -86,6 +87,30 @@ func TestAuditStale(t *testing.T) {
 	}
 	if !gotOld || !gotNever {
 		t.Fatalf("expected stale findings for old/thing and never/used, got %+v", kinds["stale"])
+	}
+}
+
+// When access-log telemetry fails to load, a zero AccessCount must NOT be
+// reported as "never accessed" — stale findings are suppressed and an advisory
+// carries the limitation instead.
+func TestAuditStaleSuppressedWithoutUsage(t *testing.T) {
+	old := time.Now().Add(-120 * 24 * time.Hour)
+	items := append(auditItems(),
+		Item{Service: "old", Account: "thing", AccessCount: 5, LastAccessed: &old},
+		Item{Service: "never", Account: "used"},
+	)
+	kinds := findingKinds(auditManifest(auditManifestFixture(), items, time.Now(), false))
+	if len(kinds["stale"]) != 0 {
+		t.Fatalf("stale findings must be suppressed when usage telemetry is unavailable: %+v", kinds["stale"])
+	}
+	found := false
+	for _, f := range kinds["advisory"] {
+		if f == "access-log" || strings.Contains(f, "telemetry") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an advisory noting unavailable usage telemetry, got %+v", kinds["advisory"])
 	}
 }
 
@@ -100,7 +125,7 @@ func TestAuditClean(t *testing.T) {
 		{Service: "a", Account: "one", AccessCount: 2, LastAccessed: &recent},
 		{Service: "b", Account: "two", AccessCount: 1, LastAccessed: &recent},
 	}
-	findings := auditManifest(m, items, time.Now())
+	findings := auditManifest(m, items, time.Now(), true)
 	if len(findings) != 0 {
 		t.Fatalf("expected no findings on clean manifest, got %+v", findings)
 	}
@@ -115,7 +140,7 @@ func TestAuditAdvisories(t *testing.T) {
 	kinds := findingKinds(auditManifest(&Manifest{Path: "x", Rules: []ManifestRule{
 		{Policy: PolicyAllow, Pattern: "openrouter/default"},
 		{Policy: PolicyAsk, Pattern: "*"},
-	}}, items, time.Now()))
+	}}, items, time.Now(), true))
 	var ws, ts bool
 	for _, target := range kinds["advisory"] {
 		ws = ws || target == "has space/name"
@@ -132,7 +157,7 @@ func TestAuditDuplicateAdvisory(t *testing.T) {
 		{Service: "dup", Account: "svc", AccessCount: 1},
 		{Service: "solo", Account: "one", AccessCount: 1},
 	}
-	kinds := findingKinds(auditManifest(&Manifest{Rules: []ManifestRule{{Policy: PolicyAsk, Pattern: "*"}}}, items, time.Now()))
+	kinds := findingKinds(auditManifest(&Manifest{Rules: []ManifestRule{{Policy: PolicyAsk, Pattern: "*"}}}, items, time.Now(), true))
 	var dup, solo bool
 	for _, target := range kinds["advisory"] {
 		dup = dup || target == "dup/svc"
@@ -148,7 +173,7 @@ func TestAuditDuplicateAdvisory(t *testing.T) {
 
 func TestAuditCatchAllNeverDead(t *testing.T) {
 	m := &Manifest{Rules: []ManifestRule{{Policy: PolicyAsk, Pattern: "*"}}}
-	findings := auditManifest(m, nil, time.Now())
+	findings := auditManifest(m, nil, time.Now(), true)
 	for _, f := range findings {
 		if f.Kind == "dead_rule" {
 			t.Fatalf("catch-all reported dead: %+v", f)

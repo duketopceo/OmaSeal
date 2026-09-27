@@ -62,7 +62,7 @@ Chosen over embedded (A) on Jev's own review: external/mediated 0.76 vs hybrid 0
 
 ### R6 — Circularity guard (hard mechanism, not just UX)
 
-- `manifest.apply` **rejects any proposal that modifies the `jev` agent's own policy entry** — Jev cannot edit its own leash, even if a human rubber-stamps it. The same rejection covers proposals touching rules that govern jev's own credential path (`openrouter/*`), including indirect self-edits via wildcards.
+- `manifest.apply` **rejects any proposal touching rules that govern Jev's own credential path (`openrouter/*`)**, including indirect self-edits via wildcards — Jev cannot move its own leash, even if a human rubber-stamps it. (There is no per-agent `jev` manifest entry to protect — OmaSeal rules are per-secret; the enforceable leash is the credential path.)
 - Proposals that would *remove* access for another agent are annotated prominently in the proposal file.
 - Every **capability-expanding** change requires explicit per-item confirmation — DENY→ALLOW or ASK→ALLOW flips, wildcard broadening, and new agent entries. Escalation is the dangerous direction; it cannot hide inside a large benign diff.
 

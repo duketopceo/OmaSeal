@@ -71,8 +71,10 @@ func isCatchAll(pattern string) bool {
 
 // auditManifest lints rules against the live inventory. The item list must be
 // the unfiltered keyring inventory — filtering DENY'd items here would let a
-// wrong rule hide its own evidence.
-func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
+// wrong rule hide its own evidence. usageAvailable false means the access log
+// could not be parsed: stale findings are suppressed rather than reported
+// against zero-value usage fields.
+func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool) []AuditFinding {
 	var findings []AuditFinding
 
 	// Dead rules: a non-catch-all pattern that matches nothing.
@@ -116,7 +118,11 @@ func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
 			})
 		}
 
+		hasWhitespace := strings.ContainsAny(it.Service+it.Account, " \t")
+
 		// Uncovered: governed only by the catch-all fallback — no explicit rule.
+		// Whitespace-named items get the advisory below instead: no rule can
+		// address them, so "uncovered" would double-report a known limitation.
 		covered := false
 		for _, r := range m.Rules {
 			if !isCatchAll(r.Pattern) && patternMatches(r.Pattern, it.Service, it.Account) {
@@ -124,7 +130,7 @@ func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
 				break
 			}
 		}
-		if !covered {
+		if !covered && !hasWhitespace {
 			findings = append(findings, AuditFinding{
 				Kind:   "uncovered",
 				Target: target,
@@ -132,24 +138,28 @@ func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
 			})
 		}
 
-		// Stale: never read, or last read older than the threshold.
-		switch {
-		case it.AccessCount == 0 && it.LastAccessed == nil:
-			findings = append(findings, AuditFinding{
-				Kind:   "stale",
-				Target: target,
-				Detail: "never accessed",
-			})
-		case it.LastAccessed != nil && now.Sub(*it.LastAccessed) > staleThresholdDays*24*time.Hour:
-			findings = append(findings, AuditFinding{
-				Kind:   "stale",
-				Target: target,
-				Detail: fmt.Sprintf("last accessed %d days ago", int(now.Sub(*it.LastAccessed).Hours()/24)),
-			})
+		// Stale: never read, or last read older than the threshold. Suppressed
+		// when usage telemetry failed to load — a zero-value field is not
+		// evidence of staleness.
+		if usageAvailable {
+			switch {
+			case it.AccessCount == 0 && it.LastAccessed == nil:
+				findings = append(findings, AuditFinding{
+					Kind:   "stale",
+					Target: target,
+					Detail: "never accessed",
+				})
+			case it.LastAccessed != nil && now.Sub(*it.LastAccessed) > staleThresholdDays*24*time.Hour:
+				findings = append(findings, AuditFinding{
+					Kind:   "stale",
+					Target: target,
+					Detail: fmt.Sprintf("last accessed %d days ago", int(now.Sub(*it.LastAccessed).Hours()/24)),
+				})
+			}
 		}
 
 		// Advisories: items rules can't express, and test-shaped leftovers.
-		if strings.ContainsAny(it.Service+it.Account, " \t") {
+		if hasWhitespace {
 			findings = append(findings, AuditFinding{
 				Kind:   "advisory",
 				Target: target,
@@ -163,6 +173,14 @@ func auditManifest(m *Manifest, items []Item, now time.Time) []AuditFinding {
 				Detail: "test-shaped service name — possible leftover from development",
 			})
 		}
+	}
+
+	if !usageAvailable {
+		findings = append(findings, AuditFinding{
+			Kind:   "advisory",
+			Target: "access-log",
+			Detail: "usage telemetry unavailable — stale analysis suppressed (cannot distinguish unused from unmeasured)",
+		})
 	}
 
 	return findings
@@ -218,13 +236,13 @@ func handleManifestAudit(args []string, jsonOut bool) {
 		printError("loading manifest: ", err)
 		os.Exit(1)
 	}
-	items, err := listWithUsage("", "")
+	items, usageAvailable, err := listWithUsageStatus("", "")
 	if err != nil {
 		printError("listing secrets for audit: ", err)
 		os.Exit(1)
 	}
 
-	findings := auditManifest(m, items, time.Now())
+	findings := auditManifest(m, items, time.Now(), usageAvailable)
 
 	if proposalPath != "" {
 		sum, err := manifestFileSHA256(m.Path)

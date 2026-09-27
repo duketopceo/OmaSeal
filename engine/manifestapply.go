@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"syscall"
+	"unicode"
 )
 
 // policyRank orders restrictiveness so "expansion" is a mechanical comparison:
@@ -33,47 +36,95 @@ func governsJevCredential(pattern string) bool {
 	return p == "openrouter" || strings.HasPrefix(p, "openrouter/")
 }
 
-// ruleRankFor finds the restrictiveness rank of the manifest rule governing a
-// pattern; the ASK fallback applies when no same-pattern rule exists.
-func ruleRankFor(m *Manifest, pattern string) int {
-	for _, r := range m.Rules {
-		if strings.EqualFold(r.Pattern, pattern) {
-			return policyRank(r.Policy)
+// validProposalFields rejects change fields that could corrupt the manifest's
+// space-separated line format or smuggle a second rule inside a rendered line:
+// empty or whitespace-bearing patterns, and control characters anywhere a
+// field is rendered or displayed.
+func validProposalFields(c ProposalChange) bool {
+	if c.Pattern == "" || strings.IndexFunc(c.Pattern, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) >= 0 {
+		return false
+	}
+	for _, f := range []string{c.Description, c.Rationale} {
+		if strings.IndexFunc(f, unicode.IsControl) >= 0 {
+			return false
 		}
 	}
-	return policyRank(PolicyAsk)
+	return true
+}
+
+// patternProbe turns a rule pattern into the CheckPolicy target that exercises
+// it: "svc/acct" -> itself, "svc/*" -> (svc, "*"), catch-all -> ("*", "*").
+// CheckPolicy's exact-match compares the literal pattern against the target,
+// so probing a wildcard with "*" hits the wildcard rule itself.
+func patternProbe(pattern string) (service, account string) {
+	svc, acct, _ := strings.Cut(pattern, "/")
+	if acct == "" {
+		acct = "*"
+	}
+	return svc, acct
+}
+
+// effectiveRank returns the restrictiveness rank a rule set gives the probe
+// target for pattern — the policy that would actually govern after the change,
+// including exposure of broader rules when a specific rule is removed.
+func effectiveRank(rules []ManifestRule, pattern string) int {
+	svc, acct := patternProbe(pattern)
+	p, _ := (&Manifest{Rules: rules}).CheckPolicy(svc, acct)
+	return policyRank(p)
+}
+
+// applyChangeToRules is the in-memory form of applyChanges: it transforms a
+// rule slice the same way applyChanges transforms file lines, so expansion
+// classification sees the manifest exactly as it would be written.
+func applyChangeToRules(rules []ManifestRule, c ProposalChange) []ManifestRule {
+	out := slices.Clone(rules)
+	switch c.Action {
+	case "remove":
+		for i, r := range out {
+			if strings.EqualFold(r.Pattern, c.Pattern) {
+				return slices.Delete(out, i, i+1)
+			}
+		}
+	case "set":
+		for i, r := range out {
+			if strings.EqualFold(r.Pattern, c.Pattern) {
+				out[i] = ManifestRule{Policy: RulePolicy(strings.ToUpper(c.Policy)), Pattern: c.Pattern, Description: c.Description}
+				return out
+			}
+		}
+	case "add":
+		out = append(out, ManifestRule{Policy: RulePolicy(strings.ToUpper(c.Policy)), Pattern: c.Pattern, Description: c.Description})
+	}
+	return out
+}
+
+// countPatternRules counts manifest rules sharing a pattern — the targeting
+// count add/set/remove validation depends on.
+func countPatternRules(m *Manifest, pattern string) int {
+	n := 0
+	for _, r := range m.Rules {
+		if strings.EqualFold(r.Pattern, pattern) {
+			n++
+		}
+	}
+	return n
 }
 
 // isExpansionChange recomputes whether a change grants more access — the
 // proposal's expands_access flag is a display hint and is never trusted.
+// Comparison is on effective policy: removing an ASK github/work can expose
+// an ALLOW github/* underneath, which is an expansion no identical-pattern
+// check would see.
 func isExpansionChange(m *Manifest, c ProposalChange) bool {
-	switch c.Action {
-	case "remove":
-		// Removing a DENY lifts a hard prohibition.
-		for _, r := range m.Rules {
-			if strings.EqualFold(r.Pattern, c.Pattern) {
-				return r.Policy == PolicyDeny
-			}
-		}
-		return false
-	case "add", "set":
-		// Rank increase covers every expansion shape: ASK→ALLOW, DENY→anything,
-		// and a new ALLOW wildcard (fallback oldRank=ASK < ALLOW).
-		return policyRank(RulePolicy(strings.ToUpper(c.Policy))) > ruleRankFor(m, c.Pattern)
-	}
-	return false
+	return effectiveRank(applyChangeToRules(m.Rules, c), c.Pattern) > effectiveRank(m.Rules, c.Pattern)
 }
 
 // isReductionChange reports whether a change removes a grant — annotated
 // "reduce" in the render so the human sees the direction of every change.
 func isReductionChange(m *Manifest, c ProposalChange) bool {
-	switch c.Action {
-	case "remove":
-		return true // removing any non-DENY rule (DENY removals are expansions)
-	case "add", "set":
-		return policyRank(RulePolicy(strings.ToUpper(c.Policy))) < ruleRankFor(m, c.Pattern)
-	}
-	return false
+	return effectiveRank(applyChangeToRules(m.Rules, c), c.Pattern) < effectiveRank(m.Rules, c.Pattern)
 }
 
 // validProposalAction gates the change vocabulary apply understands.
@@ -90,25 +141,47 @@ func validProposalAction(c ProposalChange) bool {
 	return false
 }
 
+// lockManifest holds an exclusive non-blocking flock on the manifest's
+// sibling lock file for the whole validate→write span, closing the window
+// where a second process could edit between the proposal-hash check and the
+// atomic replace. The lock fd is released on process exit either way.
+func lockManifest(path string) (func(), error) {
+	lf, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lf.Close()
+		return nil, fmt.Errorf("another manifest change is in progress: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+		lf.Close()
+	}, nil
+}
+
 // applyChanges rewrites the manifest file's rule lines surgically — comments,
 // grouping headers, and blank lines are preserved. Rule order does not affect
 // CheckPolicy (exact → wildcard → catch-all passes), so additions append at EOF.
 func applyChanges(content string, changes []ProposalChange) string {
 	lines := strings.Split(content, "\n")
+	// Match the parser's line classification: trimmed "#" prefix = comment.
+	isRuleLine := func(ln string) ([]string, bool) {
+		f := strings.Fields(strings.TrimSpace(ln))
+		return f, len(f) >= 2 && !strings.HasPrefix(strings.TrimSpace(ln), "#")
+	}
 	for _, c := range changes {
 		switch c.Action {
 		case "remove":
 			for i, ln := range lines {
-				f := strings.Fields(ln)
-				if len(f) >= 2 && !strings.HasPrefix(ln, "#") && strings.EqualFold(f[1], c.Pattern) {
+				if f, ok := isRuleLine(ln); ok && strings.EqualFold(f[1], c.Pattern) {
 					lines = append(lines[:i], lines[i+1:]...)
 					break
 				}
 			}
 		case "set":
 			for i, ln := range lines {
-				f := strings.Fields(ln)
-				if len(f) >= 2 && !strings.HasPrefix(ln, "#") && strings.EqualFold(f[1], c.Pattern) {
+				if f, ok := isRuleLine(ln); ok && strings.EqualFold(f[1], c.Pattern) {
 					lines[i] = formatRuleLine(RulePolicy(strings.ToUpper(c.Policy)), c.Pattern, c.Description)
 					break
 				}
@@ -155,6 +228,21 @@ func handleManifestApply(args []string, yes bool) {
 		return
 	}
 
+	// Hold the manifest lock from hash-check through write: without it a
+	// concurrent edit between validate and replace makes the hash binding
+	// advisory and the accepted changes apply to a stale base.
+	manifestPath, err := ManifestPath()
+	if err != nil {
+		printError("locating manifest: ", err)
+		os.Exit(1)
+	}
+	unlock, err := lockManifest(manifestPath)
+	if err != nil {
+		printError("locking manifest: ", err)
+		os.Exit(1)
+	}
+	defer unlock()
+
 	m, err := LoadManifest()
 	if err != nil {
 		printError("loading manifest: ", err)
@@ -170,17 +258,34 @@ func handleManifestApply(args []string, yes bool) {
 		os.Exit(1)
 	}
 
-	// Fail closed on anything the change vocabulary doesn't cover, and on R6:
-	// a proposal touching Jev's credential path is rejected wholesale so a bad
-	// change can never ride along with safe ones.
+	// Fail closed on anything the change vocabulary doesn't cover, on fields
+	// that could smuggle a rule past the render, on ambiguous targets, and on
+	// R6: a proposal touching Jev's credential path is rejected wholesale so a
+	// bad change can never ride along with safe ones.
 	for _, c := range p.Changes {
-		if !validProposalAction(c) {
-			fmt.Fprintf(os.Stderr, "refusing proposal: unknown or malformed change (action %q policy %q)\n", c.Action, c.Policy)
+		if !validProposalAction(c) || !validProposalFields(c) {
+			fmt.Fprintf(os.Stderr, "refusing proposal: malformed change (action %q policy %q pattern %q)\n", c.Action, c.Policy, sanitizeField(c.Pattern))
 			os.Exit(1)
 		}
 		if governsJevCredential(c.Pattern) {
 			fmt.Fprintf(os.Stderr, "refusing proposal: change to %q would govern openrouter/* (Jev's credential path)\nedit ai-manifest.txt by hand if this is genuinely intended\n", c.Pattern)
 			os.Exit(1)
+		}
+		switch n := countPatternRules(m, c.Pattern); c.Action {
+		case "add":
+			if n > 0 {
+				fmt.Fprintf(os.Stderr, "refusing proposal: `add %s` but %d rule(s) already match that pattern (first match wins — a later rule is dead)\n", c.Pattern, n)
+				os.Exit(1)
+			}
+		case "set", "remove":
+			if n == 0 {
+				fmt.Fprintf(os.Stderr, "refusing proposal: `%s %s` matches no existing rule\n", c.Action, c.Pattern)
+				os.Exit(1)
+			}
+			if n > 1 {
+				fmt.Fprintf(os.Stderr, "refusing proposal: `%s %s` matches %d rules — ambiguous, fix duplicates by hand\n", c.Action, c.Pattern, n)
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -248,6 +353,13 @@ func handleManifestApply(args []string, yes bool) {
 			os.Exit(1)
 		}
 		out := applyChanges(string(raw), accepted)
+		// Reparse the rendered file before it replaces the real one: the
+		// candidate must parse cleanly — defense-in-depth against any field
+		// corruption that slipped past validation.
+		if _, err := scanManifestRules(strings.NewReader(out)); err != nil {
+			printError("rendered manifest failed reparse — refusing to write: ", err)
+			os.Exit(1)
+		}
 		if err := writeFileMode(m.Path, []byte(out), 0600); err != nil {
 			printError("writing manifest: ", err)
 			os.Exit(1)

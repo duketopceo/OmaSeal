@@ -259,10 +259,11 @@ cannot hide evidence of itself.
 `omaseal manifest audit --proposal <path>` writes a JSON proposal of safe
 changes (dead-rule removals). `omaseal manifest apply <path>` renders the
 parsed changes and applies them after human confirmation — it refuses
-anything governing `openrouter/*` (the credential path Jev itself uses),
-requires per-item confirmation for capability-expanding changes, and under
-`--yes` or a non-TTY applies only non-expanding changes. Apply is a CLI-only
-surface; no agent or MCP tool can reach it.
+anything governing `openrouter/*` (the credential path Jev itself uses) and
+requires per-item confirmation for capability-expanding changes. Headless
+use: `apply --yes` applies only non-expanding changes and lists skipped
+expansions; a non-TTY invocation **without** `--yes` refuses to apply
+entirely. Apply is a CLI-only surface; no agent or MCP tool can reach it.
 
 Jev is an optional decision layer on top, **disabled by default**:
 

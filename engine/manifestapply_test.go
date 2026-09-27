@@ -48,6 +48,37 @@ func TestIsExpansionChange(t *testing.T) {
 	}
 }
 
+// TestIsExpansionChangeEffectivePolicy covers the reviewer's attack shape: a
+// change classified against identical-pattern rules can still expand the
+// effective policy when a broader rule lies underneath.
+func TestIsExpansionChangeEffectivePolicy(t *testing.T) {
+	m := &Manifest{Rules: []ManifestRule{
+		{Policy: PolicyAsk, Pattern: "github/work"},
+		{Policy: PolicyAllow, Pattern: "github/*"},
+		{Policy: PolicyAsk, Pattern: "*"},
+	}}
+	// Removing the exact ASK exposes ALLOW github/* — identical-pattern rank
+	// says neutral; effective policy says ASK -> ALLOW = expansion.
+	if !isExpansionChange(m, ProposalChange{Action: "remove", Pattern: "github/work"}) {
+		t.Fatal("remove ASK exposing ALLOW github/* must classify as expansion")
+	}
+	// Setting the ALLOW wildcard to ASK reduces every github/* item except the
+	// exact ASK rule — effective policy diff catches it; identical-pattern
+	// comparison would only see ALLOW -> ASK on one line anyway.
+	if !isReductionChange(m, ProposalChange{Action: "set", Policy: "ASK", Pattern: "github/*"}) {
+		t.Fatal("set ALLOW github/* -> ASK must classify as reduction")
+	}
+	// A no-op set (ASK -> ASK on the exact rule) is neutral even with a more
+	// permissive wildcard underneath.
+	if isReductionChange(m, ProposalChange{Action: "set", Policy: "ASK", Pattern: "github/work"}) {
+		t.Fatal("set ASK -> ASK is neutral, not a reduction")
+	}
+	// Adding ALLOW where only the ASK catch-all applies: effective ASK -> ALLOW.
+	if !isExpansionChange(m, ProposalChange{Action: "add", Policy: "ALLOW", Pattern: "denied/svc"}) {
+		t.Fatal("add ALLOW must classify as expansion")
+	}
+}
+
 func TestIsReductionChange(t *testing.T) {
 	m := &Manifest{Rules: []ManifestRule{
 		{Policy: PolicyDeny, Pattern: "bank/*"},
@@ -59,7 +90,9 @@ func TestIsReductionChange(t *testing.T) {
 		c    ProposalChange
 		want bool
 	}{
-		{"remove ask", ProposalChange{Action: "remove", Pattern: "github/*"}, true},
+		// Removing an ASK rule when the effective fallback is also ASK changes
+		// nothing — neutral, not a reduction.
+		{"remove ask (neutral)", ProposalChange{Action: "remove", Pattern: "github/*"}, false},
 		{"remove allow", ProposalChange{Action: "remove", Pattern: "openrouter/default"}, true},
 		{"allow to ask", ProposalChange{Action: "set", Policy: "ASK", Pattern: "openrouter/default"}, true},
 		{"ask to deny", ProposalChange{Action: "set", Policy: "DENY", Pattern: "github/*"}, true},
