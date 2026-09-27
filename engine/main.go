@@ -30,6 +30,7 @@ Usage:
   omaseal manifest [show|init|check|path|audit|apply <file>]  AI agent access policy
   omaseal jev [status|enable|disable]      optional Jev decision layer (off by default)
   omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
+  omaseal run -e NAME=svc/acct -- <cmd>    launch a command with secrets injected into its env
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
@@ -106,6 +107,8 @@ func main() {
 		handleManifest()
 	case "resolve":
 		handleResolve()
+	case "run":
+		handleRun()
 	case "clipclear":
 		handleClipclear()
 	case "import":
