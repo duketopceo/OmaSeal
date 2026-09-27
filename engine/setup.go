@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,6 +52,7 @@ func runSetup() {
 		maybeInstallDetected(detected, yes)
 		maybeSetPrimary(rows, p, yes)
 		maybeOfferJev(yes)
+		maybeOfferClaudeKeyHelper(detected, yes)
 	} else {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Run `omaseal setup --yes` to auto-wire every detected agent,")
@@ -145,6 +148,82 @@ func maybeInstallDetected(detected []mcpAgentStatus, yes bool) {
 	if err := installForAgents(todo, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "  some agents failed to install: %v\n", err)
 	}
+}
+
+// maybeOfferClaudeKeyHelper offers to point Claude Code's apiKeyHelper at
+// `omaseal get` so Claude's own API key is read from the keyring at call time
+// instead of living in a file. It only ever prompts interactively — under
+// --yes a hint is printed, since redirecting a harness's auth source is a
+// deliberate choice, not part of unattended MCP wiring.
+func maybeOfferClaudeKeyHelper(detected []mcpAgentStatus, yes bool) {
+	claudeFound := false
+	for _, r := range detected {
+		if r.Name == "claude" {
+			claudeFound = true
+		}
+	}
+	if !claudeFound {
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+
+	self, err := os.Executable()
+	if err != nil {
+		self = "omaseal"
+	}
+	ref := "anthropic default"
+	if items, err := List("anthropic"); err == nil && len(items) > 0 {
+		ref = "anthropic " + items[0].Account
+	}
+	helper := fmt.Sprintf("%s get %s", self, ref)
+
+	data, mode, err := readConfigPreservingMode(settingsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  could not read %s: %v\n", settingsPath, err)
+		return
+	}
+	settings := map[string]any{}
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			fmt.Fprintf(os.Stderr, "  could not parse %s: %v\n", settingsPath, err)
+			return
+		}
+	}
+	if cur, ok := settings["apiKeyHelper"]; ok {
+		if cur == helper {
+			fmt.Fprintln(os.Stderr, "  claude apiKeyHelper already points at omaseal")
+		} else {
+			fmt.Fprintf(os.Stderr, "  claude apiKeyHelper is set to %q — leaving it alone\n", cur)
+		}
+		return
+	}
+
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "  claude detected: apiKeyHelper can read your API key via\n    %q\n", helper)
+	fmt.Fprintf(os.Stderr, "    (requires `omaseal set %s` first — the key never touches a file)\n", ref)
+	if yes || !confirm("Set claude apiKeyHelper to that helper in ~/.claude/settings.json? [y/N] ") {
+		if yes {
+			fmt.Fprintln(os.Stderr, "  skipped under --yes: add `\"apiKeyHelper\": \""+helper+"\"` to ~/.claude/settings.json to enable")
+		}
+		return
+	}
+
+	settings["apiKeyHelper"] = helper
+	b, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  could not marshal settings: %v\n", err)
+		return
+	}
+	if err := writeFileMode(settingsPath, b, mode); err != nil {
+		fmt.Fprintf(os.Stderr, "  could not write %s: %v\n", settingsPath, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  wrote apiKeyHelper to %s\n", settingsPath)
 }
 
 // setupReader is shared across prompts so input buffered by one confirm is

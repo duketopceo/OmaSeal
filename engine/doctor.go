@@ -70,6 +70,7 @@ func doctorChecks() []checkResult {
 		checkGUIPrompt,
 		checkPath,
 		checkJev,
+		checkAgentFit,
 	}
 	results := make([]checkResult, len(checks))
 	var wg sync.WaitGroup
@@ -403,6 +404,25 @@ func checkPath() checkResult {
 		ok:      false,
 		message: fmt.Sprintf("`%s` is not on your PATH.\n  - Add `export PATH=\"%s:$PATH\"` to your shell profile.", dir, dir),
 	}
+}
+
+// checkAgentFit reports which known agent harnesses are installed and how
+// deeply OmaSeal can integrate — informational, never fails.
+func checkAgentFit() checkResult {
+	names := detectedAgents()
+	if len(names) == 0 {
+		return checkResult{name: "agent-fit", ok: true, optional: true,
+			message: "no known agent harnesses detected"}
+	}
+	var hints []string
+	for _, n := range names {
+		if s, ok := findAgentSpec(n); ok && s.fit != "" {
+			hints = append(hints, fmt.Sprintf("%s: %s", n, s.fit))
+		}
+	}
+	return checkResult{name: "agent-fit", ok: true, optional: true,
+		message: fmt.Sprintf("detected: %s\n  - wire MCP: `omaseal mcp install-detected`\n  - %s\n  - details: docs/harness-fit.md",
+			strings.Join(names, ", "), strings.Join(hints, "\n  - "))}
 }
 
 // dirOnPATH reports whether dir appears verbatim in PATH.
