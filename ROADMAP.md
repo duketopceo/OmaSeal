@@ -14,8 +14,11 @@
 - [x] `omaseal setup` with self-verifying keyring round-trip (30s bounded)
 - [x] `omaseal://service/account` references accepted by every command
 - [x] Masked GUI prompt for `resolve` without a TTY (pinentry, `OMASEAL_GUI_PROMPT`)
-- [x] fprintd biometric gate for `reveal`/agent unlock; panel shows
-  mode/unlock state; session keep-alive
+- [x] Fail-closed user-presence gate for `reveal`/agent unlock —
+  fingerprint via `fprintd`, else GUI confirm (pinentry/zenity), else deny;
+  deliberate `allow_ungated` opt-out (`agent mode ask --ungated`); weakening
+  mode transitions gated too. Panel shows mode/unlock state; session
+  keep-alive. (v0.4.0, marketplace security finding)
 - [x] Shared `service/account` namespace with other writers
   (`omarchy-secrets-*`, keytar, seahorse): `owned` provenance flag,
   duplicate-safe set/delete
@@ -45,10 +48,11 @@
 
 - Close repository issues #2, #3, #4.
 - Marketplace validation: `f8ef3ac` attested (Sept-17) with one security
-  finding — agent policy defaulted to `open` without a policy file.
-  Resolved in #17; re-validation requested at frozen HEAD `20a19ae`
-  (includes #14 detection + #15 remediation). **Do not push `main` until
-  the baseline attests that SHA** — every HEAD move has reset review.
+  finding — agent policy defaulted to `open` without a policy file
+  (resolved in #17). A second finding (Sept-22) — `agent unlock` failed
+  open when no fprintd hardware existed — is resolved in #20 and shipped
+  as **v0.4.0** (`551d075`). Re-validation requested at `551d075`;
+  awaiting reviewer attestation.
 - Follow-ups queued: #13 (provider negative caching — stops `resolve`
   polling external vaults on missing keys), #12 (AUR submission blocked
   by AUR account-registration freeze).
