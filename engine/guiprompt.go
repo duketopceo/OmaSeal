@@ -107,6 +107,10 @@ type guiPrompter interface {
 	// available probes real capability and caches what prompt() needs.
 	available(ctx context.Context) bool
 	prompt(ctx context.Context, service, account string) (string, error)
+	// confirm shows an Allow/Deny dialog. Returns nil when the user allows,
+	// errPromptCancelled when the user denies, cancels, or lets it time out,
+	// and any other error when the prompter itself is unusable.
+	confirm(ctx context.Context, title, desc string) error
 }
 
 // guiPrompterOrder resolves OMASEAL_GUI_PROMPT into an exclusive prompter
@@ -413,6 +417,73 @@ func pinentryFlavor(ctx context.Context, path string) (string, error) {
 	return connFlavor(ctx, conn)
 }
 
+func (p *pinentryPrompter) confirm(ctx context.Context, title, desc string) error {
+	paths := pinentryCandidatePaths()
+	if p.path != "" {
+		paths = append([]string{p.path}, slices.DeleteFunc(slices.Clone(paths), func(s string) bool { return s == p.path })...)
+	}
+	var lastErr error
+	for _, path := range paths {
+		err := confirmPinentry(ctx, path, title, desc)
+		switch {
+		case err == nil || errors.Is(err, errPromptCancelled):
+			return err
+		default:
+			lastErr = err // candidate unusable — try the next
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return errNoGUIPrompter
+}
+
+// confirmPinentry drives an Assuan CONFIRM exchange: SETDESC carries the
+// question, CONFIRM returns OK on Allow and a cancel ERR on Deny/dismiss.
+func confirmPinentry(ctx context.Context, path, title, desc string) error {
+	ctx, cancel := withPromptDeadline(ctx)
+	defer cancel()
+	conn, err := dialAssuan(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	flavor, err := connFlavor(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if isNonGUIFlavor(flavor) {
+		return fmt.Errorf("%w: pinentry resolved to %s", errNoGUIPrompter, flavor)
+	}
+
+	for _, cmd := range []string{
+		"SETTITLE " + assuanEscape(title),
+		"SETDESC " + assuanEscape(desc),
+		"SETOK Allow",
+		"SETCANCEL Deny",
+		fmt.Sprintf("SETTIMEOUT %d", int(guiPromptTimeout.Seconds())),
+	} {
+		if err := conn.command(cmd); err != nil {
+			return err
+		}
+		if _, err := conn.data(ctx); err != nil {
+			return err
+		}
+	}
+
+	if err := conn.command("CONFIRM"); err != nil {
+		return err
+	}
+	if _, err := conn.data(ctx); err != nil {
+		if isAssuanCancel(err) || ctx.Err() != nil {
+			return errPromptCancelled
+		}
+		return err
+	}
+	return nil
+}
+
 func promptPinentry(ctx context.Context, path, service, account string) (string, error) {
 	ctx, cancel := withPromptDeadline(ctx)
 	defer cancel()
@@ -491,6 +562,42 @@ func (p *zenityPrompter) prompt(ctx context.Context, service, account string) (s
 		p.path = paths[0]
 	}
 	return promptZenity(ctx, p.path, service, account)
+}
+
+func (p *zenityPrompter) confirm(ctx context.Context, title, desc string) error {
+	if p.path == "" {
+		paths := zenityCandidatePaths()
+		if len(paths) == 0 {
+			return errNoGUIPrompter
+		}
+		p.path = paths[0]
+	}
+	return confirmZenity(ctx, p.path, title, desc)
+}
+
+// confirmZenity runs `zenity --question` with explicit Allow/Deny labels.
+// Exit 0 is allow; cancel/deny/timeout map to errPromptCancelled.
+func confirmZenity(ctx context.Context, path, title, desc string) error {
+	ctx, cancel := withPromptDeadline(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path,
+		"--question",
+		"--title="+title,
+		"--text="+pangoEscape(desc),
+		"--ok-label=Allow",
+		"--cancel-label=Deny",
+		fmt.Sprintf("--timeout=%d", int(guiPromptTimeout.Seconds())),
+	)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if ctx.Err() != nil || (errors.As(err, &ee) && (ee.ExitCode() == 1 || ee.ExitCode() == 5)) {
+			return errPromptCancelled
+		}
+		return fmt.Errorf("zenity: %w", err)
+	}
+	return nil
 }
 
 // promptZenity runs `zenity --password`: the dialog masks input and the secret

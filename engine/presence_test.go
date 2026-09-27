@@ -1,0 +1,350 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// stubPresence replaces the three chain seams for one test and restores them
+// after. usable/verifyErr drive the fprintd step; guiErr drives the GUI step.
+func stubPresence(t *testing.T, usable bool, verifyErr, guiErr error) {
+	t.Helper()
+	oldU, oldV, oldG := fprintdUsableFunc, fprintdVerifyFunc, guiPresenceConfirmFunc
+	fprintdUsableFunc = func(context.Context) bool { return usable }
+	fprintdVerifyFunc = func(context.Context, string) error { return verifyErr }
+	guiPresenceConfirmFunc = func(context.Context, string) error { return guiErr }
+	t.Cleanup(func() {
+		fprintdUsableFunc, fprintdVerifyFunc, guiPresenceConfirmFunc = oldU, oldV, oldG
+	})
+}
+
+func TestPresenceFingerprintAllow(t *testing.T) {
+	stubPresence(t, true, nil, errors.New("gui must not run"))
+	if err := requireUserPresence(context.Background(), "agent unlock", AgentPolicy{}); err != nil {
+		t.Fatalf("fingerprint match should allow: %v", err)
+	}
+}
+
+func TestPresenceFingerprintFailDeniesNoFallback(t *testing.T) {
+	guiRan := false
+	stubPresence(t, true, errors.New("verify-no-match"), nil)
+	oldG := guiPresenceConfirmFunc
+	guiPresenceConfirmFunc = func(context.Context, string) error { guiRan = true; return nil }
+	defer func() { guiPresenceConfirmFunc = oldG }()
+
+	err := requireUserPresence(context.Background(), "agent unlock", AgentPolicy{AllowUngated: true})
+	if !errors.Is(err, errPresenceDenied) {
+		t.Fatalf("failed fingerprint must deny, got %v", err)
+	}
+	if guiRan {
+		t.Fatal("a failed fingerprint must not fall through to GUI confirm")
+	}
+}
+
+func TestPresenceGuiConfirmAllow(t *testing.T) {
+	stubPresence(t, false, nil, nil)
+	if err := requireUserPresence(context.Background(), "reveal svc/acct", AgentPolicy{}); err != nil {
+		t.Fatalf("gui allow should allow: %v", err)
+	}
+}
+
+func TestPresenceGuiDeclinedDeniesEvenWhenUngated(t *testing.T) {
+	// A user who just clicked Deny answered the question — allow_ungated is
+	// for machines with no mechanism, not for overriding a refusal.
+	stubPresence(t, false, nil, errPromptCancelled)
+	err := requireUserPresence(context.Background(), "agent unlock", AgentPolicy{AllowUngated: true})
+	if !errors.Is(err, errPresenceDenied) {
+		t.Fatalf("declined confirm must deny, got %v", err)
+	}
+}
+
+func TestPresenceNoMechanismFailsClosed(t *testing.T) {
+	stubPresence(t, false, nil, errNoGUIPrompter)
+	err := requireUserPresence(context.Background(), "agent unlock", AgentPolicy{})
+	if !errors.Is(err, errPresenceDenied) {
+		t.Fatalf("no mechanism without opt-out must deny, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--ungated") {
+		t.Errorf("deny should name the remediation path, got %q", err)
+	}
+}
+
+func TestPresenceUngatedAllowsWithWarning(t *testing.T) {
+	stubPresence(t, false, nil, errors.New("zenity spawn failed"))
+	if err := requireUserPresence(context.Background(), "agent unlock", AgentPolicy{AllowUngated: true}); err != nil {
+		t.Fatalf("allow_ungated should allow: %v", err)
+	}
+}
+
+func TestUnlockAgentDeniedWritesNoSession(t *testing.T) {
+	setupAgentEnv(t)
+	askPolicy(t, false)
+	stubPresence(t, false, nil, errNoGUIPrompter)
+
+	if err := UnlockAgent(); err == nil {
+		t.Fatal("unlock must fail with no presence mechanism")
+	}
+	p, _ := loadAgentPolicy()
+	if agentSessionActive(p) {
+		t.Fatal("denied unlock must not leave an active session")
+	}
+	if _, err := os.Stat(agentSessionPath()); !os.IsNotExist(err) {
+		t.Fatalf("denied unlock must not write a session file: %v", err)
+	}
+	// The MCP gate must stay unauthorized after a failed unlock.
+	if err := CheckAgentOperation("get"); err == nil {
+		t.Fatal("agent op should stay unauthorized after denied unlock")
+	}
+}
+
+func TestUnlockAgentUngatedWritesSession(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "ask", SessionMinutes: 15, AllowUngated: true}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	stubPresence(t, false, nil, errNoGUIPrompter)
+
+	if err := UnlockAgent(); err != nil {
+		t.Fatalf("ungated unlock should succeed: %v", err)
+	}
+	p, _ := loadAgentPolicy()
+	if !agentSessionActive(p) {
+		t.Fatal("ungated unlock should create an active session")
+	}
+	if err := CheckAgentOperation("get"); err != nil {
+		t.Fatalf("agent op should pass with active session: %v", err)
+	}
+}
+
+func TestUnlockAgentStillDeniedInLockMode(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "lock", SessionMinutes: 15}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	stubPresence(t, false, nil, nil) // gui would allow; lock must deny anyway
+	if err := UnlockAgent(); err == nil {
+		t.Fatal("lock mode must deny unlock before presence is consulted")
+	}
+}
+
+func TestSetAgentModeUngatedLifecycle(t *testing.T) {
+	setupAgentEnv(t)
+
+	if err := SetAgentMode("ask", 15, true); err != nil {
+		t.Fatalf("set ask --ungated: %v", err)
+	}
+	p, _ := loadAgentPolicy()
+	if !p.AllowUngated {
+		t.Fatal("mode ask --ungated must persist allow_ungated")
+	}
+
+	if err := SetAgentMode("ask", 15, false); err != nil {
+		t.Fatalf("set ask: %v", err)
+	}
+	p, _ = loadAgentPolicy()
+	if p.AllowUngated {
+		t.Fatal("plain `mode ask` must clear allow_ungated")
+	}
+
+	// --ungated on a non-ask mode must never stick, even if the CLI check is
+	// bypassed.
+	if err := SetAgentMode("open", 0, true); err != nil {
+		t.Fatalf("set open: %v", err)
+	}
+	p, _ = loadAgentPolicy()
+	if p.AllowUngated {
+		t.Fatal("allow_ungated must not persist on non-ask modes")
+	}
+}
+
+func TestPresenceMechanismLabels(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", "")
+	t.Setenv("OMASEAL_GUI_PROMPT", "off") // pinentry/zenity probes disabled
+
+	ctx := context.Background()
+	if got := presenceMechanism(ctx, AgentPolicy{}, true); got != "fprintd" {
+		t.Errorf("mechanism = %q, want fprintd", got)
+	}
+	if got := presenceMechanism(ctx, AgentPolicy{}, false); !strings.HasPrefix(got, "none") {
+		t.Errorf("mechanism = %q, want none-*", got)
+	}
+	if got := presenceMechanism(ctx, AgentPolicy{AllowUngated: true}, false); !strings.HasPrefix(got, "ungated") {
+		t.Errorf("mechanism = %q, want ungated*", got)
+	}
+}
+
+func TestUnlockAgentOpenModeIsNoOp(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "open", SessionMinutes: 15}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	stubPresence(t, false, nil, errNoGUIPrompter) // gate must not even run
+	if err := UnlockAgent(); err != nil {
+		t.Fatalf("open-mode unlock should be a no-op, got %v", err)
+	}
+}
+
+// --- mode-change gate ---
+
+func TestModeChangeWeakens(t *testing.T) {
+	ask := AgentPolicy{Mode: "ask"}
+	askUngated := AgentPolicy{Mode: "ask", AllowUngated: true}
+	open := AgentPolicy{Mode: "open"}
+	lock := AgentPolicy{Mode: "lock"}
+
+	cases := []struct {
+		name       string
+		p          AgentPolicy
+		mode       string
+		ungated    bool
+		wantWeaken bool
+	}{
+		{"ask->open", ask, "open", false, true},
+		{"ask->ask+ungated", ask, "ask", true, true},
+		{"lock->open", lock, "open", false, true},
+		{"lock->ask", lock, "ask", false, true},
+		{"open->open", open, "open", false, false},
+		{"ask+ungated->ask+ungated", askUngated, "ask", true, false},
+		{"open->ask", open, "ask", false, false},
+		{"ask->lock", ask, "lock", false, false},
+		{"ask+ungated->ask", askUngated, "ask", false, false},
+	}
+	for _, c := range cases {
+		if got := modeChangeWeakens(c.p, c.mode, c.ungated); got != c.wantWeaken {
+			t.Errorf("%s: modeChangeWeakens = %v, want %v", c.name, got, c.wantWeaken)
+		}
+	}
+}
+
+func TestGateModeChangeStrengtheningNeverAsks(t *testing.T) {
+	// A strengthening change must not touch the chain even when a fingerprint
+	// reader exists and would fail.
+	stubPresence(t, true, errors.New("must not run"), errors.New("must not run"))
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "lock", false); err != nil {
+		t.Fatalf("strengthening change should pass unguarded: %v", err)
+	}
+}
+
+func TestGateModeChangeWeakDeniedByUser(t *testing.T) {
+	stubPresence(t, false, nil, errPromptCancelled)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "open", false); !errors.Is(err, errPresenceDenied) {
+		t.Fatalf("user-declined mode change must deny, got %v", err)
+	}
+}
+
+func TestGateModeChangeWeakAllowedByGui(t *testing.T) {
+	stubPresence(t, false, nil, nil)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "open", false); err != nil {
+		t.Fatalf("gui-allowed mode change should pass: %v", err)
+	}
+}
+
+func TestGateModeChangeNoMechanismWarnsButAllows(t *testing.T) {
+	// Headless machines cannot prove human intent; blocking would also lock
+	// the user out of setting --ungated. Warn-and-allow is the ceiling.
+	stubPresence(t, false, nil, errNoGUIPrompter)
+	p := AgentPolicy{Mode: "ask"}
+	if err := gateModeChange(context.Background(), p, "ask", true); err != nil {
+		t.Fatalf("no-mechanism mode change should warn-and-allow, got %v", err)
+	}
+}
+
+// --- GUI confirm prompters ---
+
+// pinentryConfirmStub is pinentryStub specialized for CONFIRM: it replies
+// `confirmReply` to the CONFIRM command and logs every line received.
+func pinentryConfirmStub(t *testing.T, flavor, confirmReply string) (path, logPath string) {
+	t.Helper()
+	logPath = filepath.Join(t.TempDir(), "stub.log")
+	script := `#!/usr/bin/env bash
+printf 'OK pinentry-stub 1.0\n'
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "` + logPath + `"
+  case "$line" in
+    GETINFO*) printf 'D ` + flavor + `\nOK\n' ;;
+    CONFIRM*) ` + confirmReply + ` ;;
+    BYE*) printf 'OK\n'; exit 0 ;;
+    *) printf 'OK\n' ;;
+  esac
+done
+exit 0
+`
+	return writeStub(t, "pinentry", script), logPath
+}
+
+func TestConfirmPinentryAllow(t *testing.T) {
+	stub, logPath := pinentryConfirmStub(t, "gnome3", `printf 'OK\n'`)
+	if err := confirmPinentry(context.Background(), stub, "OmaSeal", "Allow agent unlock?"); err != nil {
+		t.Fatalf("confirmPinentry: %v", err)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read stub log: %v", err)
+	}
+	for _, want := range []string{"CONFIRM", "SETOK Allow", "SETCANCEL Deny", "SETDESC Allow agent unlock"} {
+		if !strings.Contains(string(log), want) {
+			t.Errorf("stub log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestConfirmPinentryDeny(t *testing.T) {
+	stub, _ := pinentryConfirmStub(t, "gnome3", `printf 'ERR 83886179 canceled\n'`)
+	if err := confirmPinentry(context.Background(), stub, "t", "d"); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("deny should map to errPromptCancelled, got %v", err)
+	}
+}
+
+func TestConfirmPinentryCursesSkipped(t *testing.T) {
+	stub, _ := pinentryConfirmStub(t, "curses", `printf 'OK\n'`)
+	if err := confirmPinentry(context.Background(), stub, "t", "d"); !errors.Is(err, errNoGUIPrompter) {
+		t.Fatalf("curses backend is not a GUI prompter, got %v", err)
+	}
+}
+
+func TestConfirmZenityAllow(t *testing.T) {
+	stub := writeStub(t, "zenity", "#!/usr/bin/env bash\nexit 0\n")
+	if err := confirmZenity(context.Background(), stub, "t", "d"); err != nil {
+		t.Fatalf("exit 0 should allow: %v", err)
+	}
+}
+
+func TestConfirmZenityDeny(t *testing.T) {
+	stub := writeStub(t, "zenity", "#!/usr/bin/env bash\nexit 1\n")
+	if err := confirmZenity(context.Background(), stub, "t", "d"); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("exit 1 should map to denied, got %v", err)
+	}
+}
+
+func TestGuiPresenceConfirmUsesPrompter(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+	t.Setenv("OMASEAL_GUI_PROMPT", "zenity")
+	marker := filepath.Join(t.TempDir(), "zenity-ran")
+	stub := writeStub(t, "zenity", "#!/usr/bin/env bash\ntouch \""+marker+"\"\nexit 0\n")
+	old := zenityCandidatePaths
+	zenityCandidatePaths = func() []string { return []string{stub} }
+	defer func() { zenityCandidatePaths = old }()
+
+	if err := guiPresenceConfirm(context.Background(), "agent unlock"); err != nil {
+		t.Fatalf("guiPresenceConfirm: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("zenity stub never ran")
+	}
+}
+
+func TestGuiPresenceConfirmNoDisplay(t *testing.T) {
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", "")
+	if err := guiPresenceConfirm(context.Background(), "agent unlock"); !errors.Is(err, errNoGUIPrompter) {
+		t.Fatalf("headless must report no prompter, got %v", err)
+	}
+}

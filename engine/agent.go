@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,10 +29,16 @@ const (
 // primary_agent is the user's main agent; agents lists the assigned defaults.
 // Both are used by `omaseal mcp install-detected` and `omaseal setup` so the
 // agents the user actually runs are wired to OmaSeal automatically.
+//
+// allow_ungated is the deliberate opt-out from user-presence confirmation in
+// ask mode (no biometric + no GUI prompter available). It is set only by
+// `omaseal agent mode ask --ungated` and cleared by any other `agent mode`
+// invocation, so it is never on silently.
 type AgentPolicy struct {
 	Mode           string   `json:"mode"`
 	SessionMinutes int      `json:"session_minutes"`
 	KeepAlive      bool     `json:"keep_alive,omitempty"`
+	AllowUngated   bool     `json:"allow_ungated,omitempty"`
 	PrimaryAgent   string   `json:"primary_agent,omitempty"`
 	Agents         []string `json:"agents,omitempty"`
 }
@@ -225,8 +232,10 @@ func agentSessionActive(p AgentPolicy) bool {
 }
 
 // SetAgentMode changes the persistent agent policy, preserving keep-alive,
-// primary, and default-agent assignments.
-func SetAgentMode(mode string, sessionMinutes int) error {
+// primary, and default-agent assignments. allowUngated opts ask mode out of
+// user-presence confirmation — it is only meaningful with "ask" and is reset
+// to false by every call that does not explicitly pass it.
+func SetAgentMode(mode string, sessionMinutes int, allowUngated bool) error {
 	if !isValidMode(mode) {
 		return fmt.Errorf("invalid mode %q; use open, ask, or lock", mode)
 	}
@@ -235,13 +244,57 @@ func SetAgentMode(mode string, sessionMinutes int) error {
 		return err
 	}
 	p.Mode = mode
+	p.AllowUngated = mode == "ask" && allowUngated
 	if sessionMinutes > 0 {
 		p.SessionMinutes = sessionMinutes
 	}
 	return saveAgentPolicy(p)
 }
 
-// UnlockAgent creates a time-bounded session after a best-effort biometric gate.
+// modeChangeWeakens reports whether switching policy p to (mode, ungated)
+// lowers the protection the agent boundary currently has. Those transitions
+// are what a prompt-injected agent would run to defeat ask mode, so they go
+// through the presence gate; strengthening changes are always free.
+func modeChangeWeakens(p AgentPolicy, mode string, ungated bool) bool {
+	switch {
+	case mode == "open" && p.Mode != "open":
+		return true
+	case ungated && !p.AllowUngated:
+		return true // opting ask out of presence confirmation weakens it
+	case p.Mode == "lock" && mode == "ask":
+		return true // lock -> ask re-enables agent access
+	}
+	return false
+}
+
+// gateModeChange runs the presence chain for weakening mode transitions.
+// When no mechanism exists it warns and allows — a headless machine cannot
+// prove human intent, and blocking would lock the user out of every remedy
+// (including setting the ungated opt-out). A refused confirmation blocks.
+func gateModeChange(ctx context.Context, p AgentPolicy, mode string, ungated bool) error {
+	if !modeChangeWeakens(p, mode, ungated) {
+		return nil
+	}
+	reason := "change agent mode to " + mode
+	if ungated {
+		reason += " --ungated"
+	}
+	switch err := runPresenceChain(ctx, reason); {
+	case err == nil:
+		return nil
+	case errors.Is(err, errNoPresenceMechanism):
+		WriteLog("presence: no mechanism to confirm mode change to %s", mode)
+		fmt.Fprintln(os.Stderr, "warning: no user-presence mechanism available to confirm this change; applying anyway.")
+		return nil
+	default:
+		return err
+	}
+}
+
+// UnlockAgent creates a time-bounded session after a user-presence
+// confirmation the calling process cannot answer itself (fingerprint, then
+// GUI confirm). With no presence mechanism it fails closed unless the policy
+// carries the deliberate allow_ungated opt-out.
 func UnlockAgent() error {
 	p, err := loadAgentPolicy()
 	if err != nil {
@@ -250,12 +303,13 @@ func UnlockAgent() error {
 	if p.Mode == "lock" {
 		return fmt.Errorf("agent mode is locked; run `omaseal agent mode ask` (or open) first")
 	}
+	if p.Mode == "open" {
+		fmt.Println("Agent mode is open; unlock is not needed.")
+		return nil
+	}
 
-	// FprintdVerify returns nil when no biometric hardware is present, but
-	// returns an error on a failed scan. That mirrors the macOS best-effort
-	// posture: protect where you can, do not hard-fail on older hardware.
-	if err := FprintdVerify(context.Background(), "agent unlock"); err != nil {
-		return fmt.Errorf("biometric gate failed: %w", err)
+	if err := requireUserPresence(context.Background(), "agent unlock", p); err != nil {
+		return fmt.Errorf("agent unlock denied: %w", err)
 	}
 
 	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
@@ -277,7 +331,7 @@ func LockAgent() error {
 		return err
 	}
 	if p.Mode == "open" {
-		if err := SetAgentMode("ask", p.SessionMinutes); err != nil {
+		if err := SetAgentMode("ask", p.SessionMinutes, false); err != nil {
 			return err
 		}
 	}
@@ -306,10 +360,11 @@ func PrintAgentStatus() {
 		fmt.Fprintf(os.Stderr, "default agents:   %s\n", strings.Join(p.Agents, ", "))
 	}
 	if p.Mode == "ask" {
-		if fprintdProbeOK() {
-			fmt.Fprintln(os.Stderr, "fingerprint:      available")
-		} else {
-			fmt.Fprintln(os.Stderr, "fingerprint:      not available (unlock is ungated)")
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		fmt.Fprintf(os.Stderr, "presence gate:    %s\n", presenceMechanism(ctx, p, fprintdUsableFunc(ctx)))
+		cancel()
+		if p.AllowUngated {
+			fmt.Fprintln(os.Stderr, "allow_ungated:    on (deliberate — unlock proceeds without confirmation when no mechanism is available)")
 		}
 	}
 	expiry, ok := readSessionExpiry()
@@ -339,9 +394,14 @@ func agentStatusJSON() (string, error) {
 		"primary_agent":   p.PrimaryAgent,
 		"agents":          agents,
 	}
-	// The fprintd probe spawns subprocesses; only ask mode consumes the field.
+	// The presence probe spawns subprocesses; only ask mode consumes the fields.
 	if p.Mode == "ask" {
-		out["fprintd_available"] = fprintdProbeOK()
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		usable := fprintdUsableFunc(ctx)
+		out["fprintd_available"] = usable
+		out["allow_ungated"] = p.AllowUngated
+		out["presence_gate"] = presenceMechanism(ctx, p, usable)
+		cancel()
 	}
 	if expiry, ok := readSessionExpiry(); ok && time.Now().UTC().Before(expiry) {
 		out["session_active"] = true
@@ -352,14 +412,6 @@ func agentStatusJSON() (string, error) {
 		return "", err
 	}
 	return string(b), nil
-}
-
-// fprintdProbeOK reports whether a usable fingerprint reader is enrolled,
-// bounded so status paths stay fast when fprintd is absent.
-func fprintdProbeOK() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return fprintdAvailable(ctx) == nil
 }
 
 func unknownAgentError(name string) error {
@@ -417,7 +469,7 @@ func SetKeepAlive(on bool) error {
 
 func handleAgent() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: omaseal agent mode <open|ask|lock> [session-minutes]")
+		fmt.Fprintln(os.Stderr, "usage: omaseal agent mode <open|ask|lock> [session-minutes] [--ungated]")
 		fmt.Fprintln(os.Stderr, "       omaseal agent unlock")
 		fmt.Fprintln(os.Stderr, "       omaseal agent lock")
 		fmt.Fprintln(os.Stderr, "       omaseal agent status [--json]")
@@ -435,17 +487,34 @@ func handleAgent() {
 		}
 		mode := os.Args[3]
 		mins := 0
-		if len(os.Args) >= 5 {
-			m, err := strconv.Atoi(os.Args[4])
+		ungated := false
+		for _, a := range os.Args[4:] {
+			if a == "--ungated" {
+				ungated = true
+				continue
+			}
+			m, err := strconv.Atoi(a)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: invalid session minutes: %v\n", err)
 				os.Exit(1)
 			}
 			mins = m
 		}
-		if err := SetAgentMode(mode, mins); err != nil {
+		if ungated && mode != "ask" {
+			fmt.Fprintln(os.Stderr, "error: --ungated only applies to `agent mode ask`")
+			os.Exit(1)
+		}
+		if err := gateModeChange(context.Background(), loadAgentPolicyOrDefault(), mode, ungated); err != nil {
+			fmt.Fprintf(os.Stderr, "error: mode change denied: %v\n", err)
+			os.Exit(1)
+		}
+		if err := SetAgentMode(mode, mins, ungated); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
+		}
+		if ungated {
+			WriteLog("agent mode set to %s with allow_ungated", mode)
+			fmt.Fprintln(os.Stderr, "warning: agent unlock will skip user-presence confirmation when no mechanism is available — any local process can unlock the agent session.")
 		}
 		WriteLog("agent mode set to %s (%dm)", mode, mins)
 		fmt.Printf("Agent mode set to %s.\n", mode)

@@ -22,7 +22,7 @@ func usage() {
 Usage:
   omaseal set <service> <account>          store secret from stdin
   omaseal get <service> <account>          print stored secret
-  omaseal reveal <service> <account>       print secret after fprintd gate
+  omaseal reveal <service> <account>       print secret after user-presence gate
   omaseal del <service> <account>          delete stored secret
   omaseal list [service] [--json] [--sort=used|recent|name]
                                            list stored secrets (optionally sorted)
@@ -42,8 +42,8 @@ Usage:
   omaseal doctor                           check the environment and dependencies
   omaseal logs [n]                         show recent non-secret log lines
   omaseal setup [--yes]                    onboarding: doctor + agent wiring
-  omaseal agent mode <open|ask|lock> [min] set agent/MCP trust mode
-  omaseal agent unlock                     biometric unlock for ask mode
+  omaseal agent mode <open|ask|lock> [min] [--ungated] set agent/MCP trust mode
+  omaseal agent unlock                     user-presence unlock for ask mode
   omaseal agent lock                       revoke agent session
   omaseal agent status [--json]            show agent policy and session
   omaseal agent keepalive [on|off]         session renews on activity (ask mode)
@@ -270,8 +270,8 @@ func handleReveal() {
 		usage()
 		os.Exit(1)
 	}
-	if err := FprintdVerify(context.Background(), fmt.Sprintf("reveal %s/%s", service, account)); err != nil {
-		printError("fingerprint gate: ", err)
+	if err := requireUserPresence(context.Background(), fmt.Sprintf("reveal %s/%s", service, account), loadAgentPolicyOrDefault()); err != nil {
+		printError("user-presence gate: ", err)
 		os.Exit(1)
 	}
 	secret, err := Get(service, account)

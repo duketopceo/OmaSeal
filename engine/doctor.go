@@ -64,6 +64,7 @@ func doctorChecks() []checkResult {
 		checkSecretService,
 		checkKeyringEncryption,
 		checkFprintd,
+		checkPresenceGate,
 		checkOnePassword,
 		checkBitwarden,
 		checkGUIPrompt,
@@ -275,6 +276,34 @@ func checkFprintd() checkResult {
 	}
 
 	return checkResult{name: "fprintd", ok: true, message: "fprintd is available and has an enrolled device"}
+}
+
+// checkPresenceGate verifies that ask mode has a user-presence mechanism —
+// what makes `omaseal agent unlock` a human-gated action rather than a
+// self-serve one. It names the mechanism found, or warns with remediation.
+func checkPresenceGate() checkResult {
+	p := loadAgentPolicyOrDefault()
+	if p.Mode != "ask" {
+		return checkResult{name: "presence-gate", ok: true, message: fmt.Sprintf("agent mode is %s — presence gate not required", p.Mode)}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if fprintdUsableFunc(ctx) {
+		return checkResult{name: "presence-gate", ok: true, message: "fingerprint reader gates `omaseal agent unlock`"}
+	}
+	if graphicalSession() {
+		if prompter, err := selectGUIPrompter(ctx); err == nil {
+			return checkResult{name: "presence-gate", ok: true, message: fmt.Sprintf("GUI confirm (%s) gates `omaseal agent unlock`", prompter.name())}
+		}
+	}
+	if p.AllowUngated {
+		return checkResult{name: "presence-gate", ok: false, optional: true, message: "ask mode is running ungated (allow_ungated set).\n" +
+			"  - `omaseal agent unlock` will not ask for user presence — any local process can open a session.\n" +
+			"  - Re-gate with `omaseal agent mode ask`."}
+	}
+	return checkResult{name: "presence-gate", ok: false, optional: true, message: "no user-presence mechanism for `omaseal agent unlock` — unlock will fail closed.\n" +
+		"  - Enroll a fingerprint (fprintd-enroll), or install pinentry/zenity for a GUI confirm dialog.\n" +
+		"  - Deliberate opt-out for headless machines: `omaseal agent mode ask --ungated`."}
 }
 
 func checkOnePassword() checkResult {

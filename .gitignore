@@ -26,3 +26,8 @@ local/
 /.devin/mcp.json
 /.agy/mcp.json
 /.hermes/mcp.json
+
+# Agent index artifacts
+.codebase-memory/
+__pycache__/
+*.pyc

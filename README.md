@@ -18,7 +18,8 @@ copy-pasting API keys into dotfiles. Store once. Use everywhere.
 ## What you get
 
 - **Quickshell panel** — browse, add, copy, and delete secrets from the bar.
-- **CLI** — `set`, `get`, `del`, `list`, `resolve`, and `reveal` with `fprintd`.
+- **CLI** — `set`, `get`, `del`, `list`, `resolve`, and `reveal` behind a
+  user-presence gate.
 - **JSON IPC** — for other Omarchy plugins to ask for secrets safely.
 - **MCP server** — so Claude, Codex, Cursor, and other agents can use it.
 - **1Password / Bitwarden fallback** — import and resolve when the local
@@ -107,8 +108,8 @@ omaseal setup           # guided onboarding: doctor + wire detected agents
 omaseal setup --yes     # non-interactive: auto-wire every detected agent
 omaseal selftest        # set/get/delete round-trip against the live keyring
 omaseal mcp status      # which agents are detected and already wired
-omaseal agent mode <open|ask|lock> [min]  # set agent/MCP trust mode
-omaseal agent unlock                      # biometric unlock for ask mode
+omaseal agent mode <open|ask|lock> [min] [--ungated]  # set agent/MCP trust mode
+omaseal agent unlock                      # presence-gated unlock for ask mode
 omaseal agent lock                        # revoke agent session
 omaseal agent status                      # show agent policy and session
 omaseal agent keepalive on                # session renews on activity, lapses
@@ -128,7 +129,7 @@ omaseal set openrouter default
 # Retrieve (fast, local-only)
 omaseal get openrouter default
 
-# Retrieve with best-effort fprintd gate
+# Retrieve behind a user-presence gate (fingerprint, else GUI confirm)
 omaseal reveal openrouter default
 
 # Resolve: local → 1Password → Bitwarden → prompt, with local caching
@@ -171,8 +172,8 @@ A `BarWidget` and `Panel` are included:
 - The copy button runs `reveal` and uses `wl-copy` with a 30-second clear.
 - The agent trust mode (`open` / `ask` / `lock`) is shown in the header with
   an Unlock button when a session is required, the session expiry time while
-  unlocked, a `·KA` marker when keep-alive is on, and a notice when no
-  fingerprint reader is present.
+  unlocked, a `·KA` marker when keep-alive is on, and the presence mechanism
+  the unlock gate will use (fingerprint, GUI confirm, or ungated).
 - `r` refreshes; `a` toggles the add form.
 
 ## BrowserOS (deferred)
@@ -202,8 +203,13 @@ and `omaseal://` reference grammar every consumer should follow.
   logs, argv, or persists them in the panel state. The secret is held only by
   the active input field until `set` completes and is then cleared.
 - `list` returns metadata only.
-- `reveal` triggers the `fprintd` gate when a reader is enrolled; on systems
-  without one it falls through to the local secret.
+- `reveal` and `agent unlock` share a user-presence gate: fingerprint via
+  `fprintd` when a reader is enrolled, else a GUI confirm dialog (pinentry or
+  zenity) when a graphical session and prompter exist. When neither is
+  available the gate **fails closed** — the only bypass is the deliberate
+  opt-out `omaseal agent mode ask --ungated`. (`open` mode skips `agent
+  unlock` but `reveal` still gates.) The calling process's stdin is never
+  consulted, so an MCP-connected agent cannot confirm its own unlock.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault.
 - When `resolve` needs to prompt, it uses the TTY when one exists; in a
