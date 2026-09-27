@@ -14,11 +14,8 @@
 - [x] `omaseal setup` with self-verifying keyring round-trip (30s bounded)
 - [x] `omaseal://service/account` references accepted by every command
 - [x] Masked GUI prompt for `resolve` without a TTY (pinentry, `OMASEAL_GUI_PROMPT`)
-- [x] Fail-closed user-presence gate for `reveal`/agent unlock —
-  fingerprint via `fprintd`, else GUI confirm (pinentry/zenity), else deny;
-  deliberate `allow_ungated` opt-out (`agent mode ask --ungated`); weakening
-  mode transitions gated too. Panel shows mode/unlock state; session
-  keep-alive. (v0.4.0, marketplace security finding)
+- [x] Fail-closed user-presence gate for `reveal`/agent unlock — fprintd,
+  else GUI confirm, else deny; `agent mode ask --ungated` opt-out (v0.4.0)
 - [x] Shared `service/account` namespace with other writers
   (`omarchy-secrets-*`, keytar, seahorse): `owned` provenance flag,
   duplicate-safe set/delete
@@ -33,36 +30,21 @@
   30s conditional clipboard clear (`omaseal clipclear`)
 - [x] Bounded D-Bus calls, pooled metadata reads (~0.7s at ~700 items),
   capped access log, atomic config writes
-- [x] `omaseal doctor` `keyring-encryption` check — detects plaintext
-  `secret=` values in `~/.local/share/keyrings/*.keyring` (the
-  empty-password-keyring/autologin gap)
-- [x] `omaseal keyring migrate` — in-product re-encryption: copies an
-  unlocked plaintext keyring into an encrypted `login` collection via the
-  Secret Service API alone (`--dry-run`, opt-in `--delete-old`, headless
-  guard, bounded prompt waits, self-migrate protection)
-- [x] Fail-closed agent policy — a missing `agent.json` now defaults to
-  `ask`, never `open`; `open` is explicit opt-in only (marketplace
-  security finding)
+- [x] `omaseal keyring migrate` + doctor `keyring-encryption` check —
+  plaintext keyrings detected and re-encrypted into `login`
+- [x] Fail-closed agent policy — missing `agent.json` defaults to `ask`
 
 ## v0.6.0 — Marketplace stable
 
 - Close repository issues #2, #3, #4.
-- Marketplace validation: `f8ef3ac` attested (Sept-17) with one security
-  finding — agent policy defaulted to `open` without a policy file
-  (resolved in #17). A second finding (Sept-22) — `agent unlock` failed
-  open when no fprintd hardware existed — is resolved in #20 and shipped
-  as **v0.4.0** (`551d075`). Re-validation requested at `551d075`;
-  awaiting reviewer attestation.
-- Follow-ups queued: #13 (provider negative caching — stops `resolve`
-  polling external vaults on missing keys), #12 (AUR submission blocked
-  by AUR account-registration freeze).
+- Marketplace: revalidation requested at `551d075` (v0.4.0) — both security
+  findings fixed (#17 default-open policy, #20 fail-open unlock).
+- Queued: #13 provider negative caching, #12 AUR (registration freeze).
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
   `omarchy.secrets` panel + menu entry → Discussion + PR to
   `omacom/omarchy-mac` (base `quattro`); phased fallback (commands + menu
   only) if the panel is the sticking point.
 - AUR package (`omaseal-bin`) and release automation hardened.
-- Land the PR stack: #6 (refs/GUI prompt/hardening) → #8 (organized panel,
-  analytics, enforced manifest).
 
 ## v0.7.0 — BrowserOS and plugin ecosystem
 
