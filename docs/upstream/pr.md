@@ -20,8 +20,10 @@ secret by `service`/`account` without knowing what backend holds it.
   - `del {service, account}`
   - `list {service?}`
   - `resolve {service, account}`
-- `pam_fprintd` integration remains optional and best-effort: `reveal` uses it
-  when enrolled, otherwise falls through.
+- User-presence gating is fail-closed: `reveal` and `agent unlock` confirm
+  the local user via `fprintd` first, then a GUI confirm (pinentry/zenity)
+  omaseal spawns; with no mechanism the request denies unless the user
+  deliberately opted out (`agent mode ask --ungated`).
 
 ## System-level behavior
 

@@ -54,11 +54,11 @@ not yet published to AUR.)
 ### From a release tarball (verified)
 
 `install.sh` pins an immutable release tag (`OMASEAL_VERSION`, default
-`v0.3.0`) and verifies the tarball against a checksum embedded in the
+`v0.4.0`) and verifies the tarball against a checksum embedded in the
 script — it never follows `latest`:
 
 ```sh
-./install.sh            # pinned v0.3.0, embedded sha256 verify
+./install.sh            # pinned v0.4.0, embedded sha256 verify
 ./install.sh --dry-run
 ```
 
@@ -66,7 +66,7 @@ Manual equivalent — download the tarball and checksums for your
 architecture from the pinned tag, then verify before installing:
 
 ```sh
-VER=v0.3.0
+VER=v0.4.0
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;

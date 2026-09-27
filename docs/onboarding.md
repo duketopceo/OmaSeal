@@ -15,6 +15,8 @@ This checks:
 - the binary and its version
 - the `gnome-keyring-daemon` Secret Service backend
 - `fprintd` for biometric `reveal`
+- the presence gate behind `agent unlock`/`reveal` — fingerprint, GUI
+  confirm, deliberate `allow_ungated`, or fail-closed `none`
 - `op` (1Password) and `bw` (Bitwarden) CLI availability
 - a graphical prompter (GUI pinentry or zenity) for `resolve` without a TTY
 - whether `~/.local/bin/omaseal` is on `PATH`
