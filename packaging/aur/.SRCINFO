@@ -1,6 +1,6 @@
 pkgbase = omaseal
 	pkgdesc = First-party Omarchy keyring manager
-	pkgver = 0.3.0
+	pkgver = 0.4.0
 	pkgrel = 1
 	url = https://github.com/duketopceo/OmaSeal
 	install = omaseal.install
@@ -13,7 +13,7 @@ pkgbase = omaseal
 	optdepends = wl-clipboard: conditional clipboard clear (clipclear, panel copy)
 	optdepends = pinentry: GUI unlock prompt
 	conflicts = omaseal-bin
-	source = omaseal-0.3.0.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v0.3.0.tar.gz
-	sha256sums = adc1307e3ee8b51d075ec514ffb70b3327832cd956b573a078889c260293712d
+	source = omaseal-0.4.0.tar.gz::https://github.com/duketopceo/OmaSeal/archive/refs/tags/v0.4.0.tar.gz
+	sha256sums = fb29491e516d5334428260e40a9491e838ee3ef1bca1cc31aab22cc8744cd69a
 
 pkgname = omaseal
