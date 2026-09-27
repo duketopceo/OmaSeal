@@ -59,6 +59,13 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 				return v, nil
 			}
 			failed++
+			// A transport/auth failure inside Get means the memoized "up"
+			// probe is stale — invalidate it so the next call re-probes.
+			// Item-level errors (missing, empty field, ambiguous title)
+			// prove op is reachable and must not flip availability.
+			if !isItemLevelProviderError(err) && ctx.Err() == nil {
+				recordOpAvailable(false)
+			}
 		}
 
 		// 3. Bitwarden CLI
@@ -74,7 +81,10 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 			failed++
 		}
 
-		if attempted > 0 && failed == attempted {
+		// A canceled context can fail every provider without proving anything
+		// about the item — a miss persisted now would suppress lookups for
+		// later callers with healthy contexts.
+		if attempted > 0 && failed == attempted && ctx.Err() == nil {
 			recordProviderMiss(service, account)
 		}
 	}
@@ -200,7 +210,11 @@ func newOnePasswordProvider(ctx context.Context) (*onePasswordProvider, bool) {
 	defer cancel()
 	out, err := exec.CommandContext(cctx, "op", "vault", "list", "--format=json").CombinedOutput()
 	if err != nil || len(bytes.TrimSpace(out)) == 0 {
-		recordOpAvailable(false)
+		// A dead caller's context can fail the probe without saying anything
+		// about op — don't persist a down memo for it.
+		if ctx.Err() == nil {
+			recordOpAvailable(false)
+		}
 		return nil, false
 	}
 	recordOpAvailable(true)
@@ -265,7 +279,7 @@ func (p *onePasswordProvider) findItemID(ctx context.Context, title, account str
 			}
 		}
 	}
-	return "", fmt.Errorf("op: %d items titled %q; specify an account or use a unique title", len(matches), title)
+	return "", fmt.Errorf("%w: op: %d items titled %q; specify an account or use a unique title", errProviderItemAmbiguous, len(matches), title)
 }
 
 func (p *onePasswordProvider) getItem(ctx context.Context, id, account string) (string, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +80,31 @@ func TestOpAvailabilityMemo(t *testing.T) {
 	timeNow = func() time.Time { return now.Add(opDownTTL + time.Second) }
 	if _, fresh := opAvailability(); fresh {
 		t.Fatal("down memo must expire after opDownTTL")
+	}
+}
+
+func TestMissKeyNoCollision(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	withTempRuntimeDir(t, now)
+	// ("a/b","c") and ("a","b/c") must be distinct keys — a "/" join collides.
+	recordProviderMiss("a/b", "c")
+	if providerMissCached("a", "b/c") {
+		t.Fatal("miss for (a/b, c) must not suppress (a, b/c)")
+	}
+}
+
+func TestItemLevelProviderError(t *testing.T) {
+	if !isItemLevelProviderError(fmt.Errorf("wrap: %w", errProviderItemMissing)) {
+		t.Fatal("wrapped item-missing must classify as item-level")
+	}
+	if !isItemLevelProviderError(fmt.Errorf("wrap: %w", errProviderItemAmbiguous)) {
+		t.Fatal("ambiguous-title must classify as item-level")
+	}
+	if !isItemLevelProviderError(fmt.Errorf("wrap: %w", errNoSecretField)) {
+		t.Fatal("no-secret-field must classify as item-level")
+	}
+	if isItemLevelProviderError(fmt.Errorf("op: exit status 1")) {
+		t.Fatal("transport error must NOT classify as item-level")
 	}
 }
 

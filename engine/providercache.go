@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -59,7 +60,11 @@ func withProviderCache(fn func(c *providerCache)) {
 	c := &providerCache{}
 	path := filepath.Join(agentRuntimeDir(), "provider-cache.json")
 	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, c)
+		// A decode error can leave c partially populated — discard the whole
+		// record rather than trust a half-parsed cache.
+		if json.Unmarshal(data, c) != nil {
+			c = &providerCache{}
+		}
 	}
 	fn(c)
 	if data, err := json.Marshal(c); err == nil {
@@ -67,10 +72,17 @@ func withProviderCache(fn func(c *providerCache)) {
 	}
 }
 
+// missKey encodes (service, account) unambiguously — a bare "/" join would
+// collide ("a/b", "c") with ("a", "b/c"). Length-prefixing the service is
+// collision-free for arbitrary names.
+func missKey(service, account string) string {
+	return fmt.Sprintf("%d:%s%s", len(service), service, account)
+}
+
 func providerMissCached(service, account string) bool {
 	fresh := false
 	withProviderCache(func(c *providerCache) {
-		fresh = c.Misses[service+"/"+account] > timeNow().Unix()
+		fresh = c.Misses[missKey(service, account)] > timeNow().Unix()
 	})
 	return fresh
 }
@@ -96,7 +108,7 @@ func recordProviderMiss(service, account string) {
 			}
 			delete(c.Misses, oldest)
 		}
-		c.Misses[service+"/"+account] = now + int64(providerMissTTL.Seconds())
+		c.Misses[missKey(service, account)] = now + int64(providerMissTTL.Seconds())
 	})
 }
 
@@ -132,6 +144,16 @@ func recordOpAvailable(up bool) {
 }
 
 // errProviderItemMissing marks "the provider is reachable and the item is not
-// there". Distinct from transport/auth failures for callers that care; today
-// Resolve treats every provider failure as a miss candidate either way.
-var errProviderItemMissing = errors.New("provider: item not found")
+// there"; errProviderItemAmbiguous marks "multiple items match". Both prove the
+// provider is up — Resolve uses that to avoid marking availability down on
+// item-level failures. errNoSecretField (providers.go) is likewise item-level.
+var (
+	errProviderItemMissing   = errors.New("provider: item not found")
+	errProviderItemAmbiguous = errors.New("provider: multiple matching items")
+)
+
+func isItemLevelProviderError(err error) bool {
+	return errors.Is(err, errProviderItemMissing) ||
+		errors.Is(err, errProviderItemAmbiguous) ||
+		errors.Is(err, errNoSecretField)
+}
