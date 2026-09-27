@@ -180,7 +180,8 @@ func maybeOfferClaudeKeyHelper(detected []mcpAgentStatus, yes bool) {
 	if items, err := List("anthropic"); err == nil && len(items) > 0 {
 		ref = "anthropic " + items[0].Account
 	}
-	helper := fmt.Sprintf("%s get %s", self, ref)
+	// apiKeyHelper is executed via shell — %q quotes the binary path.
+	helper := fmt.Sprintf("%q get %s", self, ref)
 
 	data, mode, err := readConfigPreservingMode(settingsPath)
 	if err != nil {
