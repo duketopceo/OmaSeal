@@ -39,25 +39,43 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		return "", err
 	}
 
-	// 2. 1Password CLI
-	if op, ok := newOnePasswordProvider(ctx); ok {
-		v, err = op.Get(ctx, service, account)
-		if err == nil {
-			if cache {
-				_ = Set(service, account, v)
-			}
-			return v, nil
-		}
-	}
+	// A fresh miss entry means every available provider already failed for
+	// this key inside providerMissTTL — skip the sweep so a polling caller
+	// doesn't spawn `op`/`bw` subprocesses every tick (#13).
+	if !providerMissCached(service, account) {
+		// A miss is recorded only when at least one provider actually ran and
+		// every one that ran failed — a provider that never probed cannot
+		// bear witness to the item's absence.
+		attempted, failed := 0, 0
 
-	// 3. Bitwarden CLI
-	if bw, ok := newBitwardenProvider(ctx); ok {
-		v, err = bw.Get(ctx, service, account)
-		if err == nil {
-			if cache {
-				_ = Set(service, account, v)
+		// 2. 1Password CLI
+		if op, ok := newOnePasswordProvider(ctx); ok {
+			attempted++
+			v, err = op.Get(ctx, service, account)
+			if err == nil {
+				if cache {
+					_ = Set(service, account, v)
+				}
+				return v, nil
 			}
-			return v, nil
+			failed++
+		}
+
+		// 3. Bitwarden CLI
+		if bw, ok := newBitwardenProvider(ctx); ok {
+			attempted++
+			v, err = bw.Get(ctx, service, account)
+			if err == nil {
+				if cache {
+					_ = Set(service, account, v)
+				}
+				return v, nil
+			}
+			failed++
+		}
+
+		if attempted > 0 && failed == attempted {
+			recordProviderMiss(service, account)
 		}
 	}
 
@@ -169,16 +187,23 @@ func newOnePasswordProvider(ctx context.Context) (*onePasswordProvider, bool) {
 	if _, err := exec.LookPath("op"); err != nil {
 		return nil, false
 	}
+	// The smoke test itself is a subprocess + API round-trip — memoize it
+	// (opUpTTL/opDownTTL) so a resolving poller doesn't re-probe every tick.
+	if up, fresh := opAvailability(); fresh {
+		if !up {
+			return nil, false
+		}
+		return &onePasswordProvider{}, true
+	}
 	// Smoke test: op is authenticated.
 	cctx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, "op", "vault", "list", "--format=json").CombinedOutput()
-	if err != nil {
+	if err != nil || len(bytes.TrimSpace(out)) == 0 {
+		recordOpAvailable(false)
 		return nil, false
 	}
-	if len(bytes.TrimSpace(out)) == 0 {
-		return nil, false
-	}
+	recordOpAvailable(true)
 	return &onePasswordProvider{}, true
 }
 
@@ -226,7 +251,7 @@ func (p *onePasswordProvider) findItemID(ctx context.Context, title, account str
 	}
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("op: no item titled %q", title)
+		return "", fmt.Errorf("%w: op has no item titled %q", errProviderItemMissing, title)
 	case 1:
 		return matches[0], nil
 	}
