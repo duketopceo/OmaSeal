@@ -128,6 +128,13 @@ func injectSecrets(env []string, bindings envBindings, resolve bool) ([]string, 
 // trigger the provider sweep or a GUI prompt. --resolve opts into the full
 // fallback chain for the rare interactive case.
 func handleRun() {
+	// -h/--help only as the first arg — after -- it belongs to the child.
+	if len(os.Args) > 2 && (os.Args[2] == "-h" || os.Args[2] == "--help") {
+		fmt.Println(runUsage)
+		fmt.Println("  refs: <service>/<account> or omaseal://<service>/<account>")
+		fmt.Println("  -e is repeatable; reads are local keyring only unless --resolve")
+		return
+	}
 	bindings, resolve, cmdArgs, err := parseRunArgs(os.Args[2:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v — %s\n", err, runUsage)
