@@ -172,16 +172,19 @@ func maybeOfferClaudeKeyHelper(detected []mcpAgentStatus, yes bool) {
 	}
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
 
+	// No offer without a stored key: pointing Claude's auth at a secret that
+	// does not exist produces a helper that always fails.
+	items, err := List("anthropic")
+	if err != nil || len(items) == 0 {
+		fmt.Fprintln(os.Stderr, "  no anthropic key in the keyring yet — run `omaseal set anthropic <account>` first, then re-run setup for the apiKeyHelper offer")
+		return
+	}
 	self, err := os.Executable()
 	if err != nil {
 		self = "omaseal"
 	}
-	ref := "anthropic default"
-	if items, err := List("anthropic"); err == nil && len(items) > 0 {
-		ref = "anthropic " + items[0].Account
-	}
-	// apiKeyHelper is executed via shell — %q quotes the binary path.
-	helper := fmt.Sprintf("%q get %s", self, ref)
+	// apiKeyHelper is executed via shell — every component is %q-quoted.
+	helper := fmt.Sprintf("%q get %q %q", self, "anthropic", items[0].Account)
 
 	data, mode, err := readConfigPreservingMode(settingsPath)
 	if err != nil {
@@ -206,7 +209,7 @@ func maybeOfferClaudeKeyHelper(detected []mcpAgentStatus, yes bool) {
 
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "  claude detected: apiKeyHelper can read your API key via\n    %q\n", helper)
-	fmt.Fprintf(os.Stderr, "    (requires `omaseal set %s` first — the key never touches a file)\n", ref)
+	fmt.Fprintf(os.Stderr, "    (reads anthropic/%s — the key never touches a file)\n", items[0].Account)
 	if yes || !confirm("Set claude apiKeyHelper to that helper in ~/.claude/settings.json? [y/N] ") {
 		if yes {
 			fmt.Fprintln(os.Stderr, "  skipped under --yes: add `\"apiKeyHelper\": \""+helper+"\"` to ~/.claude/settings.json to enable")

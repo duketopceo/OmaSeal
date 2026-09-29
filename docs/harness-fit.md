@@ -9,17 +9,21 @@ OmaSeal fits all three without any config file holding a raw key.
 `omaseal run` materializes secrets into a child's environment at spawn:
 
 ```bash
-omaseal run -e GITHUB_TOKEN=github/token -- npx -y @mcp/github
+omaseal run -e GITHUB_PERSONAL_ACCESS_TOKEN=github/token -- npx -y @modelcontextprotocol/server-github
 omaseal run -e KEY=omaseal://svc/acct -e OTHER=svc2/acct2 -- my-server
 ```
 
 - `-e`/`--env` is repeatable; `--env=NAME=ref` also works.
 - Refs: `service/account` or `omaseal://service/account`.
 - Missing secret → named error on stderr, exit 127; the child never starts.
+  A *keyring failure* (locked, D-Bus gone) exits 1 with the real error —
+  it is never reported as "no secret".
 - Reads go through `Get` (local keyring) — no provider sweep, no GUI prompt,
   so spawned MCP servers can't block on interaction. `--resolve` opts into
   the full fallback chain for interactive use.
 - The child inherits your environment plus the injected names.
+- `run` replaces itself with the child via `exec(3)` — same PID, the
+  child's own exit code, signals hit the real server, no orphan.
 
 **The config holds a command, not a secret.** Nothing to interpolate, nothing
 to `.gitignore`, no shell-env dependency.
@@ -33,8 +37,8 @@ to `.gitignore`, no shell-env dependency.
 | Cursor | `~/.cursor/mcp.json`, `.cursor/mcp.json` | `${env:NAME}` (version-flaky, needs shell env) | `omaseal run` — drops interpolation *and* the shell-env dependency |
 | Devin (local) | `~/.config/devin/mcp_config.json` | `env` literals | `omaseal run`; cloud Devin can't see your keyring — use platform secrets there |
 | OpenCode | `~/.config/opencode/opencode.json` | `{env:NAME}` interpolation | `omaseal run` in `command` |
-| Antigravity (`agy`) | `~/.agy/mcp.json` | `env` literals | `omaseal run` |
-| Hermes | `~/.hermes/mcp.json` | `env` literals | `omaseal run` |
+| Antigravity (`agy`) | `~/.agy/mcp.json` (also reads Gemini-family `~/.gemini/config/mcp_config.json`) | `env` literals | `omaseal run` |
+| Hermes | `~/.hermes/config.yaml` `mcp_servers:` (canonical; `~/.hermes/mcp.json` also read) | `env` literals | `omaseal run` |
 
 ### Example: a GitHub MCP server, wired the OmaSeal way
 
@@ -44,7 +48,7 @@ to `.gitignore`, no shell-env dependency.
   "mcpServers": {
     "github": {
       "command": "omaseal",
-      "args": ["run", "-e", "GITHUB_TOKEN=github/token", "--", "npx", "-y", "@modelcontextprotocol/server-github"]
+      "args": ["run", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN=github/token", "--", "npx", "-y", "@modelcontextprotocol/server-github"]
     }
   }
 }
@@ -53,7 +57,7 @@ to `.gitignore`, no shell-env dependency.
 Compare with the env-block form — the key sits in the file:
 
 ```jsonc
-"env": { "GITHUB_TOKEN": "ghp_realsecret..." }   // or "${GITHUB_TOKEN}" — still needs it in your shell env
+"env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_realsecret..." }   // or "${GITHUB_PERSONAL_ACCESS_TOKEN}" — still needs it in your shell env
 ```
 
 ## Claude Code: `apiKeyHelper` for Claude's own key
@@ -72,18 +76,20 @@ The key lives only in the keyring — never in `settings.json`, never in a file.
 
 ## Codex: shared store
 
-Codex CLI's own auth already lands in the OS keyring (Secret Service) on
-Linux — the same store OmaSeal wraps. So a Codex-side credential written by
-Codex is already in the shared store; `omaseal run` covers the *other* keys
-Codex MCP servers and shell tools need.
+Codex is moving CLI auth toward the OS keyring (Secret Service) — the same
+store OmaSeal wraps. Version-dependent: installs that still write
+`~/.codex/auth.json` keep tokens in a file; when your Codex uses the
+keyring store, those credentials already live in the shared store.
+Either way, `omaseal run` covers the *other* keys Codex MCP servers and
+shell tools need.
 
 ## What `omaseal run` is not
 
 - It does not weaken the manifest/presence boundary — those govern the
-  **agent channels** (MCP/IPC/`agent unlock`). A spawned child is a local
-  process with user-level access; the Secret Service session itself already
-  trusts it (same as `env` blocks today). `run` just removes the copy-paste
-  plaintext middle step.
+  **agent channels** (MCP/IPC/`agent unlock`). The exec'd server process is
+  a local process with user-level access; the Secret Service session
+  itself already trusts it (same as `env` blocks today). `run` just
+  removes the copy-paste plaintext middle step.
 - It is not a prompt surface. If a secret is missing it exits instead of
   asking — agents can't block on it, and can't be prompt-injected into
   approving anything through it.

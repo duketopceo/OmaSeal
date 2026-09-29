@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+
+	"github.com/zalando/go-keyring"
 )
 
 // envBindings collects repeatable -e/--env NAME=ref flags.
@@ -112,7 +115,13 @@ func injectSecrets(env []string, bindings envBindings, resolve bool) ([]string, 
 			v, err = Get(service, account)
 		}
 		if err != nil {
-			return nil, 127, fmt.Errorf("%s: no secret for %s/%s", b.name, service, account)
+			// Only a genuine miss is 127. A locked/unavailable keyring must
+			// not masquerade as "no secret" — it tells the user to store a
+			// secret that already exists.
+			if errors.Is(err, keyring.ErrNotFound) || codeFromError(err) == "not_found" {
+				return nil, 127, fmt.Errorf("%s: no secret for %s/%s", b.name, service, account)
+			}
+			return nil, 1, fmt.Errorf("%s: cannot read %s/%s: %w", b.name, service, account, err)
 		}
 		env = append(env, b.name+"="+v)
 	}
@@ -151,15 +160,17 @@ func handleRun() {
 		os.Exit(code)
 	}
 
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	cmd.Env = env
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			os.Exit(ee.ExitCode())
-		}
+	// exec(3), not exec.Command: omaseal run IS the server process image.
+	// A SIGTERM/SIGINT aimed at the wrapper's PID hits the real server, the
+	// exit code is the child's own, and no orphaned secret-bearing process
+	// can outlive a supervisor kill.
+	path, err := exec.LookPath(cmdArgs[0])
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "run: %v\n", err)
 		os.Exit(127)
+	}
+	if err := syscall.Exec(path, cmdArgs, env); err != nil {
+		fmt.Fprintf(os.Stderr, "run: exec %s: %v\n", path, err)
+		os.Exit(126)
 	}
 }
