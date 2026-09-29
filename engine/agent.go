@@ -268,9 +268,11 @@ func modeChangeWeakens(p AgentPolicy, mode string, ungated bool) bool {
 }
 
 // gateModeChange runs the presence chain for weakening mode transitions.
-// When no mechanism exists it warns and allows — a headless machine cannot
-// prove human intent, and blocking would lock the user out of every remedy
-// (including setting the ungated opt-out). A refused confirmation blocks.
+// No mechanism = refuse: the earlier warn-and-allow made the gate an env
+// check, since a caller can suppress every prompter via its own environment
+// (OMASEAL_GUI_PROMPT=off, stripped DISPLAY). Genuinely headless machines
+// keep a deliberate escape hatch — editing agent.json directly — which
+// requires filesystem intent, not just a flag.
 func gateModeChange(ctx context.Context, p AgentPolicy, mode string, ungated bool) error {
 	if !modeChangeWeakens(p, mode, ungated) {
 		return nil
@@ -283,9 +285,8 @@ func gateModeChange(ctx context.Context, p AgentPolicy, mode string, ungated boo
 	case err == nil:
 		return nil
 	case errors.Is(err, errNoPresenceMechanism):
-		WriteLog("presence: no mechanism to confirm mode change to %s", mode)
-		fmt.Fprintln(os.Stderr, "warning: no user-presence mechanism available to confirm this change; applying anyway.")
-		return nil
+		WriteLog("presence: no mechanism to confirm mode change to %s — refused", mode)
+		return fmt.Errorf("%w — refusing a weaker agent mode.\n  Headless machines: edit %s directly (deliberate, filesystem-level opt-out)", errNoPresenceMechanism, agentPolicyPath())
 	default:
 		return err
 	}

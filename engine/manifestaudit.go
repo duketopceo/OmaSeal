@@ -98,6 +98,39 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 		}
 	}
 
+	// Raw-file checks the parsed rules can't express: lines that look like
+	// rules but carry an unrecognized policy token (typos, Unicode
+	// lookalikes) are silently dropped, and duplicate patterns shadow by
+	// first-match.
+	if data, err := os.ReadFile(m.Path); err == nil {
+		seenPattern := map[string]int{}
+		for i, ln := range strings.Split(string(data), "\n") {
+			word, valid := lineRuleToken(ln)
+			if word == "" {
+				continue
+			}
+			if !valid {
+				findings = append(findings, AuditFinding{
+					Kind:   "advisory",
+					Target: fmt.Sprintf("line %d", i+1),
+					Detail: fmt.Sprintf("%q does not start a valid ALLOW/ASK/DENY rule — line ignored", word),
+				})
+				continue
+			}
+			_, pattern, _, _ := parseRuleLine(ln)
+			key := strings.ToLower(pattern)
+			if first, dup := seenPattern[key]; dup {
+				findings = append(findings, AuditFinding{
+					Kind:   "advisory",
+					Target: pattern,
+					Detail: fmt.Sprintf("line %d duplicates line %d — the earlier rule wins at equal specificity", i+1, first),
+				})
+			} else {
+				seenPattern[key] = i + 1
+			}
+		}
+	}
+
 	// Duplicate targets: the same service/account listed more than once — a
 	// leftover from imports or retries that confuses resolve/list surfaces.
 	dupCount := map[string]int{}
@@ -120,9 +153,9 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 
 		hasWhitespace := strings.ContainsAny(it.Service+it.Account, " \t")
 
-		// Uncovered: governed only by the catch-all fallback — no explicit rule.
-		// Whitespace-named items get the advisory below instead: no rule can
-		// address them, so "uncovered" would double-report a known limitation.
+		// Uncovered: governed only by the catch-all fallback — no explicit
+		// rule. Whitespace names are addressable via quoted patterns, so
+		// they're judged like any other item.
 		covered := false
 		for _, r := range m.Rules {
 			if !isCatchAll(r.Pattern) && patternMatches(r.Pattern, it.Service, it.Account) {
@@ -130,7 +163,7 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 				break
 			}
 		}
-		if !covered && !hasWhitespace {
+		if !covered {
 			findings = append(findings, AuditFinding{
 				Kind:   "uncovered",
 				Target: target,
@@ -158,12 +191,19 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 			}
 		}
 
-		// Advisories: items rules can't express, and test-shaped leftovers.
+		// Advisories: names that need quoting, and test-shaped leftovers.
 		if hasWhitespace {
 			findings = append(findings, AuditFinding{
 				Kind:   "advisory",
 				Target: target,
-				Detail: "name contains whitespace — no rule can address it directly; fallback governs",
+				Detail: "name contains whitespace — rules must quote the pattern (DENY \"svc/acct name\")",
+			})
+		}
+		if strings.Contains(it.Service, "/") {
+			findings = append(findings, AuditFinding{
+				Kind:   "advisory",
+				Target: target,
+				Detail: "service name contains '/' — wildcards are service-exact (foo/* does NOT match service foo/bar); write " + it.Service + "/* or an exact rule",
 			})
 		}
 		if ls := strings.ToLower(it.Service); ls == "test" || strings.HasPrefix(ls, "test-") || strings.HasPrefix(ls, "test_") {
