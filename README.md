@@ -210,6 +210,21 @@ and `omaseal://` reference grammar every consumer should follow.
   opt-out `omaseal agent mode ask --ungated`. (`open` mode skips `agent
   unlock` but `reveal` still gates.) The calling process's stdin is never
   consulted, so an MCP-connected agent cannot confirm its own unlock.
+- The same presence gate protects every action that loosens the security
+  posture: `agent mode` changes to a weaker mode (including `--ungated`),
+  `manifest init --force` overwrites, `manifest apply` expansions, and
+  `jev enable`. Each fails closed when no fingerprint or GUI prompter can
+  run — a typed `y` on a pty is forgeable (`script`, `expect`), so it is
+  never treated as presence. Headless machines opt out at the filesystem
+  level: edit `~/.config/omaseal/agent.json` or remove `ai-manifest.txt`
+  before regenerating it.
+- `ai-manifest.txt` governs the **agent (MCP) channel only**. `omaseal get`,
+  `omaseal run`, and IPC calls skip the policy check on purpose — the user
+  who can run them already holds the keys. A DENY is a boundary for wired
+  agents, not confinement: a same-uid process that ignores OmaSeal's
+  interfaces can write the policy/session files or talk to Secret Service
+  directly. Real isolation needs agents at a different uid or in a sandbox;
+  see ROADMAP.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault. Provider misses and
   the `op` availability probe are themselves cached briefly (misses ~60s), so

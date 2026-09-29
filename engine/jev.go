@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -99,6 +100,13 @@ func handleJev() {
 		if !jevCredentialPresent() {
 			fmt.Fprintln(os.Stderr, "warning: no openrouter/* item found in the keyring —")
 			fmt.Fprintln(os.Stderr, "         the companion needs one (e.g. omaseal set openrouter default).")
+		}
+		// Enabling opts keyring metadata into an LLM call path — a typed "yes"
+		// on a forgeable pty is not enough; require proof the local user
+		// responded (fingerprint or GUI confirm). Fail closed otherwise.
+		if err := requireUserPresence(context.Background(), "enable Jev metadata sharing", loadAgentPolicyOrDefault()); err != nil {
+			fmt.Fprintf(os.Stderr, "jev: %v\n", err)
+			os.Exit(1)
 		}
 		st := loadJevState()
 		st.Enabled, st.Decided = true, true

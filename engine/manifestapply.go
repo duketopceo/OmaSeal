@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -165,23 +166,24 @@ func lockManifest(path string) (func(), error) {
 // CheckPolicy (exact → wildcard → catch-all passes), so additions append at EOF.
 func applyChanges(content string, changes []ProposalChange) string {
 	lines := strings.Split(content, "\n")
-	// Match the parser's line classification: trimmed "#" prefix = comment.
-	isRuleLine := func(ln string) ([]string, bool) {
-		f := strings.Fields(strings.TrimSpace(ln))
-		return f, len(f) >= 2 && !strings.HasPrefix(strings.TrimSpace(ln), "#")
+	// Shared with the parser: quoted patterns and trailing text are handled
+	// identically, so apply can match what scanManifestRules read.
+	linePattern := func(ln string) (string, bool) {
+		_, pattern, _, ok := parseRuleLine(ln)
+		return pattern, ok
 	}
 	for _, c := range changes {
 		switch c.Action {
 		case "remove":
 			for i, ln := range lines {
-				if f, ok := isRuleLine(ln); ok && strings.EqualFold(f[1], c.Pattern) {
+				if p, ok := linePattern(ln); ok && strings.EqualFold(p, c.Pattern) {
 					lines = append(lines[:i], lines[i+1:]...)
 					break
 				}
 			}
 		case "set":
 			for i, ln := range lines {
-				if f, ok := isRuleLine(ln); ok && strings.EqualFold(f[1], c.Pattern) {
+				if p, ok := linePattern(ln); ok && strings.EqualFold(p, c.Pattern) {
 					lines[i] = formatRuleLine(RulePolicy(strings.ToUpper(c.Policy)), c.Pattern, c.Description)
 					break
 				}
@@ -318,6 +320,7 @@ func handleManifestApply(args []string, yes bool) {
 	}
 
 	var accepted []ProposalChange
+	var acceptedExp []ProposalChange
 	var skipped []ProposalChange
 	if yes || !tty {
 		for i, c := range p.Changes {
@@ -331,7 +334,7 @@ func handleManifestApply(args []string, yes bool) {
 		for i, c := range p.Changes {
 			if expanding[i] {
 				if confirmExplicit(fmt.Sprintf("apply expansion %d: %s %s %s? [y/N] ", i+1, c.Action, strings.ToUpper(c.Policy), c.Pattern)) {
-					accepted = append(accepted, c)
+					acceptedExp = append(acceptedExp, c)
 				} else {
 					skipped = append(skipped, c)
 				}
@@ -341,6 +344,20 @@ func handleManifestApply(args []string, yes bool) {
 		}
 		if len(accepted) > 0 && !confirm(fmt.Sprintf("Apply %d non-expanding change(s)? [Y/n] ", len(accepted))) {
 			accepted = nil
+		}
+	}
+
+	// Expansions widen the policy — a typed "yes" on a pty is forgeable
+	// (script(1), expect, piped stdin), so accepted expansions still need
+	// proof the local user responded. Failing the check demotes them to
+	// skipped; non-expanding changes are unaffected.
+	if len(acceptedExp) > 0 {
+		reason := fmt.Sprintf("apply %d manifest policy expansion(s)", len(acceptedExp))
+		if err := requireUserPresence(context.Background(), reason, loadAgentPolicyOrDefault()); err != nil {
+			fmt.Fprintf(os.Stderr, "expansions refused — %v\n", err)
+			skipped = append(skipped, acceptedExp...)
+		} else {
+			accepted = append(accepted, acceptedExp...)
 		}
 	}
 
