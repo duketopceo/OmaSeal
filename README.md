@@ -135,6 +135,9 @@ omaseal reveal openrouter default
 # Resolve: local → 1Password → Bitwarden → prompt, with local caching
 omaseal resolve openrouter default
 
+# Launch a command with secrets injected into its env (no values in config)
+omaseal run -e GITHUB_TOKEN=github/token -- npx -y @mcp/github
+
 # Delete
 omaseal del openrouter default
 
@@ -269,6 +272,10 @@ Tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`,
 `omaseal_delete`, `omaseal_list`. The server also returns `instructions` at
 `initialize` time, so connected agents automatically know to resolve secrets
 through OmaSeal instead of asking for pastes or reading `.env` files.
+
+To feed secrets to *other* MCP servers without putting values in config
+files, wrap them in `omaseal run` — it works in every harness that takes a
+`command`. Per-harness details: [docs/harness-fit.md](docs/harness-fit.md).
 
 ## Manifest audit + Jev (optional)
 

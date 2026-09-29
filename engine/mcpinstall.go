@@ -43,6 +43,9 @@ type agentSpec struct {
 	serversKey string
 	// entry builds the JSON server entry for this agent.
 	entry func(bin string) map[string]any
+	// fit is a one-line hint for the deeper integration this harness offers
+	// beyond the MCP entry — surfaced in `mcp status` and doctor.
+	fit string
 }
 
 func stdioEntry(bin string) map[string]any {
@@ -80,6 +83,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
+		fit:         "apiKeyHelper can read Claude's key via `omaseal get`; wrap MCP env in `omaseal run`",
 	},
 	{
 		name:        "codex",
@@ -88,6 +92,7 @@ var agentSpecs = []agentSpec{
 		globalPath:  filepath.Join(".codex", "config.toml"),
 		projectPath: filepath.Join(".codex", "config.toml"),
 		format:      formatCodexTOML,
+		fit:         "config.toml env is literal-only — wrap servers in `omaseal run -e K=svc/acct --`",
 	},
 	{
 		name:        "cursor",
@@ -98,6 +103,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
+		fit:         "prefer `omaseal run` over ${env:} interpolation — no shell-env dependency",
 	},
 	{
 		name:        "devin",
@@ -108,6 +114,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       transportEntry,
+		fit:         "`omaseal run` for local stdio MCPs; cloud Devin uses platform secrets",
 	},
 	{
 		name:        "opencode",
@@ -118,6 +125,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcp",
 		entry:       opencodeEntry,
+		fit:         "prefer `omaseal run` over {env:} interpolation in command",
 	},
 	{
 		name:        "agy",
@@ -128,6 +136,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
+		fit:         "wrap MCP env in `omaseal run -e K=svc/acct --`",
 	},
 	{
 		name:        "hermes",
@@ -138,6 +147,7 @@ var agentSpecs = []agentSpec{
 		format:      formatJSON,
 		serversKey:  "mcpServers",
 		entry:       stdioEntry,
+		fit:         "wrap MCP env in `omaseal run -e K=svc/acct --`",
 	},
 }
 
@@ -332,6 +342,9 @@ type mcpAgentStatus struct {
 	Config    string `json:"config"`
 	Primary   bool   `json:"primary,omitempty"`
 	Default   bool   `json:"default,omitempty"`
+	// Fit describes the deeper integration this harness offers beyond the
+	// MCP entry (empty = the standard `omaseal run` wrapper).
+	Fit string `json:"fit,omitempty"`
 }
 
 func mcpStatusRows() []mcpAgentStatus {
@@ -357,6 +370,7 @@ func mcpStatusRows() []mcpAgentStatus {
 			Config:    path,
 			Primary:   p.PrimaryAgent == s.name,
 			Default:   defaults[s.name],
+			Fit:       s.fit,
 		})
 	}
 	return rows
@@ -378,6 +392,16 @@ func handleMCPStatus() {
 			role = "default"
 		}
 		fmt.Printf("%-10s %-9s %-9s %-7s %s\n", r.Name, yesNo(r.Detected), yesNo(r.Installed), role, r.Config)
+	}
+	printed := false
+	for _, r := range rows {
+		if r.Detected && r.Fit != "" {
+			if !printed {
+				fmt.Println("\ndeeper fit:")
+				printed = true
+			}
+			fmt.Printf("  %-10s %s\n", r.Name, r.Fit)
+		}
 	}
 }
 
