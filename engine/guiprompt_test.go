@@ -223,22 +223,26 @@ func TestGUIPromptFallsThroughOnFailure(t *testing.T) {
 	}
 }
 
-func TestFixedOrLookPathPrefersFixed(t *testing.T) {
-	// The fixed absolute path must win over a PATH-resolved namesake so a
-	// shadowed PATH cannot swap the prompter binary.
-	fixed := writeStub(t, "pinentry", "#!/bin/sh\nexit 0\n")
+func TestFixedPathsNeverConsultPATH(t *testing.T) {
+	// A PATH-resolved namesake must never be adopted: PATH is
+	// caller-controlled and a shim would self-answer confirmations.
 	dir := t.TempDir()
 	shadow := filepath.Join(dir, "pinentry")
-	if err := os.WriteFile(shadow, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(shadow, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	got := fixedOrLookPath(fixed, "pinentry")
-	if len(got) == 0 || got[0] != fixed {
-		t.Fatalf("fixedOrLookPath = %v, want %q first", got, fixed)
+	for _, p := range fixedPaths("pinentry") {
+		if p == shadow {
+			t.Fatalf("PATH shim adopted: %v", p)
+		}
+		if !filepath.IsAbs(p) {
+			t.Fatalf("non-absolute candidate: %v", p)
+		}
 	}
-	if len(got) != 2 || got[1] != shadow {
-		t.Fatalf("PATH fallback missing: %v", got)
+	// A guaranteed-present binary resolves from a fixed dir on any host.
+	if len(fixedPaths("sh")) == 0 {
+		t.Fatal("fixedPaths(sh) returned nothing — /usr/bin|/bin should hold sh")
 	}
 }
 
