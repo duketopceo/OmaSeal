@@ -158,6 +158,11 @@ func maybeOfferJev(yes bool) {
 		return
 	}
 	if confirmExplicit("Enable Jev? [y/N] ") {
+		// Same bar as `jev enable`: a pty-typed "yes" is not presence.
+		if err := requireUserPresence(context.Background(), "enable Jev metadata sharing", loadAgentPolicyOrDefault()); err != nil {
+			fmt.Fprintf(os.Stderr, "  jev not enabled: %v\n", err)
+			return
+		}
 		st.Enabled, st.Decided = true, true
 		if err := saveJevState(st); err != nil {
 			fmt.Fprintf(os.Stderr, "  could not save state: %v\n", err)

@@ -191,7 +191,7 @@ ALLOW a/b - fine
 	findings := auditManifest(m, items, time.Now(), true)
 	var badToken, shadowed bool
 	for _, f := range findings {
-		if strings.Contains(f.Detail, "not a policy token") {
+		if strings.Contains(f.Detail, "does not start a valid") {
 			badToken = true
 		}
 		if strings.Contains(f.Detail, "duplicates line") {

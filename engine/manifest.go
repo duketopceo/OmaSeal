@@ -403,7 +403,7 @@ func handleManifest() {
 		}
 		fmt.Printf("Initialized AI agent manifest at %s (%d ALLOW / %d ASK / %d DENY rules).\n", path, allow, ask, deny)
 		if len(skipped) > 0 {
-			fmt.Printf("Note: %d item(s) with whitespace in their names were skipped — the fallback ASK * policy governs them; rules cannot address them directly.\n", len(skipped))
+			fmt.Printf("Note: %d item(s) skipped — names containing quotes, '#' or newlines cannot be written as rules; the fallback ASK * policy governs them.\n", len(skipped))
 		}
 		fmt.Println("Review and edit the file — it takes effect on the next agent call.")
 

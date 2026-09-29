@@ -113,7 +113,7 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 				findings = append(findings, AuditFinding{
 					Kind:   "advisory",
 					Target: fmt.Sprintf("line %d", i+1),
-					Detail: fmt.Sprintf("%q is not a policy token (ALLOW/ASK/DENY) — line ignored", word),
+					Detail: fmt.Sprintf("%q does not start a valid ALLOW/ASK/DENY rule — line ignored", word),
 				})
 				continue
 			}
