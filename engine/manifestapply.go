@@ -353,7 +353,7 @@ func handleManifestApply(args []string, yes bool) {
 	// skipped; non-expanding changes are unaffected.
 	if len(acceptedExp) > 0 {
 		reason := fmt.Sprintf("apply %d manifest policy expansion(s)", len(acceptedExp))
-		if err := requireUserPresence(context.Background(), reason, loadAgentPolicyOrDefault()); err != nil {
+		if err := requirePresenceStrict(context.Background(), reason, "edit "+m.Path+" directly"); err != nil {
 			fmt.Fprintf(os.Stderr, "expansions refused — %v\n", err)
 			skipped = append(skipped, acceptedExp...)
 		} else {

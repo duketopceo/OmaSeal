@@ -203,7 +203,7 @@ func auditManifest(m *Manifest, items []Item, now time.Time, usageAvailable bool
 			findings = append(findings, AuditFinding{
 				Kind:   "advisory",
 				Target: target,
-				Detail: "service name contains '/' — wildcard rules cannot address it; use an exact (quoted) rule",
+				Detail: "service name contains '/' — wildcards are service-exact (foo/* does NOT match service foo/bar); write " + it.Service + "/* or an exact rule",
 			})
 		}
 		if ls := strings.ToLower(it.Service); ls == "test" || strings.HasPrefix(ls, "test-") || strings.HasPrefix(ls, "test_") {

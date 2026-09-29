@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 )
 
 type RulePolicy string
@@ -171,6 +172,17 @@ func formatRuleLine(policy RulePolicy, pattern, desc string) string {
 	return fmt.Sprintf("%-6s %-37s - %s", policy, tok, desc)
 }
 
+// cutField splits s at the first whitespace run (space OR tab — a
+// tab-separated rule like "DENY<TAB>x/y" must still parse). The returned
+// tail is already left-trimmed.
+func cutField(s string) (head, tail string) {
+	i := strings.IndexFunc(s, unicode.IsSpace)
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], strings.TrimLeftFunc(s[i:], unicode.IsSpace)
+}
+
 // parseRuleLine extracts (policy, pattern, description) from one manifest
 // line. The pattern is a single whitespace-delimited token, or a
 // double-quoted span so names containing spaces survive intact
@@ -183,7 +195,7 @@ func parseRuleLine(ln string) (RulePolicy, string, string, bool) {
 	if t == "" || strings.HasPrefix(t, "#") {
 		return "", "", "", false
 	}
-	word, rest, _ := strings.Cut(t, " ")
+	word, rest := cutField(t)
 	var policy RulePolicy
 	switch strings.ToUpper(word) {
 	case "ALLOW":
@@ -195,7 +207,6 @@ func parseRuleLine(ln string) (RulePolicy, string, string, bool) {
 	default:
 		return "", "", "", false
 	}
-	rest = strings.TrimSpace(rest)
 	var pattern string
 	if strings.HasPrefix(rest, `"`) {
 		end := strings.Index(rest[1:], `"`)
@@ -203,9 +214,9 @@ func parseRuleLine(ln string) (RulePolicy, string, string, bool) {
 			return "", "", "", false // unterminated quote
 		}
 		pattern = rest[1 : 1+end]
-		rest = rest[1+end+1:]
+		rest = strings.TrimLeftFunc(rest[1+end+1:], unicode.IsSpace)
 	} else {
-		pattern, rest, _ = strings.Cut(rest, " ")
+		pattern, rest = cutField(rest)
 	}
 	if pattern == "" {
 		return "", "", "", false
@@ -224,7 +235,7 @@ func lineRuleToken(ln string) (string, bool) {
 	if t == "" || strings.HasPrefix(t, "#") {
 		return "", true // not a rule line at all — nothing to flag
 	}
-	word, _, _ := strings.Cut(t, " ")
+	word, _ := cutField(t)
 	_, _, _, ok := parseRuleLine(t)
 	return word, ok
 }
@@ -252,9 +263,11 @@ func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 
 	for _, it := range items {
 		service, account := sanitizeField(it.Service), sanitizeField(it.Account)
+		// Judge the RAW name: sanitizeField already strips newlines, so
+		// checking the sanitized value would make the \n\r test dead code.
 		// Quotes and '#' would corrupt the rule line; whitespace is fine —
 		// formatRuleLine quotes spaced patterns.
-		if service == "" || account == "" || strings.ContainsAny(service+account, "\"#\n\r") {
+		if service == "" || account == "" || strings.ContainsAny(it.Service+it.Account, "\"#\n\r") {
 			skipped = append(skipped, it.Service+"/"+it.Account)
 			continue
 		}
@@ -371,7 +384,7 @@ func handleManifest() {
 			// rebuilt from current keyring contents. A pty-typed "yes" is
 			// forgeable; require presence. Headless opt-out: remove the file
 			// first, then init (filesystem-level, same as editing it).
-			if err := requireUserPresence(context.Background(), "overwrite existing AI manifest", loadAgentPolicyOrDefault()); err != nil {
+			if err := requirePresenceStrict(context.Background(), "overwrite existing AI manifest", "remove the file first, then run `omaseal manifest init`"); err != nil {
 				fmt.Fprintf(os.Stderr, "manifest init: %v\n", err)
 				os.Exit(1)
 			}

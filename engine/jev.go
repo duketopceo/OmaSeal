@@ -104,7 +104,7 @@ func handleJev() {
 		// Enabling opts keyring metadata into an LLM call path — a typed "yes"
 		// on a forgeable pty is not enough; require proof the local user
 		// responded (fingerprint or GUI confirm). Fail closed otherwise.
-		if err := requireUserPresence(context.Background(), "enable Jev metadata sharing", loadAgentPolicyOrDefault()); err != nil {
+		if err := requirePresenceStrict(context.Background(), "enable Jev metadata sharing", "edit "+jevStatePath()+" directly"); err != nil {
 			fmt.Fprintf(os.Stderr, "jev: %v\n", err)
 			os.Exit(1)
 		}
@@ -159,7 +159,7 @@ func maybeOfferJev(yes bool) {
 	}
 	if confirmExplicit("Enable Jev? [y/N] ") {
 		// Same bar as `jev enable`: a pty-typed "yes" is not presence.
-		if err := requireUserPresence(context.Background(), "enable Jev metadata sharing", loadAgentPolicyOrDefault()); err != nil {
+		if err := requirePresenceStrict(context.Background(), "enable Jev metadata sharing", "edit "+jevStatePath()+" directly"); err != nil {
 			fmt.Fprintf(os.Stderr, "  jev not enabled: %v\n", err)
 			return
 		}

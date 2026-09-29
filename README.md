@@ -206,10 +206,13 @@ and `omaseal://` reference grammar every consumer should follow.
 - `reveal` and `agent unlock` share a user-presence gate: fingerprint via
   `fprintd` when a reader is enrolled, else a GUI confirm dialog (pinentry or
   zenity) when a graphical session and prompter exist. When neither is
-  available the gate **fails closed** — the only bypass is the deliberate
-  opt-out `omaseal agent mode ask --ungated`. (`open` mode skips `agent
-  unlock` but `reveal` still gates.) The calling process's stdin is never
-  consulted, so an MCP-connected agent cannot confirm its own unlock.
+  available the gate **fails closed** — `reveal`/`unlock` refuse until you
+  enroll a fingerprint or install a GUI prompter. The deliberate opt-out
+  for unlock-only is `omaseal agent mode ask --ungated` — itself
+  presence-gated, and never honored by policy-writing surfaces. (`open`
+  mode skips `agent unlock` but `reveal` still gates.) The calling
+  process's stdin is never consulted, so an MCP-connected agent cannot
+  confirm its own unlock.
 - The same presence gate protects every action that loosens the security
   posture: `agent mode` changes to a weaker mode (including `--ungated`),
   `manifest init --force` overwrites, `manifest apply` expansions, and
