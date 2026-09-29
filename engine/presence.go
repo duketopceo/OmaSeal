@@ -77,6 +77,21 @@ func requireUserPresence(ctx context.Context, reason string, p AgentPolicy) erro
 	return fmt.Errorf("%w: %w — enroll a fingerprint (fprintd-enroll), install pinentry or zenity for a GUI confirm, or run `omaseal agent mode ask --ungated` to deliberately opt out", errPresenceDenied, err)
 }
 
+// requirePresenceStrict runs the presence chain and refuses when no
+// mechanism exists — unlike requireUserPresence it NEVER honors
+// allow_ungated. That opt-out exists for read-side unlock convenience;
+// surfaces that WRITE security posture (mode, manifest, Jev enablement)
+// must not let a prior convenience become a self-served policy change.
+// hint names the filesystem-level escape hatch (e.g. which file to edit).
+func requirePresenceStrict(ctx context.Context, reason, hint string) error {
+	err := runPresenceChain(ctx, reason)
+	if !errors.Is(err, errNoPresenceMechanism) {
+		return err
+	}
+	WriteLog("presence: no mechanism for %s — refused", reason)
+	return fmt.Errorf("%w — refusing %s.\n  Headless machines: %s", errNoPresenceMechanism, reason, hint)
+}
+
 // presenceMechanism names what would gate an unlock on this machine right
 // now, for status/doctor surfaces. Callers pass the result of their own
 // fprintdUsableFunc probe so status paths probe once. "none" means unlock

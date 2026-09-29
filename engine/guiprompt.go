@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -148,24 +149,34 @@ func selectGUIPrompter(ctx context.Context) (guiPrompter, error) {
 	return nil, fmt.Errorf("%w (install pinentry with a GUI backend or zenity)", errNoGUIPrompter)
 }
 
-// fixedOrLookPath prefers well-known absolute paths over PATH resolution so a
-// shadowed PATH entry cannot replace the prompter binary.
-func fixedOrLookPath(abs, name string) []string {
+// fixedPaths resolves prompter binaries from well-known absolute paths only.
+// PATH is caller-controlled — a shadowed entry could serve a fake prompter
+// that answers its own confirmation dialog.
+func fixedPaths(name string) []string {
 	var out []string
 	seen := map[string]bool{}
-	if st, err := os.Stat(abs); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
-		out = append(out, abs)
-		seen[abs] = true
-	}
-	if p, err := exec.LookPath(name); err == nil && !seen[p] {
+	for _, dir := range []string{"/usr/bin", "/bin", "/usr/local/bin", "/usr/sbin"} {
+		p := filepath.Join(dir, name)
+		st, err := os.Stat(p)
+		if err != nil || !st.Mode().IsRegular() || st.Mode()&0o111 == 0 {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(p) // /bin -> /usr/bin dedup
+		if err != nil {
+			real = p
+		}
+		if seen[real] {
+			continue
+		}
+		seen[real] = true
 		out = append(out, p)
 	}
 	return out
 }
 
 var (
-	pinentryCandidatePaths = func() []string { return fixedOrLookPath("/usr/bin/pinentry", "pinentry") }
-	zenityCandidatePaths   = func() []string { return fixedOrLookPath("/usr/bin/zenity", "zenity") }
+	pinentryCandidatePaths = func() []string { return fixedPaths("pinentry") }
+	zenityCandidatePaths   = func() []string { return fixedPaths("zenity") }
 )
 
 // --- pinentry (Assuan protocol) ---

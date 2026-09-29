@@ -247,13 +247,18 @@ func TestGateModeChangeWeakAllowedByGui(t *testing.T) {
 	}
 }
 
-func TestGateModeChangeNoMechanismWarnsButAllows(t *testing.T) {
-	// Headless machines cannot prove human intent; blocking would also lock
-	// the user out of setting --ungated. Warn-and-allow is the ceiling.
+func TestGateModeChangeNoMechanismRefuses(t *testing.T) {
+	// No mechanism = fail closed. Callers can suppress every prompter through
+	// their own environment, so warn-and-allow made the gate an env check;
+	// the headless escape hatch is editing agent.json directly.
 	stubPresence(t, false, nil, errNoGUIPrompter)
 	p := AgentPolicy{Mode: "ask"}
-	if err := gateModeChange(context.Background(), p, "ask", true); err != nil {
-		t.Fatalf("no-mechanism mode change should warn-and-allow, got %v", err)
+	err := gateModeChange(context.Background(), p, "ask", true)
+	if !errors.Is(err, errNoPresenceMechanism) {
+		t.Fatalf("no-mechanism weakening change must refuse, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "agent.json") {
+		t.Fatalf("refusal should point at the manual escape hatch, got %v", err)
 	}
 }
 

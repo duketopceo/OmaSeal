@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 )
 
 type RulePolicy string
@@ -90,36 +92,10 @@ func scanManifestRules(r io.Reader) ([]ManifestRule, error) {
 			continue
 		}
 
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
+		policy, pattern, desc, ok := parseRuleLine(line)
+		if !ok {
 			continue
 		}
-
-		policyStr := strings.ToUpper(parts[0])
-		var policy RulePolicy
-		switch policyStr {
-		case "ALLOW":
-			policy = PolicyAllow
-		case "DENY":
-			policy = PolicyDeny
-		case "ASK":
-			policy = PolicyAsk
-		default:
-			continue
-		}
-
-		pattern := parts[1]
-		desc := ""
-
-		// Check for " - " separator
-		hyphenIdx := strings.Index(line, " - ")
-		if hyphenIdx != -1 {
-			desc = strings.TrimSpace(line[hyphenIdx+3:])
-		} else if len(parts) > 2 {
-			desc = strings.Join(parts[2:], " ")
-			desc = strings.TrimPrefix(desc, "- ")
-		}
-
 		rules = append(rules, ManifestRule{
 			Policy:      policy,
 			Pattern:     pattern,
@@ -185,14 +161,88 @@ func defaultPolicyFor(service string) (RulePolicy, string) {
 }
 
 // formatRuleLine renders one rule in the canonical column layout shared by
-// manifest init and manifest apply.
+// manifest init and manifest apply. Patterns containing whitespace are
+// quoted — padding must wrap the quoted token, never pad inside the quotes
+// (that would change the pattern).
 func formatRuleLine(policy RulePolicy, pattern, desc string) string {
-	return fmt.Sprintf("%-6s %-35s - %s", policy, pattern, desc)
+	tok := pattern
+	if strings.ContainsAny(pattern, " \t") {
+		tok = `"` + pattern + `"`
+	}
+	return fmt.Sprintf("%-6s %-37s - %s", policy, tok, desc)
+}
+
+// cutField splits s at the first whitespace run (space OR tab — a
+// tab-separated rule like "DENY<TAB>x/y" must still parse). The returned
+// tail is already left-trimmed.
+func cutField(s string) (head, tail string) {
+	i := strings.IndexFunc(s, unicode.IsSpace)
+	if i < 0 {
+		return s, ""
+	}
+	return s[:i], strings.TrimLeftFunc(s[i:], unicode.IsSpace)
+}
+
+// parseRuleLine extracts (policy, pattern, description) from one manifest
+// line. The pattern is a single whitespace-delimited token, or a
+// double-quoted span so names containing spaces survive intact
+// (space-splitting silently truncated DENY rules — a dead-rule bypass).
+// Everything after the pattern is the description, with an optional " - "
+// separator. Returns ok=false for comments, blanks, and lines whose first
+// token is not a policy word.
+func parseRuleLine(ln string) (RulePolicy, string, string, bool) {
+	t := strings.TrimSpace(ln)
+	if t == "" || strings.HasPrefix(t, "#") {
+		return "", "", "", false
+	}
+	word, rest := cutField(t)
+	var policy RulePolicy
+	switch strings.ToUpper(word) {
+	case "ALLOW":
+		policy = PolicyAllow
+	case "DENY":
+		policy = PolicyDeny
+	case "ASK":
+		policy = PolicyAsk
+	default:
+		return "", "", "", false
+	}
+	var pattern string
+	if strings.HasPrefix(rest, `"`) {
+		end := strings.Index(rest[1:], `"`)
+		if end < 0 {
+			return "", "", "", false // unterminated quote
+		}
+		pattern = rest[1 : 1+end]
+		rest = strings.TrimLeftFunc(rest[1+end+1:], unicode.IsSpace)
+	} else {
+		pattern, rest = cutField(rest)
+	}
+	if pattern == "" {
+		return "", "", "", false
+	}
+	desc := strings.TrimSpace(rest)
+	desc = strings.TrimPrefix(desc, "- ")
+	desc = strings.TrimSpace(desc)
+	return policy, pattern, desc, true
+}
+
+// lineRuleToken reports whether a non-comment line's first token parses as a
+// policy word at all — used by audit to flag typo/lookalike tokens (e.g.
+// Cyrillic homoglyphs) that silently drop the rule.
+func lineRuleToken(ln string) (string, bool) {
+	t := strings.TrimSpace(ln)
+	if t == "" || strings.HasPrefix(t, "#") {
+		return "", true // not a rule line at all — nothing to flag
+	}
+	word, _ := cutField(t)
+	_, _, _, ok := parseRuleLine(t)
+	return word, ok
 }
 
 // GenerateDefaultManifest builds a starter robots.txt manifest from existing
-// items and reports the service/account names skipped because whitespace
-// would corrupt the space-separated rule format.
+// items and reports the service/account names skipped because they contain
+// quote/comment characters that would corrupt a rule line.
 func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 	var b strings.Builder
 	b.WriteString("# OmaSeal AI Agent Access Manifest (robots.txt format)\n")
@@ -204,7 +254,8 @@ func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 	b.WriteString("# Policies:\n")
 	b.WriteString("#   ALLOW <pattern> - <description>  (Agent may read without biometric/user gate)\n")
 	b.WriteString("#   ASK   <pattern> - <description>  (Agent requires user confirmation before access)\n")
-	b.WriteString("#   DENY  <pattern> - <description>  (Agent access strictly forbidden)\n\n")
+	b.WriteString("#   DENY  <pattern> - <description>  (Agent access strictly forbidden)\n")
+	b.WriteString("#   Patterns containing spaces must be double-quoted: DENY \"svc/acct name\"\n\n")
 
 	// Group items into Allow, Ask, Deny
 	var allows, asks, denies []string
@@ -212,7 +263,11 @@ func GenerateDefaultManifest(items []Item) (content string, skipped []string) {
 
 	for _, it := range items {
 		service, account := sanitizeField(it.Service), sanitizeField(it.Account)
-		if service == "" || account == "" || strings.ContainsAny(service+account, " \t") {
+		// Judge the RAW name: sanitizeField already strips newlines, so
+		// checking the sanitized value would make the \n\r test dead code.
+		// Quotes and '#' would corrupt the rule line; whitespace is fine —
+		// formatRuleLine quotes spaced patterns.
+		if service == "" || account == "" || strings.ContainsAny(it.Service+it.Account, "\"#\n\r") {
 			skipped = append(skipped, it.Service+"/"+it.Account)
 			continue
 		}
@@ -320,9 +375,17 @@ func handleManifest() {
 			os.Exit(1)
 		}
 		force := hasFlag(os.Args, "--force") || hasFlag(os.Args, "-f")
-		if !force {
-			if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil {
+			if !force {
 				fmt.Fprintf(os.Stderr, "Manifest already exists at %s (use --force to overwrite)\n", path)
+				os.Exit(1)
+			}
+			// Overwrite regenerates the WHOLE policy — existing DENYs are
+			// rebuilt from current keyring contents. A pty-typed "yes" is
+			// forgeable; require presence. Headless opt-out: remove the file
+			// first, then init (filesystem-level, same as editing it).
+			if err := requirePresenceStrict(context.Background(), "overwrite existing AI manifest", "remove the file first, then run `omaseal manifest init`"); err != nil {
+				fmt.Fprintf(os.Stderr, "manifest init: %v\n", err)
 				os.Exit(1)
 			}
 		}
@@ -353,7 +416,7 @@ func handleManifest() {
 		}
 		fmt.Printf("Initialized AI agent manifest at %s (%d ALLOW / %d ASK / %d DENY rules).\n", path, allow, ask, deny)
 		if len(skipped) > 0 {
-			fmt.Printf("Note: %d item(s) with whitespace in their names were skipped — the fallback ASK * policy governs them; rules cannot address them directly.\n", len(skipped))
+			fmt.Printf("Note: %d item(s) skipped — names containing quotes, '#' or newlines cannot be written as rules; the fallback ASK * policy governs them.\n", len(skipped))
 		}
 		fmt.Println("Review and edit the file — it takes effect on the next agent call.")
 
