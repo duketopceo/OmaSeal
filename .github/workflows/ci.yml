@@ -34,6 +34,12 @@ jobs:
           echo 'ci-password' | gnome-keyring-daemon --unlock
           make test
         shell: dbus-run-session -- bash --noprofile --norc -eo pipefail {0}
+      - name: Coverage report
+        run: |
+          echo 'ci-password' | gnome-keyring-daemon --unlock
+          cd engine && go test -count=1 -coverprofile=coverage.out ./... >/dev/null \
+            && go tool cover -func=coverage.out | tail -1 && rm -f coverage.out
+        shell: dbus-run-session -- bash --noprofile --norc -eo pipefail {0}
 
   build:
     runs-on: ubuntu-latest

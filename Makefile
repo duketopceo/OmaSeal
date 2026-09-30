@@ -26,6 +26,12 @@ $(RELEASE_ARCHS):
 test:
 	cd engine && go test ./...
 
+# Coverage is advisory, not gated — per-file breakdown plus a total line.
+test-cover:
+	cd engine && go test -count=1 -coverprofile=coverage.out ./... \
+		&& go tool cover -func=coverage.out | tail -1 \
+		&& rm -f coverage.out
+
 # Post-release pin bump: `make release-bump TAG=v0.2.3` (add --allow-unsigned
 # via BUMP_FLAGS for unsigned releases). Needs makepkg — Arch host only.
 release-bump:

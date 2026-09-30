@@ -327,7 +327,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := checkManifestPolicy(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
-		v, err := Get(service, account)
+		v, err := storeGet(service, account)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
@@ -374,7 +374,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := checkManifestPolicy(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
-		if err := Set(service, account, a.Secret); err != nil {
+		if err := storeSet(service, account, a.Secret); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -394,7 +394,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err := checkManifestPolicy(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
-		if err := Delete(service, account); err != nil {
+		if err := storeDelete(service, account); err != nil {
 			return toolErrorResp(req, err)
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
@@ -413,7 +413,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
-		items, err := listWithUsage(service, a.Sort)
+		items, err := listItems(service, a.Sort)
 		if err != nil {
 			return toolErrorResp(req, err)
 		}

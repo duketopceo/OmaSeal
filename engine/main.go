@@ -426,13 +426,19 @@ func handleSelfTest() {
 // callers that cannot see their caller's stdin (IPC) fail instead of hanging
 // on a held-open pipe.
 func readSecretDeadline(d time.Duration) (string, error) {
+	return readSecretFrom(os.Stdin, d)
+}
+
+// readSecretFrom is readSecretDeadline on an injected reader so IPC tests
+// can drive the piped-secret path without a real stdin.
+func readSecretFrom(r io.Reader, d time.Duration) (string, error) {
 	type result struct {
 		s   string
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		b, err := io.ReadAll(os.Stdin)
+		b, err := io.ReadAll(r)
 		ch <- result{strings.TrimSuffix(string(b), "\n"), err}
 	}()
 	select {
