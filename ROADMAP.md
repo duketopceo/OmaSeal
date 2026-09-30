@@ -21,7 +21,8 @@
   duplicate-safe set/delete
 - [x] Enforced AI manifest — `omaseal manifest` robots.txt-style
   ALLOW/ASK/DENY per secret on the agent (MCP) channel; DENY also hides the
-  credential from `omaseal_list`/`omaseal_stats`
+  credential from `omaseal_list`/`omaseal_stats`; quoted patterns address
+  names with whitespace (`DENY "svc/acct name"`)
 - [x] Usage analytics — every read path (CLI, IPC, MCP) counted;
   `omaseal stats`, sort by `used|recent|name`, `access_count`/`last_accessed`
   in list output
@@ -33,18 +34,33 @@
 - [x] `omaseal keyring migrate` + doctor `keyring-encryption` check —
   plaintext keyrings detected and re-encrypted into `login`
 - [x] Fail-closed agent policy — missing `agent.json` defaults to `ask`
+- [x] Provider negative caching — repeated misses memoized (~60s) so pollers
+  don't spawn `op`/`bw` per tick (#23)
+- [x] Harness integration — `omaseal run -e NAME=svc/acct -- <cmd>`
+  materializes secrets into a spawned MCP server's env via `exec(3)`;
+  per-harness fit hints in `mcp status`/`doctor`; opt-in `apiKeyHelper`
+  wiring for Claude Code (#24)
+- [x] Pentest hardening — weakening mode changes fail closed without a
+  presence mechanism; confirm-prompters resolve from fixed absolute paths
+  only (no PATH shim adoption); presence gate extended to
+  `manifest init --force`, `manifest apply` expansions, `jev enable`;
+  shared `parseRuleLine` across scanner/generator/applier; audit flags
+  dead tokens, shadowed rules, unquoted names (#25)
 
 ## v0.6.0 — Marketplace stable
 
-- Close repository issues #2, #3, #4.
-- Marketplace: revalidation requested at `551d075` (v0.4.0) — both security
-  findings fixed (#17 default-open policy, #20 fail-open unlock).
-- Queued: #13 provider negative caching, #12 AUR (registration freeze).
+- Marketplace revalidation: HEAD is `d911b29` — a 4-agent pentest found and
+  this tree fixed real bypasses (env-suppressed presence gate, PATH
+  prompter shims, dead DENY rules on spaced names). Residual design limits
+  are documented in README: manifest/presence govern the MCP+IPC agent
+  channel; same-uid shell processes are outside confinement by design.
+- Issue #12: AUR `omaseal-bin` — registration portal closed; blocked on a
+  human browser step when registration reopens.
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
   `omarchy.secrets` panel + menu entry → Discussion + PR to
   `omacom/omarchy-mac` (base `quattro`); phased fallback (commands + menu
   only) if the panel is the sticking point.
-- AUR package (`omaseal-bin`) and release automation hardened.
+- Release automation hardened (`release.yml`).
 
 ## v0.7.0 — BrowserOS and plugin ecosystem
 
@@ -60,3 +76,14 @@
   plugin adoption.
 - Panel component extraction (the single-file panel has outgrown its
   structure) and first-run `manifest init` prompt.
+
+## Confinement (research track)
+
+The pentest's deepest finding is architectural, not a bug: every control
+lives in same-uid files and env, so a shell-capable process can write
+`agent.json`/`session`/manifest or call Secret Service directly. The gates
+deter agents using OmaSeal's interfaces; they cannot confine arbitrary
+same-uid code. True confinement needs a different-uid policy daemon (a
+setuid/polkit-brokered resolver, or sandboxed agent processes). Worth a
+design spike before v1.0 if agent isolation becomes a requirement rather
+than a convenience.
