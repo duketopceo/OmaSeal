@@ -51,7 +51,13 @@ func checkSudoRate(now time.Time) (func(), error) {
 	path := filepath.Join(dir, "sudo-rate.json")
 	var st sudoRateState
 	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &st)
+		// Corrupt state must fail closed — silently dropping it would reset
+		// the budget and hand the caller unlimited attempts.
+		if err := json.Unmarshal(data, &st); err != nil {
+			return fail(fmt.Errorf("rate state unreadable: %w", err))
+		}
+	} else if !os.IsNotExist(err) {
+		return fail(fmt.Errorf("rate state unavailable: %w", err))
 	}
 
 	cutoff := now.Add(-sudoRateWindow).Unix()

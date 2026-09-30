@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -118,39 +117,61 @@ func handleSudo() {
 		fmt.Fprintln(os.Stderr, "sudo: /usr/bin/sudo (or /bin/sudo) not found")
 		os.Exit(1)
 	}
-	argv := append([]string{"-S", "-p", ""}, cmdArgs...)
-	cmd := exec.Command(sudoBins[0], argv...)
-	// sudo -S reads exactly one line per auth attempt; the caller's stdin
-	// continues to the command after it. A wrong stored password lets sudo
-	// eat the NEXT stdin line — same failure shape as a mistyped password.
-	cmd.Stdin = io.MultiReader(strings.NewReader(secret+"\n"), os.Stdin)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	sudoBin := sudoBins[0]
 
-	sig := make(chan os.Signal, 2)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		for {
-			select {
-			case s := <-sig:
-				if cmd.Process != nil {
-					_ = cmd.Process.Signal(s)
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	if err := cmd.Run(); err != nil {
+	// Auth first via `sudo -v` with ONLY the secret on stdin: a wrong stored
+	// password fails there instead of consuming the caller's stdin, and the
+	// secret can never reach the target command's stream. The target then
+	// runs via `sudo -n` on the timestamp cache — timestamp_timeout=0 fails
+	// closed with "a password is required".
+	auth := exec.Command(sudoBin, "-v", "-S", "-p", "")
+	auth.Stdin = strings.NewReader(secret + "\n")
+	auth.Stdout, auth.Stderr = nil, os.Stderr
+	stopAuth := forwardSignals(auth)
+	err = auth.Run()
+	stopAuth()
+	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
+			WriteLog("sudo: auth rejected for %s (exit %d)", cmdArgs[0], ee.ExitCode())
+			fmt.Fprintf(os.Stderr, "sudo: authentication failed — stored secret at %s/%s did not satisfy sudo\n", service, account)
 			os.Exit(ee.ExitCode())
 		}
+		WriteLog("sudo: auth spawn failed for %s: %v", cmdArgs[0], err)
+		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
+		os.Exit(1)
+	}
+
+	cmd := exec.Command(sudoBin, append([]string{"-n"}, cmdArgs...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	stopCmd := forwardSignals(cmd)
+	err = cmd.Run()
+	stopCmd()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			WriteLog("sudo: %s exited %d", cmdArgs[0], ee.ExitCode())
+			os.Exit(ee.ExitCode())
+		}
+		WriteLog("sudo: spawn failed for %s: %v", cmdArgs[0], err)
 		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
 		os.Exit(1)
 	}
 	WriteLog("sudo: fed to %s", cmdArgs[0])
+}
+
+// forwardSignals relays INT/TERM to the child. The returned stop func ends
+// the relay — call it after Run so a dead child isn't signalled by a stale
+// registration while a later command runs.
+func forwardSignals(cmd *exec.Cmd) func() {
+	sig := make(chan os.Signal, 2)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		for s := range sig {
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(s)
+			}
+		}
+	}()
+	return func() { signal.Stop(sig); close(sig) }
 }
