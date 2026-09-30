@@ -136,7 +136,7 @@ omaseal reveal openrouter default
 omaseal resolve openrouter default
 
 # Launch a command with secrets injected into its env (no values in config)
-omaseal run -e GITHUB_TOKEN=github/token -- npx -y @mcp/github
+omaseal run -e GITHUB_PERSONAL_ACCESS_TOKEN=github/token -- npx -y @modelcontextprotocol/server-github
 
 # Delete
 omaseal del openrouter default
