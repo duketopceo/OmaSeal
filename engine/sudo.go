@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 const sudoUsage = "usage: omaseal sudo [-r svc/acct] [--] <cmd> [args]"
@@ -98,9 +100,16 @@ func handleSudo() {
 
 	secret, err := Get(service, account)
 	if err != nil {
-		WriteLog("sudo: no secret for %s/%s", service, account)
-		fmt.Fprintf(os.Stderr, "sudo: no secret for %s/%s\n", service, account)
-		os.Exit(127)
+		// Same contract as `omaseal run`: a genuine miss is 127; a locked or
+		// unavailable keyring is 1 — it must not masquerade as "no secret".
+		if errors.Is(err, keyring.ErrNotFound) || codeFromError(err) == "not_found" {
+			WriteLog("sudo: no secret for %s/%s", service, account)
+			fmt.Fprintf(os.Stderr, "sudo: no secret for %s/%s\n", service, account)
+			os.Exit(127)
+		}
+		WriteLog("sudo: keyring error for %s/%s: %v", service, account, err)
+		fmt.Fprintf(os.Stderr, "sudo: cannot read %s/%s: %v\n", service, account, err)
+		os.Exit(1)
 	}
 
 	// Fixed-path sudo: a PATH shim must never receive the password stream.

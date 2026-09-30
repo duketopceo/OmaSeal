@@ -76,7 +76,15 @@ func checkSudoRate(now time.Time) (func(), error) {
 
 	st.Attempts = append(kept, now.Unix())
 	if data, err := json.Marshal(st); err == nil {
-		_ = os.WriteFile(path, data, 0o600)
+		// Atomic write — a truncated state file would silently reset the
+		// budget on next read. Losing state also loses flood protection, so
+		// a failed write is logged rather than dropped.
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, data, 0o600); err != nil {
+			WriteLog("sudo: rate-state write failed: %v", err)
+		} else if err := os.Rename(tmp, path); err != nil {
+			WriteLog("sudo: rate-state rename failed: %v", err)
+		}
 	}
 	return unlock, nil
 }
