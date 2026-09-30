@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -77,45 +78,56 @@ func handleSudo() {
 		fmt.Fprintf(os.Stderr, "sudo: %v — %s\n", err, sudoUsage)
 		os.Exit(2)
 	}
+	os.Exit(sudoFeed(context.Background(), service, account, cmdArgs, os.Stderr))
+}
 
+// sudoGetSecret is the keyring seam — tests stub it to prove the secret is
+// never read when presence fails.
+var sudoGetSecret = Get
+
+// sudoFeed is the gated core of `omaseal sudo`, split from handleSudo so
+// tests can exercise the rate/presence/read ordering without os.Exit. It
+// returns the process exit code and writes user-facing errors to errw —
+// never the secret.
+func sudoFeed(ctx context.Context, service, account string, cmdArgs []string, errw io.Writer) int {
 	// Rate limit covers the ATTEMPT, not just successful feeds — a caller
 	// looping this command to flood presence prompts burns budget too.
 	unlock, err := checkSudoRate(time.Now())
 	if err != nil {
 		WriteLog("sudo: rate-limited %s: %v", cmdArgs[0], err)
-		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(errw, "sudo: %v\n", err)
+		return 1
 	}
 	defer unlock()
 
 	WriteLog("sudo: attempt %s via %s/%s", cmdArgs[0], service, account)
-	if err := requirePresenceStrict(context.Background(),
+	if err := requirePresenceStrict(ctx,
 		"feed sudo password to "+cmdArgs[0],
 		"run sudo yourself — omaseal sudo requires user presence"); err != nil {
 		WriteLog("sudo: presence refused for %s: %v", cmdArgs[0], err)
-		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(errw, "sudo: %v\n", err)
+		return 1
 	}
 
-	secret, err := Get(service, account)
+	secret, err := sudoGetSecret(service, account)
 	if err != nil {
 		// Same contract as `omaseal run`: a genuine miss is 127; a locked or
 		// unavailable keyring is 1 — it must not masquerade as "no secret".
 		if errors.Is(err, keyring.ErrNotFound) || codeFromError(err) == "not_found" {
 			WriteLog("sudo: no secret for %s/%s", service, account)
-			fmt.Fprintf(os.Stderr, "sudo: no secret for %s/%s\n", service, account)
-			os.Exit(127)
+			fmt.Fprintf(errw, "sudo: no secret for %s/%s\n", service, account)
+			return 127
 		}
 		WriteLog("sudo: keyring error for %s/%s: %v", service, account, err)
-		fmt.Fprintf(os.Stderr, "sudo: cannot read %s/%s: %v\n", service, account, err)
-		os.Exit(1)
+		fmt.Fprintf(errw, "sudo: cannot read %s/%s: %v\n", service, account, err)
+		return 1
 	}
 
 	// Fixed-path sudo: a PATH shim must never receive the password stream.
 	sudoBins := fixedPaths("sudo")
 	if len(sudoBins) == 0 {
-		fmt.Fprintln(os.Stderr, "sudo: /usr/bin/sudo (or /bin/sudo) not found")
-		os.Exit(1)
+		fmt.Fprintln(errw, "sudo: /usr/bin/sudo (or /bin/sudo) not found")
+		return 1
 	}
 	sudoBin := sudoBins[0]
 
@@ -134,12 +146,12 @@ func handleSudo() {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			WriteLog("sudo: auth rejected for %s (exit %d)", cmdArgs[0], ee.ExitCode())
-			fmt.Fprintf(os.Stderr, "sudo: authentication failed — stored secret at %s/%s did not satisfy sudo\n", service, account)
-			os.Exit(ee.ExitCode())
+			fmt.Fprintf(errw, "sudo: authentication failed — stored secret at %s/%s did not satisfy sudo\n", service, account)
+			return ee.ExitCode()
 		}
 		WriteLog("sudo: auth spawn failed for %s: %v", cmdArgs[0], err)
-		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(errw, "sudo: %v\n", err)
+		return 1
 	}
 
 	cmd := exec.Command(sudoBin, append([]string{"-n"}, cmdArgs...)...)
@@ -151,13 +163,14 @@ func handleSudo() {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			WriteLog("sudo: %s exited %d", cmdArgs[0], ee.ExitCode())
-			os.Exit(ee.ExitCode())
+			return ee.ExitCode()
 		}
 		WriteLog("sudo: spawn failed for %s: %v", cmdArgs[0], err)
-		fmt.Fprintf(os.Stderr, "sudo: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(errw, "sudo: %v\n", err)
+		return 1
 	}
 	WriteLog("sudo: fed to %s", cmdArgs[0])
+	return 0
 }
 
 // forwardSignals relays INT/TERM to the child. The returned stop func ends

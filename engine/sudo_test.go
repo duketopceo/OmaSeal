@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 func TestParseSudoArgs(t *testing.T) {
@@ -132,5 +138,72 @@ func TestSudoRateLockIsNonBlocking(t *testing.T) {
 
 	if _, err := checkSudoRate(time.Now()); err == nil {
 		t.Fatal("held lock should refuse")
+	}
+}
+
+// stubSudoGet replaces the keyring read; called reports whether the secret
+// was ever touched — the presence-denied path must prove it was not.
+func stubSudoGet(t *testing.T, secret string, err error) *bool {
+	t.Helper()
+	called := new(bool)
+	old := sudoGetSecret
+	sudoGetSecret = func(string, string) (string, error) {
+		*called = true
+		return secret, err
+	}
+	t.Cleanup(func() { sudoGetSecret = old })
+	return called
+}
+
+func TestSudoPresenceDeniedNeverReadsSecret(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	stubPresence(t, false, nil, errNoGUIPrompter)
+	called := stubSudoGet(t, "SENTINEL-PW", nil)
+
+	var buf bytes.Buffer
+	if code := sudoFeed(context.Background(), "sudo", "tester", []string{"id"}, &buf); code != 1 {
+		t.Fatalf("presence-denied should return 1, got %d", code)
+	}
+	if *called {
+		t.Fatal("secret read despite refused presence")
+	}
+	if strings.Contains(buf.String(), "SENTINEL-PW") {
+		t.Fatal("secret value leaked into error output")
+	}
+	// The denied attempt still burned rate budget.
+	if _, err := checkSudoRate(time.Now()); err == nil {
+		t.Fatal("denied attempt should consume budget — immediate retry must refuse")
+	}
+}
+
+func TestSudoMissReturns127(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	stubPresence(t, true, nil, errors.New("gui must not run"))
+	stubSudoGet(t, "", keyring.ErrNotFound)
+
+	var buf bytes.Buffer
+	if code := sudoFeed(context.Background(), "sudo", "nobody", []string{"id"}, &buf); code != 127 {
+		t.Fatalf("missing secret should return 127, got %d", code)
+	}
+	if !strings.Contains(buf.String(), "no secret for sudo/nobody") {
+		t.Fatalf("expected named-ref miss message, got %q", buf.String())
+	}
+}
+
+func TestSudoKeyringErrorReturns1(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
+	stubPresence(t, true, nil, errors.New("gui must not run"))
+	// A backend failure must not masquerade as "no secret".
+	stubSudoGet(t, "", errors.New("keyring locked"))
+
+	var buf bytes.Buffer
+	if code := sudoFeed(context.Background(), "sudo", "tester", []string{"id"}, &buf); code != 1 {
+		t.Fatalf("backend failure should return 1, got %d", code)
+	}
+	if strings.Contains(buf.String(), "no secret") {
+		t.Fatalf("backend failure reported as miss: %q", buf.String())
 	}
 }
