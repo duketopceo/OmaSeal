@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -28,8 +29,43 @@ type ipcResponse struct {
 	Help   string           `json:"help,omitempty"`
 }
 
+// stdinIsTTY is the terminal-detection seam — tests stub it to drive both
+// sides of the piped-secret check.
+var stdinIsTTY = isStdinTTY
+
+// listItems is the list seam — List() speaks DBus directly and ignores the
+// keyring provider, so mock-keyring tests substitute the whole pipeline.
+var listItems = listWithUsage
+
 func runIPC(method string, jsonArgs string) {
+	resp, code := ipcDispatch(method, jsonArgs, os.Stdin)
+	writeJSON(resp)
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// ipcDispatch is the testable core of `omaseal ipc` — it returns the
+// response object and exit code instead of printing and exiting inline.
+// stdin is injected so `set` can be tested without a real pipe.
+func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, int) {
 	var resp ipcResponse
+	fail := func(err error, help string) (ipcResponse, int) {
+		resp.Error = err.Error()
+		resp.Code = codeFromError(err)
+		resp.Help = help
+		return resp, 1
+	}
+	failMsg := func(msg, code, help string) (ipcResponse, int) {
+		resp.Error = msg
+		resp.Code = code
+		resp.Help = help
+		return resp, 1
+	}
+	badJSON := func(err error, help string) (ipcResponse, int) {
+		return failMsg("invalid json: "+err.Error(), "invalid_json", help)
+	}
+
 	switch method {
 	case "ping":
 		resp.OK = "pong"
@@ -37,27 +73,15 @@ func runIPC(method string, jsonArgs string) {
 	case "get":
 		var req ipcRequest
 		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
-			resp.Error = "invalid json: " + err.Error()
-			resp.Code = "invalid_json"
-			resp.Help = "omaseal ipc get '{\"service\":\"...\",\"account\":\"...\"}'"
-			writeJSON(resp)
-			os.Exit(1)
+			return badJSON(err, "omaseal ipc get '{\"service\":\"...\",\"account\":\"...\"}'")
 		}
 		service, account, err := refAwareCredentials(req.Service, req.Account, false)
 		if err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		secret, err := Get(service, account)
 		if err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		WriteLog("access %s/%s", service, account)
 		resp.Secret = secret
@@ -65,75 +89,47 @@ func runIPC(method string, jsonArgs string) {
 	case "set":
 		var req ipcRequest
 		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
-			resp.Error = "invalid json: " + err.Error()
-			resp.Code = "invalid_json"
-			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
-			writeJSON(resp)
-			os.Exit(1)
+			return badJSON(err, "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt")
 		}
 		// Writes are strict: new names must satisfy the shared charset.
 		service, account, verr := refAwareCredentials(req.Service, req.Account, true)
 		if verr != nil {
-			resp.Error = verr.Error()
-			resp.Code = codeFromError(verr)
-			resp.Help = helpFromError(verr)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(verr, helpFromError(verr))
 		}
 		// The secret arrives on stdin — never inside the JSON payload. A TTY
 		// stdin would turn the read into an interactive prompt on a terminal
 		// the IPC caller may not own; a held-open pipe would block forever —
 		// both are rejected with a typed error instead of hanging.
-		if isStdinTTY() {
-			resp.Error = "ipc set requires a piped secret on stdin"
-			resp.Code = "invalid_secret"
-			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
-			writeJSON(resp)
-			os.Exit(1)
+		if stdinIsTTY() {
+			return failMsg("ipc set requires a piped secret on stdin",
+				"invalid_secret",
+				"omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt")
 		}
-		secret, err := readSecretDeadline(30 * time.Second)
+		secret, err := readSecretFrom(stdin, 30*time.Second)
 		if err != nil || secret == "" {
-			resp.Error = "reading secret from stdin"
+			msg := "reading secret from stdin"
 			if err != nil {
-				resp.Error += ": " + err.Error()
+				msg += ": " + err.Error()
 			}
-			resp.Code = "invalid_secret"
-			resp.Help = "omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt"
-			writeJSON(resp)
-			os.Exit(1)
+			return failMsg(msg, "invalid_secret",
+				"omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt")
 		}
 		if err := Set(service, account, secret); err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		resp.OK = "ok"
 
 	case "del", "delete":
 		var req ipcRequest
 		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
-			resp.Error = "invalid json: " + err.Error()
-			resp.Code = "invalid_json"
-			resp.Help = "omaseal ipc del '{\"service\":\"...\",\"account\":\"...\"}'"
-			writeJSON(resp)
-			os.Exit(1)
+			return badJSON(err, "omaseal ipc del '{\"service\":\"...\",\"account\":\"...\"}'")
 		}
 		service, account, verr := refAwareCredentials(req.Service, req.Account, false)
 		if verr != nil {
-			resp.Error = verr.Error()
-			resp.Code = codeFromError(verr)
-			resp.Help = helpFromError(verr)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(verr, helpFromError(verr))
 		}
 		if err := Delete(service, account); err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		resp.OK = "ok"
 
@@ -141,79 +137,49 @@ func runIPC(method string, jsonArgs string) {
 		var req ipcRequest
 		if s := strings.TrimSpace(jsonArgs); s != "" {
 			if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
-				resp.Error = "invalid json: " + err.Error()
-				resp.Code = "invalid_json"
-				resp.Help = "omaseal ipc list '{\"service\":\"...\"}'"
-				writeJSON(resp)
-				os.Exit(1)
+				return badJSON(err, "omaseal ipc list '{\"service\":\"...\"}'")
 			}
 		}
 		service, serr := refAwareService(req.Service, false)
 		if serr != nil {
-			resp.Error = serr.Error()
-			resp.Code = "invalid_name"
-			resp.Help = "omaseal ipc list '{\"service\":\"...\"}'"
-			writeJSON(resp)
-			os.Exit(1)
+			return failMsg(serr.Error(), "invalid_name",
+				"omaseal ipc list '{\"service\":\"...\"}'")
 		}
-		items, err := listWithUsage(service, req.Sort)
+		items, err := listItems(service, req.Sort)
 		if err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		resp.Items = items
 
 	case "stats", "analytics":
 		report, err := GetAnalyticsReport()
 		if err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		resp.Stats = report
 
 	case "resolve":
 		var req ipcRequest
 		if err := json.Unmarshal([]byte(jsonArgs), &req); err != nil {
-			resp.Error = "invalid json: " + err.Error()
-			resp.Code = "invalid_json"
-			resp.Help = "omaseal ipc resolve '{\"service\":\"...\",\"account\":\"...\"}'"
-			writeJSON(resp)
-			os.Exit(1)
+			return badJSON(err, "omaseal ipc resolve '{\"service\":\"...\",\"account\":\"...\"}'")
 		}
 		service, account, verr := refAwareCredentials(req.Service, req.Account, false)
 		if verr != nil {
-			resp.Error = verr.Error()
-			resp.Code = codeFromError(verr)
-			resp.Help = helpFromError(verr)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(verr, helpFromError(verr))
 		}
 		secret, err := Resolve(context.Background(), service, account, true, false)
 		if err != nil {
-			resp.Error = err.Error()
-			resp.Code = codeFromError(err)
-			resp.Help = helpFromError(err)
-			writeJSON(resp)
-			os.Exit(1)
+			return fail(err, helpFromError(err))
 		}
 		WriteLog("access %s/%s", service, account)
 		resp.Secret = secret
 
 	default:
-		resp.Error = "unknown method: " + method
-		resp.Code = "unknown_method"
-		resp.Help = "omaseal ipc ping|get|set|del|list|stats|resolve"
-		writeJSON(resp)
-		os.Exit(1)
+		return failMsg("unknown method: "+method, "unknown_method",
+			"omaseal ipc ping|get|set|del|list|stats|resolve")
 	}
 
-	writeJSON(resp)
+	return resp, 0
 }
 
 func writeJSON(v interface{}) {
