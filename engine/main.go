@@ -31,6 +31,7 @@ Usage:
   omaseal jev [status|enable|disable]      optional Jev decision layer (off by default)
   omaseal resolve <service> <account>      resolve + cache from keyring/op/bw/prompt
   omaseal run -e NAME=svc/acct -- <cmd>    launch a command with secrets injected into its env
+  omaseal sudo [-r svc/acct] -- <cmd>      feed your sudo password after a presence check
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
   omaseal mcp                              start MCP stdio server
@@ -109,6 +110,8 @@ func main() {
 		handleResolve()
 	case "run":
 		handleRun()
+	case "sudo":
+		handleSudo()
 	case "clipclear":
 		handleClipclear()
 	case "import":

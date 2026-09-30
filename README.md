@@ -138,6 +138,9 @@ omaseal resolve openrouter default
 # Launch a command with secrets injected into its env (no values in config)
 omaseal run -e GITHUB_PERSONAL_ACCESS_TOKEN=github/token -- npx -y @modelcontextprotocol/server-github
 
+# Feed your sudo password to a command — only after a presence check
+omaseal sudo -- apt update
+
 # Delete
 omaseal del openrouter default
 
@@ -224,6 +227,12 @@ and `omaseal://` reference grammar every consumer should follow.
   never treated as presence. Headless machines opt out at the filesystem
   level: edit `~/.config/omaseal/agent.json` or remove `ai-manifest.txt`
   before regenerating it.
+- `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
+  CLI verb (never an MCP/IPC surface). Every attempt requires the strict
+  presence gate plus a rate limit (single-pending lock, 5 attempts per
+  10 min, 10 s minimum interval — denied/expired prompts count too, so
+  prompt-flooding burns budget). Each attempt is logged (`sudo:` lines in
+  `omaseal.log`); headless alternative is just running `sudo` yourself.
 - `ai-manifest.txt` governs the **agent (MCP) channel only**. `omaseal get`,
   `omaseal run`, and IPC calls skip the policy check on purpose — the user
   who can run them already holds the keys. A DENY is a boundary for wired
