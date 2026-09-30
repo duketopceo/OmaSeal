@@ -154,6 +154,15 @@ func Set(service, account, secret string) error {
 	return nil
 }
 
+// Store seams — Get/Set/Delete speak Secret Service over DBus directly and
+// ignore go-keyring's provider interface, so keyring.MockInit alone cannot
+// intercept them. Tests swap these vars for an in-memory store.
+var (
+	storeGet    = Get
+	storeSet    = Set
+	storeDelete = Delete
+)
+
 // Get retrieves the secret for service and account.
 func Get(service, account string) (string, error) {
 	if service == "" || account == "" {

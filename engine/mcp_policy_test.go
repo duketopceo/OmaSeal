@@ -13,14 +13,14 @@ import (
 // XDG_CONFIG_HOME → agent.json + ai-manifest.txt, XDG_RUNTIME_DIR → the
 // session file, XDG_STATE_HOME → logs/usage. Combined with mockKeyring the
 // whole agent trust stack is exercisable without touching real state.
-func mcpFixture(t *testing.T) (cfgDir string) {
+func mcpFixture(t *testing.T) (cfgDir string, ms *memStore) {
 	t.Helper()
 	cfgDir = t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	mockKeyring(t)
-	return cfgDir
+	ms = mockKeyring(t)
+	return cfgDir, ms
 }
 
 func writeAgentPolicy(t *testing.T, cfgDir, mode string, keepAlive bool) {
@@ -91,9 +91,9 @@ func mcpIsError(t *testing.T, resp *mcpResponse) (bool, string) {
 }
 
 func TestMCPGetLockedModeRefuses(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "lock", false)
-	if err := Set("svc", "acct", "sekrit"); err != nil {
+	if err := ms.set("svc", "acct", "sekrit"); err != nil {
 		t.Fatal(err)
 	}
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
@@ -103,9 +103,9 @@ func TestMCPGetLockedModeRefuses(t *testing.T) {
 }
 
 func TestMCPGetAskModeNoSessionRefuses(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", false)
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if !isErr || !strings.Contains(txt, "agent_unauthorized") {
 		t.Fatalf("ask without session should refuse: %q", txt)
@@ -113,10 +113,10 @@ func TestMCPGetAskModeNoSessionRefuses(t *testing.T) {
 }
 
 func TestMCPGetAskModeValidSessionAllows(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", false)
 	writeSessionExpiryAt(t, time.Now().UTC().Add(10*time.Minute))
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if isErr {
 		t.Fatalf("valid session should allow: %q", txt)
@@ -127,10 +127,10 @@ func TestMCPGetAskModeValidSessionAllows(t *testing.T) {
 }
 
 func TestMCPGetExpiredSessionRefuses(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", false)
 	writeSessionExpiryAt(t, time.Now().UTC().Add(-time.Minute))
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if !isErr {
 		t.Fatalf("expired session should refuse: %q", txt)
@@ -138,9 +138,9 @@ func TestMCPGetExpiredSessionRefuses(t *testing.T) {
 }
 
 func TestMCPGetOpenModeAllows(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "open", false)
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if isErr {
 		t.Fatalf("open mode should allow: %q", txt)
@@ -148,10 +148,10 @@ func TestMCPGetOpenModeAllows(t *testing.T) {
 }
 
 func TestMCPManifestDenyRefusesEvenInOpenMode(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "open", false)
 	writeManifest(t, cfg, "DENY bank/*\n")
-	_ = Set("bank", "root", "sekrit")
+	_ = ms.set("bank", "root", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "bank", "account": "root"}))
 	if !isErr || !strings.Contains(txt, "manifest_denied") {
 		t.Fatalf("DENY should refuse with manifest_denied: %q", txt)
@@ -159,10 +159,10 @@ func TestMCPManifestDenyRefusesEvenInOpenMode(t *testing.T) {
 }
 
 func TestMCPManifestAskNeedsSessionEvenInOpenMode(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "open", false)
 	writeManifest(t, cfg, "ASK api/*\n")
-	_ = Set("api", "key", "sekrit")
+	_ = ms.set("api", "key", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "api", "account": "key"}))
 	if !isErr || !strings.Contains(txt, "agent_unauthorized") {
 		t.Fatalf("manifest ASK should require a session: %q", txt)
@@ -175,7 +175,7 @@ func TestMCPManifestAskNeedsSessionEvenInOpenMode(t *testing.T) {
 }
 
 func TestMCPManifestUnreadableFailsClosed(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "open", false)
 	// A directory at the manifest path makes ReadFile fail — the gate must
 	// refuse rather than skip checks it cannot evaluate.
@@ -183,7 +183,7 @@ func TestMCPManifestUnreadableFailsClosed(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "ai-manifest.txt"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if !isErr || !strings.Contains(txt, "manifest_error") {
 		t.Fatalf("unreadable manifest should refuse with manifest_error: %q", txt)
@@ -191,7 +191,7 @@ func TestMCPManifestUnreadableFailsClosed(t *testing.T) {
 }
 
 func TestMCPStatusUngatedUnderLock(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, _ := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "lock", false)
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_status", nil))
 	if isErr {
@@ -200,11 +200,11 @@ func TestMCPStatusUngatedUnderLock(t *testing.T) {
 }
 
 func TestMCPSessionKeepaliveRenews(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", true) // keepalive on
 	near := time.Now().UTC().Add(30 * time.Second)
 	writeSessionExpiryAt(t, near)
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	if isErr, _ := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"})); isErr {
 		t.Fatal("live session should allow")
 	}
@@ -218,10 +218,10 @@ func TestMCPSessionKeepaliveRenews(t *testing.T) {
 }
 
 func TestMCPSessionRevokedMidWindow(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", false)
 	writeSessionExpiryAt(t, time.Now().UTC().Add(10*time.Minute))
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	if err := clearAgentSession(); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestMCPSessionRevokedMidWindow(t *testing.T) {
 }
 
 func TestMCPUnknownTool(t *testing.T) {
-	mcpFixture(t)
+	_, _ = mcpFixture(t)
 	resp := mcpCall("omaseal_bogus", nil)
 	if resp.Error == nil || !strings.Contains(resp.Error.Message, "unknown tool") {
 		t.Fatalf("unknown tool should error: %+v", resp)
@@ -240,7 +240,7 @@ func TestMCPUnknownTool(t *testing.T) {
 }
 
 func TestSessionGarbageContentDenied(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "ask", false)
 	if err := os.MkdirAll(agentRuntimeDir(), 0o700); err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestSessionGarbageContentDenied(t *testing.T) {
 	if err := os.WriteFile(agentSessionPath(), []byte("not-a-timestamp"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_ = Set("svc", "acct", "sekrit")
+	_ = ms.set("svc", "acct", "sekrit")
 	isErr, _ := mcpIsError(t, mcpCall("omaseal_get", map[string]any{"service": "svc", "account": "acct"}))
 	if !isErr {
 		t.Fatal("garbage session file must be treated as no session")
@@ -258,7 +258,7 @@ func TestSessionGarbageContentDenied(t *testing.T) {
 func TestRenewCannotResurrectRevokedSession(t *testing.T) {
 	// renewSessionExpiry opens O_WRONLY without O_CREATE — a session revoked
 	// mid-operation must not come back via a keepalive write.
-	mcpFixture(t)
+	_, _ = mcpFixture(t)
 	if err := renewSessionExpiry(time.Now().UTC().Add(time.Hour)); err == nil {
 		t.Fatal("renew on a missing session file must fail")
 	}
@@ -270,7 +270,7 @@ func TestRenewCannotResurrectRevokedSession(t *testing.T) {
 func TestMCPManifestDeniesPayloadAmbiguousSlash(t *testing.T) {
 	// A payload "a/b/c" is ambiguous (a/b,c) or (a,b/c) — a DENY on either
 	// decomposition hides it.
-	cfg := mcpFixture(t)
+	cfg, _ := mcpFixture(t)
 	writeManifest(t, cfg, "DENY a/*\n")
 	m, err := LoadManifest()
 	if err != nil || m == nil {
@@ -284,15 +284,56 @@ func TestMCPManifestDeniesPayloadAmbiguousSlash(t *testing.T) {
 	}
 }
 
+func TestMCPListHidesDeniedEntries(t *testing.T) {
+	cfg, _ := mcpFixture(t)
+	writeAgentPolicy(t, cfg, "open", false)
+	writeManifest(t, cfg, "DENY bank/*\n")
+	old := listItems
+	listItems = func(svc, sort string) ([]Item, error) {
+		return []Item{
+			{Service: "bank", Account: "root"},
+			{Service: "api", Account: "key"},
+		}, nil
+	}
+	t.Cleanup(func() { listItems = old })
+
+	isErr, txt := mcpIsError(t, mcpCall("omaseal_list", map[string]any{}))
+	if isErr {
+		t.Fatalf("list should succeed: %q", txt)
+	}
+	if strings.Contains(txt, "bank") {
+		t.Fatalf("DENY'd entry leaked into agent list: %q", txt)
+	}
+	if !strings.Contains(txt, "api") {
+		t.Fatalf("allowed entry missing: %q", txt)
+	}
+}
+
+func TestMCPStatsHidesDeniedPayloads(t *testing.T) {
+	cfg, _ := mcpFixture(t)
+	writeAgentPolicy(t, cfg, "open", false)
+	writeManifest(t, cfg, "DENY bank/*\n")
+	WriteLog("access bank/root")
+	WriteLog("access api/key")
+
+	isErr, txt := mcpIsError(t, mcpCall("omaseal_stats", map[string]any{}))
+	if isErr {
+		t.Fatalf("stats should succeed: %q", txt)
+	}
+	if strings.Contains(txt, "bank") {
+		t.Fatalf("DENY'd name leaked into stats payload: %q", txt)
+	}
+}
+
 func TestMCPSetPayloadCannotWriteDeniedName(t *testing.T) {
-	cfg := mcpFixture(t)
+	cfg, ms := mcpFixture(t)
 	writeAgentPolicy(t, cfg, "open", false)
 	writeManifest(t, cfg, "DENY bank/*\n")
 	isErr, txt := mcpIsError(t, mcpCall("omaseal_set", map[string]any{"service": "bank", "account": "x", "secret": "v"}))
 	if !isErr || !strings.Contains(txt, "manifest_denied") {
 		t.Fatalf("set into DENY should refuse: %q", txt)
 	}
-	if _, err := Get("bank", "x"); err == nil {
+	if _, err := ms.get("bank", "x"); err == nil {
 		t.Fatal("denied set must not write")
 	}
 }

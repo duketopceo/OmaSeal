@@ -31,7 +31,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 	}
 
 	// 1. Local keyring
-	v, err := Get(service, account)
+	v, err := storeGet(service, account)
 	if err == nil {
 		return v, nil
 	}
@@ -54,7 +54,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 			v, err = op.Get(ctx, service, account)
 			if err == nil {
 				if cache {
-					_ = Set(service, account, v)
+					_ = storeSet(service, account, v)
 				}
 				return v, nil
 			}
@@ -74,7 +74,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 			v, err = bw.Get(ctx, service, account)
 			if err == nil {
 				if cache {
-					_ = Set(service, account, v)
+					_ = storeSet(service, account, v)
 				}
 				return v, nil
 			}
@@ -107,7 +107,7 @@ func Resolve(ctx context.Context, service, account string, cache bool, prompt bo
 		unlock, lerr := promptLock(service, account)
 		if lerr == nil {
 			defer unlock()
-			if v, err := Get(service, account); err == nil {
+			if v, err := storeGet(service, account); err == nil {
 				return v, nil
 			}
 		}
@@ -157,7 +157,7 @@ func cachePromptedSecret(service, account, secret string, cache bool) (string, e
 		return "", errors.New("secret cannot be empty")
 	}
 	if cache {
-		if err := Set(service, account, secret); err != nil {
+		if err := storeSet(service, account, secret); err != nil {
 			WriteLog("cache write failed for %s/%s after prompt: %v", service, account, err)
 			fmt.Fprintf(os.Stderr, "warning: keyring cache write failed (%v); returning uncached secret\n", err)
 		}
@@ -387,7 +387,7 @@ func (p *onePasswordProvider) Import(ctx context.Context) error {
 		if account == "" {
 			account = "default"
 		}
-		if err := Set(it.Title, account, secret); err != nil {
+		if err := storeSet(it.Title, account, secret); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -474,7 +474,7 @@ func (p *bitwardenProvider) Import(ctx context.Context) error {
 		if account == "" {
 			account = "default"
 		}
-		if err := Set(it.Name, account, it.Login.Password); err != nil {
+		if err := storeSet(it.Name, account, it.Login.Password); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}

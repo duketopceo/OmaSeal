@@ -112,7 +112,7 @@ func injectSecrets(env []string, bindings envBindings, resolve bool) ([]string, 
 		if resolve {
 			v, err = Resolve(context.Background(), service, account, false, false)
 		} else {
-			v, err = Get(service, account)
+			v, err = storeGet(service, account)
 		}
 		if err != nil {
 			// Only a genuine miss is 127. A locked/unavailable keyring must

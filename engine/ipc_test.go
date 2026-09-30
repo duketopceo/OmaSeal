@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -8,14 +10,54 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// mockKeyring swaps in go-keyring's in-memory provider. It is process-global
-// and irreversible — call it only in tests that want end-to-end Get/Set/Delete
-// without a real Secret Service, and give every such test its own temp state
-// dir so usage tracking writes nowhere real.
-func mockKeyring(t *testing.T) {
+// memStore is an in-memory Get/Set/Delete triple for the storeGet/
+// storeSet/storeDelete seams — the real implementations speak DBus directly,
+// so keyring.MockInit alone cannot intercept them. err forces a backend
+// failure on every op.
+type memStore struct {
+	m   map[string]string
+	err error
+}
+
+func memKey(svc, acct string) string { return svc + "\x00" + acct }
+
+func (s *memStore) get(svc, acct string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	v, ok := s.m[memKey(svc, acct)]
+	if !ok {
+		return "", keyring.ErrNotFound
+	}
+	return v, nil
+}
+
+func (s *memStore) set(svc, acct, v string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.m[memKey(svc, acct)] = v
+	return nil
+}
+
+func (s *memStore) del(svc, acct string) error {
+	if s.err != nil {
+		return s.err
+	}
+	delete(s.m, memKey(svc, acct))
+	return nil
+}
+
+// mockKeyring installs an empty in-memory store behind the store seams and
+// redirects state-dir writes to a temp dir.
+func mockKeyring(t *testing.T) *memStore {
 	t.Helper()
-	keyring.MockInit()
+	ms := &memStore{m: map[string]string{}}
+	oldG, oldS, oldD := storeGet, storeSet, storeDelete
+	storeGet, storeSet, storeDelete = ms.get, ms.set, ms.del
+	t.Cleanup(func() { storeGet, storeSet, storeDelete = oldG, oldS, oldD })
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	return ms
 }
 
 // stubTTY drives the piped-secret check both ways.
@@ -81,8 +123,8 @@ func TestIPCSetGetDelRoundTrip(t *testing.T) {
 }
 
 func TestIPCGetOmasealRef(t *testing.T) {
-	mockKeyring(t)
-	if err := Set("svc", "nested/acct", "v2"); err != nil {
+	ms := mockKeyring(t)
+	if err := ms.set("svc", "nested/acct", "v2"); err != nil {
 		t.Fatal(err)
 	}
 	resp, code := ipcDispatch("get", `{"service":"omaseal://svc/nested/acct"}`, nil)
@@ -151,11 +193,36 @@ func TestIPCStatsShape(t *testing.T) {
 }
 
 func TestIPCResolveLocalHit(t *testing.T) {
-	mockKeyring(t)
-	_ = Set("svc", "acct", "resolved-value")
+	ms := mockKeyring(t)
+	_ = ms.set("svc", "acct", "resolved-value")
 	resp, code := ipcDispatch("resolve", `{"service":"svc","account":"acct"}`, nil)
 	if code != 0 || resp.Secret != "resolved-value" {
 		t.Fatalf("resolve local hit: code=%d resp=%+v", code, resp)
+	}
+}
+
+func TestIPCIsManifestIndependent(t *testing.T) {
+	// Pinned contract: IPC is the trusted-plugin channel (bar panel, shell
+	// helpers) and does NOT consult the AI manifest — same-uid callers can
+	// always read Secret Service directly, so filtering here would be
+	// cosmetic. If IPC ever gains manifest enforcement, this test is the
+	// decision point to revisit.
+	mockKeyring(t)
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg := filepath.Join(dir, "omaseal")
+	if err := os.MkdirAll(cfg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "ai-manifest.txt"), []byte("DENY svc/*\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeSet("svc", "acct", "v"); err != nil {
+		t.Fatal(err)
+	}
+	resp, code := ipcDispatch("get", `{"service":"svc","account":"acct"}`, nil)
+	if code != 0 || resp.Secret != "v" {
+		t.Fatalf("IPC must ignore manifest DENY (trusted-plugin channel): %+v", resp)
 	}
 }
 

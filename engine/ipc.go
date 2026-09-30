@@ -79,7 +79,7 @@ func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, 
 		if err != nil {
 			return fail(err, helpFromError(err))
 		}
-		secret, err := Get(service, account)
+		secret, err := storeGet(service, account)
 		if err != nil {
 			return fail(err, helpFromError(err))
 		}
@@ -114,7 +114,7 @@ func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, 
 			return failMsg(msg, "invalid_secret",
 				"omaseal ipc set '{\"service\":\"...\",\"account\":\"...\"}' < secret.txt")
 		}
-		if err := Set(service, account, secret); err != nil {
+		if err := storeSet(service, account, secret); err != nil {
 			return fail(err, helpFromError(err))
 		}
 		resp.OK = "ok"
@@ -128,7 +128,7 @@ func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, 
 		if verr != nil {
 			return fail(verr, helpFromError(verr))
 		}
-		if err := Delete(service, account); err != nil {
+		if err := storeDelete(service, account); err != nil {
 			return fail(err, helpFromError(err))
 		}
 		resp.OK = "ok"
