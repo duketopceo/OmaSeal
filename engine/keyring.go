@@ -52,17 +52,69 @@ func keyringError(err error) error {
 	if errors.Is(err, keyring.ErrNotFound) {
 		return newError("not_found", "omaseal set", err)
 	}
+	if errors.Is(err, errKeyringTimeout) {
+		return newError("keyring_timeout", "retry, or restart gnome-keyring — see omaseal doctor", err)
+	}
 	return newError("keyring_unavailable", "omaseal doctor", fmt.Errorf("keyring: %w", err))
+}
+
+// errKeyringTimeout marks operations that exceeded their deadline against the
+// Secret Service daemon. Callers can errors.Is it to distinguish a wedged
+// daemon from a real failure — a wedged daemon must fail fast instead of
+// parking the caller (and any agent tool call behind it) forever.
+var errKeyringTimeout = errors.New("keyring operation timed out")
+
+// Calls that never surface a user prompt get a short deadline: connect,
+// search, session open, and property reads are pure daemon round-trips.
+const keyringOpTimeout = 12 * time.Second
+
+// Calls that can surface a gcr unlock/create prompt get a human-scale
+// deadline so a legitimate prompt still completes — but an orphaned prompt
+// (daemon restart, stale bus-name owner) cannot wedge the process for hours.
+const keyringPromptTimeout = 2 * time.Minute
+
+// callWithTimeout runs fn in a goroutine and abandons it after d. The
+// zalando secret_service methods take no context, so a goroutine+select is
+// the only way to bound them; the abandoned call's reply is harmless — godbus
+// drops it once nobody reads the result channel.
+func callWithTimeout[T any](op string, d time.Duration, fn func() (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		v, err := fn()
+		done <- result{v, err}
+	}()
+	select {
+	case r := <-done:
+		return r.v, r.err
+	case <-time.After(d):
+		var zero T
+		return zero, fmt.Errorf("%w: %s exceeded %s", errKeyringTimeout, op, d)
+	}
+}
+
+func runWithTimeout(op string, d time.Duration, fn func() error) error {
+	_, err := callWithTimeout(op, d, func() (struct{}, error) {
+		return struct{}{}, fn()
+	})
+	return err
 }
 
 // keyringStore returns a connected SecretService and the default collection.
 func keyringStore() (*ss.SecretService, dbus.BusObject, error) {
-	svc, err := ss.NewSecretService()
+	svc, err := callWithTimeout("connect", keyringOpTimeout, func() (*ss.SecretService, error) {
+		return ss.NewSecretService()
+	})
 	if err != nil {
 		return nil, nil, keyringError(err)
 	}
 	collection := svc.GetLoginCollection()
-	if err := svc.Unlock(collection.Path()); err != nil {
+	if err := runWithTimeout("unlock collection", keyringPromptTimeout, func() error {
+		return svc.Unlock(collection.Path())
+	}); err != nil {
 		return nil, nil, keyringError(err)
 	}
 	return svc, collection, nil
@@ -76,7 +128,9 @@ func findItems(svc *ss.SecretService, collection dbus.BusObject, service, accoun
 		"service": service,
 		"account": account,
 	}
-	paths, err := svc.SearchItems(collection, search)
+	paths, err := callWithTimeout("search items", keyringOpTimeout, func() ([]dbus.ObjectPath, error) {
+		return svc.SearchItems(collection, search)
+	})
 	if err != nil {
 		return nil, keyringError(err)
 	}
@@ -116,11 +170,15 @@ func Set(service, account, secret string) error {
 		return err
 	}
 
-	session, err := svc.OpenSession()
+	session, err := callWithTimeout("open session", keyringOpTimeout, func() (dbus.BusObject, error) {
+		return svc.OpenSession()
+	})
 	if err != nil {
 		return keyringError(err)
 	}
-	defer svc.Close(session)
+	defer runWithTimeout("close session", keyringOpTimeout, func() error {
+		return svc.Close(session)
+	})
 
 	// Existing items addressed by service/account are updated in place,
 	// preserving whatever attributes they carry — including foreign ones, so
@@ -132,7 +190,9 @@ func Set(service, account, secret string) error {
 		var setErr error
 		for _, p := range paths {
 			obj := svc.Object(secretServiceName, p)
-			if callErr := obj.Call(itemInterface+".SetSecret", 0, ss.NewSecret(session.Path(), secret)).Err; callErr != nil {
+			if callErr := runWithTimeout("set secret", keyringPromptTimeout, func() error {
+				return obj.Call(itemInterface+".SetSecret", 0, ss.NewSecret(session.Path(), secret)).Err
+			}); callErr != nil {
 				setErr = callErr
 			}
 		}
@@ -148,7 +208,9 @@ func Set(service, account, secret string) error {
 	}
 	label := fmt.Sprintf("OmaSeal: %s / %s", service, account)
 
-	if err := svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret)); err != nil {
+	if err := runWithTimeout("create item", keyringPromptTimeout, func() error {
+		return svc.CreateItem(collection, label, attributes, ss.NewSecret(session.Path(), secret))
+	}); err != nil {
 		return keyringError(err)
 	}
 	return nil
@@ -179,17 +241,25 @@ func Get(service, account string) (string, error) {
 		return "", err
 	}
 
-	session, err := svc.OpenSession()
+	session, err := callWithTimeout("open session", keyringOpTimeout, func() (dbus.BusObject, error) {
+		return svc.OpenSession()
+	})
 	if err != nil {
 		return "", keyringError(err)
 	}
-	defer svc.Close(session)
+	defer runWithTimeout("close session", keyringOpTimeout, func() error {
+		return svc.Close(session)
+	})
 
-	if err := svc.Unlock(p); err != nil {
+	if err := runWithTimeout("unlock item", keyringPromptTimeout, func() error {
+		return svc.Unlock(p)
+	}); err != nil {
 		return "", keyringError(err)
 	}
 
-	secret, err := svc.GetSecret(p, session.Path())
+	secret, err := callWithTimeout("get secret", keyringPromptTimeout, func() (*ss.Secret, error) {
+		return svc.GetSecret(p, session.Path())
+	})
 	if err != nil {
 		return "", keyringError(err)
 	}
@@ -216,7 +286,9 @@ func Delete(service, account string) error {
 	}
 	var delErr error
 	for _, p := range paths {
-		if err := svc.Delete(p); err != nil {
+		if err := runWithTimeout("delete item", keyringPromptTimeout, func() error {
+			return svc.Delete(p)
+		}); err != nil {
 			delErr = err
 		}
 	}
@@ -237,14 +309,18 @@ func List(service string) ([]Item, error) {
 	if service != "" {
 		// Server-side search keeps filtered lists cheap — one round-trip
 		// instead of a metadata fetch per collection item.
-		paths, err = svc.SearchItems(collection, map[string]string{"service": service})
+		paths, err = callWithTimeout("search items", keyringOpTimeout, func() ([]dbus.ObjectPath, error) {
+			return svc.SearchItems(collection, map[string]string{"service": service})
+		})
 		if err != nil {
 			return nil, keyringError(err)
 		}
 	} else {
 		// Secret Service search requires at least one attribute, so enumerate
 		// the collection's Items property and filter client-side.
-		v, err := collection.GetProperty(collectionInterface + ".Items")
+		v, err := callWithTimeout("list items", keyringOpTimeout, func() (dbus.Variant, error) {
+			return collection.GetProperty(collectionInterface + ".Items")
+		})
 		if err != nil {
 			return nil, keyringError(err)
 		}

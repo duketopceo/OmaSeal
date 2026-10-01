@@ -3,8 +3,11 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	ss "github.com/zalando/go-keyring/secret_service"
 )
@@ -262,5 +265,36 @@ func TestKeyringDuplicatePair(t *testing.T) {
 	}
 	if _, err := Get(service, account); err == nil {
 		t.Fatal("Get succeeded after Delete on duplicate pair")
+	}
+}
+
+// A call that overruns its deadline must surface errKeyringTimeout — this is
+// the regression guard for the wedged-daemon freeze where bare D-Bus calls
+// parked callers (and the agents behind them) indefinitely.
+func TestCallWithTimeoutDeadline(t *testing.T) {
+	_, err := callWithTimeout("test op", 20*time.Millisecond, func() (int, error) {
+		time.Sleep(500 * time.Millisecond)
+		return 7, nil
+	})
+	if !errors.Is(err, errKeyringTimeout) {
+		t.Fatalf("expected errKeyringTimeout, got %v", err)
+	}
+}
+
+func TestCallWithTimeoutFastPath(t *testing.T) {
+	v, err := callWithTimeout("test op", time.Second, func() (int, error) {
+		return 42, nil
+	})
+	if err != nil || v != 42 {
+		t.Fatalf("fast path: v=%d err=%v", v, err)
+	}
+}
+
+// Timeout errors must surface with the dedicated code so agents and users
+// can tell a wedged daemon apart from a missing secret.
+func TestKeyringTimeoutErrorCode(t *testing.T) {
+	err := keyringError(fmt.Errorf("%w: connect exceeded 12s", errKeyringTimeout))
+	if code := codeFromError(err); code != "keyring_timeout" {
+		t.Fatalf("timeout code = %q, want keyring_timeout", code)
 	}
 }
