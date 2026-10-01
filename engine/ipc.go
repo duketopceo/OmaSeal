@@ -48,18 +48,38 @@ func runIPC(method string, jsonArgs string) {
 // ipcDispatch is the testable core of `omaseal ipc` — it returns the
 // response object and exit code instead of printing and exiting inline.
 // stdin is injected so `set` can be tested without a real pipe.
+// ipcTarget extracts service/account from a call's JSON args for telemetry —
+// best-effort, empty on parse failure, and never includes the secret value.
+func ipcTarget(jsonArgs string) string {
+	var a struct {
+		Service string `json:"service"`
+		Account string `json:"account"`
+	}
+	if err := json.Unmarshal([]byte(jsonArgs), &a); err != nil {
+		return ""
+	}
+	if a.Account == "" {
+		return a.Service
+	}
+	return a.Service + "/" + a.Account
+}
+
 func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, int) {
 	var resp ipcResponse
+	start := time.Now()
 	fail := func(err error, help string) (ipcResponse, int) {
 		resp.Error = err.Error()
 		resp.Code = codeFromError(err)
 		resp.Help = help
+		logOpResult("ipc-"+method, ipcTarget(jsonArgs), start, err)
 		return resp, 1
 	}
 	failMsg := func(msg, code, help string) (ipcResponse, int) {
 		resp.Error = msg
 		resp.Code = code
 		resp.Help = help
+		WriteLog("op=ipc-%s target=\"%s\" dur=%dms result=error code=%s",
+			method, ipcTarget(jsonArgs), time.Since(start).Milliseconds(), code)
 		return resp, 1
 	}
 	badJSON := func(err error, help string) (ipcResponse, int) {

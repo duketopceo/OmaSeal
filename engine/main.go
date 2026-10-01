@@ -17,20 +17,21 @@ import (
 
 const appName = "omaseal"
 
-// logOpResult records one structured telemetry line per store-facing
-// operation. Only successes previously reached the log via the stats lines —
-// failures and keyring timeouts were invisible, which made wedged daemon
-// hangs impossible to diagnose after the fact. `omaseal stats` aggregates
-// these lines into the ops/errors/timeouts counters.
+// logOpResult records a telemetry line when a store-facing operation fails —
+// errors, keyring timeouts, and gate denials. Successes already leave stats
+// lines; failures previously left no trace at all, which made wedged daemon
+// hangs invisible until processes accumulated. `omaseal stats` aggregates
+// these lines into the failure counters.
 func logOpResult(op, target string, start time.Time, err error) {
-	result := "ok"
-	switch {
-	case errors.Is(err, errKeyringTimeout):
-		result = "timeout"
-	case err != nil:
-		result = "error"
+	if err == nil {
+		return
 	}
-	WriteLog("op=%s target=\"%s\" dur=%dms result=%s", op, target, time.Since(start).Milliseconds(), result)
+	result := "error"
+	if errors.Is(err, errKeyringTimeout) {
+		result = "timeout"
+	}
+	WriteLog("op=%s target=\"%s\" dur=%dms result=%s code=%s", op, target,
+		time.Since(start).Milliseconds(), result, codeFromError(err))
 }
 
 func usage() {
@@ -306,11 +307,12 @@ func handleReveal() {
 		usage()
 		os.Exit(1)
 	}
+	start := time.Now()
 	if err := requireUserPresence(context.Background(), fmt.Sprintf("reveal %s/%s", service, account), loadAgentPolicyOrDefault()); err != nil {
+		logOpResult("reveal", service+"/"+account, start, err)
 		printError("user-presence gate: ", err)
 		os.Exit(1)
 	}
-	start := time.Now()
 	secret, err := Get(service, account)
 	logOpResult("reveal", service+"/"+account, start, err)
 	if err != nil {

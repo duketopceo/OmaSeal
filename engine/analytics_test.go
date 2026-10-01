@@ -175,17 +175,17 @@ func TestAccessLogProducerParser(t *testing.T) {
 	}
 }
 
-// op= telemetry lines feed the stats counters and must not collide with the
-// access-log regex — a get line and an op=get line are different formats.
+// op= telemetry lines are emitted only on failure — they feed the failure
+// counters and must not collide with the access-log regex.
 func TestParseOpTelemetry(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "ops.log")
 
-	data := `2026/10/01 13:53:31 op=get target="openrouter/management" dur=4ms result=ok
-2026/10/01 13:53:43 op=get target="Cloudflare API Token — Kurultai/duketopceo@gmail.com" dur=12000ms result=timeout
-2026/10/01 13:54:01 op=set target="svc/acct" dur=31ms result=error
+	data := `2026/10/01 13:53:43 op=get target="Cloudflare API Token — Kurultai/duketopceo@gmail.com" dur=12000ms result=timeout code=keyring_timeout
+2026/10/01 13:54:01 op=set target="svc/acct" dur=31ms result=error code=keyring_unavailable
+2026/10/01 13:54:22 op=mcp-omaseal_get target="github/personal" dur=2ms result=error code=manifest_denied
 2026/10/01 13:54:03 get openrouter/management
-not-a-log-line op=get target="x/y" dur=1ms result=ok
+not-a-log-line op=get target="x/y" dur=1ms result=error code=bogus
 `
 	if err := os.WriteFile(logPath, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
@@ -195,11 +195,14 @@ not-a-log-line op=get target="x/y" dur=1ms result=ok
 	if err != nil {
 		t.Fatal(err)
 	}
-	if telem.Ops != 3 {
-		t.Fatalf("ops=%d, want 3", telem.Ops)
+	if telem.Failures != 3 {
+		t.Fatalf("failures=%d, want 3", telem.Failures)
 	}
-	if telem.Timeouts != 1 || telem.Errors != 1 {
-		t.Fatalf("timeouts=%d errors=%d, want 1/1", telem.Timeouts, telem.Errors)
+	if telem.Timeouts != 1 {
+		t.Fatalf("timeouts=%d, want 1", telem.Timeouts)
+	}
+	if telem.ByCode["keyring_timeout"] != 1 || telem.ByCode["manifest_denied"] != 1 || telem.ByCode["keyring_unavailable"] != 1 {
+		t.Fatalf("by_code wrong: %+v", telem.ByCode)
 	}
 	if telem.SlowestMs != 12000 {
 		t.Fatalf("slowest=%d, want 12000", telem.SlowestMs)
@@ -219,7 +222,7 @@ not-a-log-line op=get target="x/y" dur=1ms result=ok
 // Missing log file -> empty telemetry, not an error.
 func TestParseOpTelemetryAbsent(t *testing.T) {
 	telem, err := ParseOpTelemetry(filepath.Join(t.TempDir(), "absent.log"))
-	if err != nil || telem.Ops != 0 {
+	if err != nil || telem.Failures != 0 {
 		t.Fatalf("absent log: telem=%+v err=%v", telem, err)
 	}
 }
