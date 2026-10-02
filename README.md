@@ -164,6 +164,12 @@ omaseal resolve omaseal://browseros/openrouter-work/apiKey
 omaseal ipc resolve '{"service":"openrouter","account":"default"}'
 omaseal ipc set '{"service":"myapp","account":"api"}' < secret.txt
 
+# Audit log — hash-chained, tamper-evident
+omaseal logs                       # recent lines
+omaseal logs verify                # check the chain
+omaseal logs seal ~/seals.log      # anchor today's head somewhere off the state dir
+omaseal logs verify --anchor ~/seals.log   # prove sealed history is still intact
+
 # MCP stdio server for agents
 omaseal mcp
 ```
@@ -227,6 +233,14 @@ and `omaseal://` reference grammar every consumer should follow.
   never treated as presence. Headless machines opt out at the filesystem
   level: edit `~/.config/omaseal/agent.json` or remove `ai-manifest.txt`
   before regenerating it.
+- The audit log is **hash-chained**: every line in `omaseal.log` carries
+  `chain=<sha256(prev‖line)>`, so edits or deletions of past lines break
+  `omaseal logs verify`. Honest limit: a same-uid attacker who understands
+  the format can recompute a forged chain — there is no secret to stop them.
+  That is what `omaseal logs seal <file>` is for: seal the chain head to an
+  anchor file outside the state dir (a synced repo, another machine), and
+  `logs verify --anchor <file>` proves every sealed head is still present
+  in the surviving chain — a rewritten history fails outright.
 - `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
   CLI verb (never an MCP/IPC surface). Every attempt requires the strict
   presence gate plus a rate limit (single-pending lock, 5 attempts per
