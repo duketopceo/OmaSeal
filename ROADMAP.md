@@ -87,3 +87,8 @@ same-uid code. True confinement needs a different-uid policy daemon (a
 setuid/polkit-brokered resolver, or sandboxed agent processes). Worth a
 design spike before v1.0 if agent isolation becomes a requirement rather
 than a convenience.
+
+Partially mitigated: the audit log is hash-chained (`logs verify` /
+`logs seal`), so tampered *history* is provable once a head is anchored
+off the state dir — detection of rewriting, not prevention of same-uid
+writes.

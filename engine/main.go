@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -62,6 +63,8 @@ Usage:
   omaseal selftest                         keyring round-trip test
   omaseal doctor                           check the environment and dependencies
   omaseal logs [n]                         show recent non-secret log lines
+  omaseal logs verify [--anchor <file>]    check the log's hash chain for tampering
+  omaseal logs seal <file>                 anchor the current chain head to a file
   omaseal setup [--yes]                    onboarding: doctor + agent wiring
   omaseal agent mode <open|ask|lock> [min] [--ungated] set agent/MCP trust mode
   omaseal agent unlock                     user-presence unlock for ask mode
@@ -382,6 +385,16 @@ func handleImport() {
 }
 
 func handleLogs() {
+	if len(os.Args) >= 3 {
+		switch os.Args[2] {
+		case "verify":
+			handleLogsVerify()
+			return
+		case "seal":
+			handleLogsSeal()
+			return
+		}
+	}
 	n := 50
 	jsonOut := false
 	for i := 2; i < len(os.Args); i++ {
@@ -410,6 +423,102 @@ func handleLogs() {
 	}
 	for _, l := range lines {
 		fmt.Println(l)
+	}
+}
+
+// handleLogsVerify checks the log's hash chain: pairwise consistency, a
+// sidecar head match, and — with --anchor — that every sealed head still
+// appears in the surviving chain. Exit 1 means tampering evidence.
+func handleLogsVerify() {
+	anchor := ""
+	jsonOut := false
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--json":
+			jsonOut = true
+		case "--anchor":
+			if i+1 < len(os.Args) {
+				anchor = os.Args[i+1]
+				i++
+			}
+		}
+	}
+	logPath := LogPath()
+	rep, err := verifyLogChain(logPath, chainStatePath(logPath), anchor)
+	if err != nil {
+		printError("verifying log chain: ", err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		b, _ := json.Marshal(rep)
+		fmt.Println(string(b))
+	} else {
+		printChainReport(rep, anchor)
+	}
+	if rep.Tampered() {
+		os.Exit(1)
+	}
+}
+
+// handleLogsSeal appends the current chain head to a user-chosen anchor
+// file. Anchored heads that later disappear from the chain prove the log
+// was rewritten — the same-uid recompute escape closed by keeping the
+// anchor outside the state dir (a synced repo, another machine).
+func handleLogsSeal() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: omaseal logs seal <anchor-file>")
+		os.Exit(2)
+	}
+	logPath := LogPath()
+	unlock := sharedLogLock(logPath)
+	head := resumeChainHead(logPath)
+	unlock()
+	if head == chainGenesis {
+		printError("sealing log chain: ", fmt.Errorf("no chained lines yet — the log is empty or predates chaining"))
+		os.Exit(1)
+	}
+	if err := sealHead(os.Args[3], head); err != nil {
+		printError("sealing log chain: ", err)
+		os.Exit(1)
+	}
+	fmt.Printf("sealed %s → %s\n", head[:16], os.Args[3])
+}
+
+// chainStatePath locates the sidecar head next to the log file.
+func chainStatePath(logPath string) string {
+	return filepath.Join(filepath.Dir(logPath), "omaseal.chain")
+}
+
+func printChainReport(rep *chainReport, anchor string) {
+	if rep.LinesChecked == 0 {
+		fmt.Println("log chain: empty — no lines checked")
+		return
+	}
+	if rep.ChainedLines == 0 {
+		fmt.Printf("log chain: %d lines, none chained yet (pre-chain history only)\n", rep.LinesChecked)
+		return
+	}
+	status := "verified"
+	if rep.StartsMidChain {
+		status = "verified (starts mid-chain — log truncated at some point)"
+	}
+	fmt.Printf("log chain: %s — %d/%d lines chained, head %s\n",
+		status, rep.ChainedLines, rep.LinesChecked, rep.Head[:16])
+	if rep.DivergenceLine != 0 {
+		fmt.Printf("  TAMPER: line %d — %s\n", rep.DivergenceLine, rep.DivergenceReason)
+	}
+	if rep.SidecarMismatch {
+		fmt.Println("  TAMPER: sidecar head disagrees with the log tail")
+	}
+	for head, ok := range rep.Anchors {
+		if ok {
+			fmt.Printf("  anchor %.16s: present in chain\n", head)
+		} else {
+			fmt.Printf("  TAMPER: anchored head %.16s is absent — history rewritten since that seal\n", head)
+		}
+	}
+	if anchor != "" && len(rep.Anchors) == 0 {
+		fmt.Printf("  note: %s has no usable anchor entries\n", anchor)
 	}
 }
 

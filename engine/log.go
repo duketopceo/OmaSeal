@@ -64,7 +64,11 @@ func initLog() {
 		return
 	}
 	logFile = f
-	logWriter = io.MultiWriter(os.Stderr, logFile)
+	// The file half of the writer is hash-chained (engine/chain.go): each
+	// line carries the sha256 of its predecessor's chain value + content, so
+	// mid-history edits break `omaseal logs verify`. stderr stays unchained.
+	logWriter = io.MultiWriter(os.Stderr,
+		newChainWriter(logFile, logFilePath, filepath.Join(dir, "omaseal.chain")))
 }
 
 // truncateLogIfLarge keeps only the newest half of the log once it passes
@@ -178,6 +182,7 @@ func ReadLogJSON(n int) ([]LogLine, error) {
 	}
 	out := make([]LogLine, 0, len(lines))
 	for _, l := range lines {
+		l, _, _ = chainTail(l) // drop the trailing ` chain=<hex>` field
 		m := logLineRe.FindStringSubmatch(l)
 		if m == nil {
 			out = append(out, LogLine{Message: l})

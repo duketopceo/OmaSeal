@@ -71,6 +71,7 @@ func doctorChecks() []checkResult {
 		checkPath,
 		checkJev,
 		checkAgentFit,
+		checkLogChain,
 	}
 	results := make([]checkResult, len(checks))
 	var wg sync.WaitGroup
@@ -423,6 +424,39 @@ func checkAgentFit() checkResult {
 	return checkResult{name: "agent-fit", ok: true, optional: true,
 		message: fmt.Sprintf("detected: %s\n  - wire MCP: `omaseal mcp install-detected`\n  - %s\n  - details: docs/harness-fit.md",
 			strings.Join(names, ", "), strings.Join(hints, "\n  - "))}
+}
+
+// checkLogChain verifies the audit log's hash chain — the forensic record
+// behind `omaseal stats` and `logs`. A tamper verdict is a hard FAIL:
+// integrity of the audit trail is exactly what doctor exists to assess.
+func checkLogChain() checkResult {
+	logPath := LogPath()
+	rep, err := verifyLogChain(logPath, chainStatePath(logPath), "")
+	if err != nil {
+		return checkResult{name: "log-chain", ok: false,
+			message: fmt.Sprintf("cannot verify log chain: %v", err)}
+	}
+	switch {
+	case rep.ChainedLines == 0:
+		return checkResult{name: "log-chain", ok: true, optional: true,
+			message: "no chained log lines yet"}
+	case rep.Tampered():
+		var parts []string
+		if rep.DivergenceLine != 0 {
+			parts = append(parts, fmt.Sprintf("line %d: %s", rep.DivergenceLine, rep.DivergenceReason))
+		}
+		if rep.SidecarMismatch {
+			parts = append(parts, "sidecar head disagrees with log tail")
+		}
+		return checkResult{name: "log-chain", ok: false,
+			message: "log chain BROKEN — " + strings.Join(parts, "; ")}
+	default:
+		msg := fmt.Sprintf("verified — %d chained lines, head %s", rep.ChainedLines, rep.Head[:16])
+		if rep.StartsMidChain {
+			msg += " (starts mid-chain after a truncation)"
+		}
+		return checkResult{name: "log-chain", ok: true, message: msg}
+	}
 }
 
 // dirOnPATH reports whether dir appears verbatim in PATH.

@@ -226,3 +226,49 @@ func TestParseOpTelemetryAbsent(t *testing.T) {
 		t.Fatalf("absent log: telem=%+v err=%v", telem, err)
 	}
 }
+
+// Chained log lines (trailing ` chain=<hex64>` from the tamper-evident
+// writer) must parse identically to unchained ones — access stats, failure
+// telemetry, and panel JSON all keep working after chaining ships.
+func TestChainedLinesParse(t *testing.T) {
+	tmpDir := t.TempDir()
+	logPath := filepath.Join(tmpDir, "chained.log")
+
+	ch64 := " chain=" + strings.Repeat("ab", 32)
+	data := "2026/10/01 14:00:00 get openrouter/default" + ch64 + "\n" +
+		"2026/10/01 14:00:01 access svc/nested/acct" + ch64 + "\n" +
+		"2026/10/01 14:00:02 op=get target=\"x/y\" dur=9ms result=timeout code=keyring_timeout" + ch64 + "\n"
+	if err := os.WriteFile(logPath, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := ParseAccessLogsFromFile(logPath)
+	if err != nil || len(stats) != 2 {
+		t.Fatalf("chained access lines must parse: %+v err=%v", stats, err)
+	}
+	if stats[statKey("svc", "nested/acct")].Count != 1 {
+		t.Fatalf("chain field leaked into account: %+v", stats)
+	}
+
+	telem, err := ParseOpTelemetry(logPath)
+	if err != nil || telem.Failures != 1 || telem.ByCode["keyring_timeout"] != 1 {
+		t.Fatalf("chained telemetry line must parse: %+v err=%v", telem, err)
+	}
+
+	// Panel JSON strips the chain field — ReadLogJSON runs chainTail before
+	// logLineRe, so exercise the same composition here (including a line
+	// with no `source:` separator, which falls back to raw message).
+	for _, l := range []string{
+		"2026/10/01 14:00:00 get: openrouter/default" + ch64,
+		"2026/10/01 14:00:00 plain message" + ch64,
+	} {
+		stripped, _, _ := chainTail(l)
+		if strings.Contains(stripped, "chain=") {
+			t.Fatalf("chainTail must drop the chain field: %q -> %q", l, stripped)
+		}
+		m := logLineRe.FindStringSubmatch(stripped)
+		if m != nil && strings.Contains(m[3], "chain=") {
+			t.Fatalf("chain field leaked into message: %q", m[3])
+		}
+	}
+}

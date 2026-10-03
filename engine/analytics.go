@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -16,12 +17,12 @@ import (
 // Every successful secret read is counted: `get`, `reveal`, and `resolve`
 // are logged by their CLI handlers, while MCP/IPC read paths emit an
 // explicit `access` line so agent traffic is tallied too.
-var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+)$`)
+var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+?)(?:\s+chain=[0-9a-f]{64})?\s*$`)
 
 // opTelemetryRe matches the structured failure lines emitted by logOpResult.
 // Only failures are logged — successes already have stats lines — so every
 // match is an error or timeout worth counting.
-var opTelemetryRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+op=(\S+)\s+target="([^"]*)"\s+dur=(\d+)ms\s+result=(\w+)\s+code=(\S+)\s*$`)
+var opTelemetryRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+op=(\S+)\s+target="([^"]*)"\s+dur=(\d+)ms\s+result=(\w+)\s+code=(\S+?)(?:\s+chain=[0-9a-f]{64})?\s*$`)
 
 // OpTelemetry aggregates the failure telemetry lines — the layer that makes
 // wedged-daemon hangs, manifest denials, and error bursts visible.
@@ -56,13 +57,51 @@ func statKey(service, account string) string {
 	return service + "/" + account
 }
 
-// ParseAccessLogs reads the OmaSeal log file and aggregates access statistics.
+// logHistory returns the live log path preceded by its rotated siblings
+// (omaseal.log.N), oldest first — so stats and telemetry survive rotation
+// and the logMaxBytes truncation.
+func logHistory(path string) []string {
+	var out []string
+	if matches, _ := filepath.Glob(path + ".*"); true {
+		var rotated []string
+		for _, m := range matches {
+			suffix := m[len(path):]
+			if n, err := strconv.Atoi(suffix[1:]); err == nil && n > 0 {
+				rotated = append(rotated, m)
+			}
+		}
+		sort.Strings(rotated)
+		out = append(out, rotated...)
+	}
+	return append(out, path)
+}
+
+// ParseAccessLogs reads the OmaSeal log file (plus any rotated siblings)
+// and aggregates access statistics.
 func ParseAccessLogs() (map[string]AccessStat, error) {
 	path := LogPath()
 	if path == "" {
 		return nil, fmt.Errorf("cannot determine log path: %v", logInitErr)
 	}
-	return ParseAccessLogsFromFile(path)
+	merged := make(map[string]AccessStat)
+	for _, p := range logHistory(path) {
+		part, err := ParseAccessLogsFromFile(p)
+		if err != nil {
+			return nil, err
+		}
+		for k, s := range part {
+			if cur, ok := merged[k]; ok {
+				cur.Count += s.Count
+				if s.LastAccessed.After(cur.LastAccessed) {
+					cur.LastAccessed = s.LastAccessed
+				}
+				merged[k] = cur
+			} else {
+				merged[k] = s
+			}
+		}
+	}
+	return merged, nil
 }
 
 // ParseAccessLogsFromFile parses access statistics from a given log file.
@@ -174,8 +213,23 @@ func GetAnalyticsReport() (*AnalyticsReport, error) {
 		return nil, err
 	}
 	report := BuildAnalyticsReport(statsMap)
-	if telem, terr := ParseOpTelemetry(LogPath()); terr == nil && telem.Failures > 0 {
-		report.Telemetry = telem
+	merged := &OpTelemetry{ByCode: map[string]int{}}
+	for _, p := range logHistory(LogPath()) {
+		telem, terr := ParseOpTelemetry(p)
+		if terr != nil {
+			continue
+		}
+		merged.Failures += telem.Failures
+		merged.Timeouts += telem.Timeouts
+		if telem.SlowestMs > merged.SlowestMs {
+			merged.SlowestMs = telem.SlowestMs
+		}
+		for code, n := range telem.ByCode {
+			merged.ByCode[code] += n
+		}
+	}
+	if merged.Failures > 0 {
+		report.Telemetry = merged
 	}
 	return report, nil
 }
