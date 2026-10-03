@@ -46,14 +46,29 @@
   `manifest init --force`, `manifest apply` expansions, `jev enable`;
   shared `parseRuleLine` across scanner/generator/applier; audit flags
   dead tokens, shadowed rules, unquoted names (#25)
+- [x] Bounded Secret Service calls + failure telemetry — every D-Bus op
+  deadline-bound (12s ops / 2m promptable) so a wedged daemon returns
+  `keyring_timeout` instead of parking callers forever; failure-only
+  `op=` telemetry across CLI/IPC/MCP surfaces; `stats` reports failure
+  counts and error-code breakdowns (#30)
+- [x] Hash-chained tamper-evident audit log — every `omaseal.log` line
+  carries `sha256(prev_chain ‖ line)`; `logs verify` walks the chain and
+  reports the first divergent line; `logs seal`/`verify --anchor` anchors
+  the head off the state dir so full-history rewrites are detectable;
+  flock-serialized writers; doctor `log-chain` check; rotated logs stay
+  in analytics (#31)
+- [x] Postmortem — login.keyring silent re-key incident documented with
+  the destructive-test isolation checklist (#29)
 
 ## v0.6.0 — Marketplace stable
 
-- Marketplace revalidation: HEAD is `d911b29` — a 4-agent pentest found and
+- Marketplace revalidation: HEAD is `547ff45` — a 4-agent pentest found and
   this tree fixed real bypasses (env-suppressed presence gate, PATH
-  prompter shims, dead DENY rules on spaced names). Residual design limits
-  are documented in README: manifest/presence govern the MCP+IPC agent
-  channel; same-uid shell processes are outside confinement by design.
+  prompter shims, dead DENY rules on spaced names), and the audit log is
+  now hash-chained so same-uid history rewriting is provable once a head
+  is anchored externally. Residual design limits are documented in
+  README: manifest/presence govern the MCP+IPC agent channel; same-uid
+  shell processes are outside confinement by design.
 - Issue #12: AUR `omaseal-bin` — registration portal closed; blocked on a
   human browser step when registration reopens.
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
