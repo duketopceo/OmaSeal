@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -16,6 +17,20 @@ import (
 // are logged by their CLI handlers, while MCP/IPC read paths emit an
 // explicit `access` line so agent traffic is tallied too.
 var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+)$`)
+
+// opTelemetryRe matches the structured failure lines emitted by logOpResult.
+// Only failures are logged — successes already have stats lines — so every
+// match is an error or timeout worth counting.
+var opTelemetryRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s+op=(\S+)\s+target="([^"]*)"\s+dur=(\d+)ms\s+result=(\w+)\s+code=(\S+)\s*$`)
+
+// OpTelemetry aggregates the failure telemetry lines — the layer that makes
+// wedged-daemon hangs, manifest denials, and error bursts visible.
+type OpTelemetry struct {
+	Failures  int            `json:"failures"`
+	Timeouts  int            `json:"timeouts"`
+	SlowestMs int64          `json:"slowest_ms"`
+	ByCode    map[string]int `json:"by_code,omitempty"`
+}
 
 // AccessStat records the usage frequency and recency for a given secret.
 type AccessStat struct {
@@ -27,9 +42,10 @@ type AccessStat struct {
 
 // AnalyticsReport is the top-level summary of keyring usage.
 type AnalyticsReport struct {
-	TotalAccesses int          `json:"total_accesses"`
-	UniqueSecrets int          `json:"unique_secrets"`
-	Stats         []AccessStat `json:"stats"`
+	TotalAccesses int           `json:"total_accesses"`
+	UniqueSecrets int           `json:"unique_secrets"`
+	Stats         []AccessStat  `json:"stats"`
+	Telemetry     *OpTelemetry  `json:"telemetry,omitempty"`
 }
 
 // statKey is the canonical map key for a credential: the exact
@@ -115,13 +131,53 @@ func ParseAccessLogsFromFile(path string) (map[string]AccessStat, error) {
 	return stats, nil
 }
 
+// ParseOpTelemetry aggregates the op= telemetry lines from the log file.
+// A missing log is not an error — it just means no operations ran yet.
+func ParseOpTelemetry(path string) (*OpTelemetry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &OpTelemetry{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	t := &OpTelemetry{ByCode: map[string]int{}}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		m := opTelemetryRe.FindStringSubmatch(scanner.Text())
+		if m == nil {
+			continue
+		}
+		dur, err := strconv.ParseInt(m[3], 10, 64)
+		if err != nil {
+			continue
+		}
+		t.Failures++
+		if m[4] == "timeout" {
+			t.Timeouts++
+		}
+		t.ByCode[m[5]]++
+		if dur > t.SlowestMs {
+			t.SlowestMs = dur
+		}
+	}
+	return t, scanner.Err()
+}
+
 // GetAnalyticsReport builds a summarized usage report from the access logs.
 func GetAnalyticsReport() (*AnalyticsReport, error) {
 	statsMap, err := ParseAccessLogs()
 	if err != nil {
 		return nil, err
 	}
-	return BuildAnalyticsReport(statsMap), nil
+	report := BuildAnalyticsReport(statsMap)
+	if telem, terr := ParseOpTelemetry(LogPath()); terr == nil && telem.Failures > 0 {
+		report.Telemetry = telem
+	}
+	return report, nil
 }
 
 // BuildAnalyticsReport constructs an AnalyticsReport from an existing stats
@@ -254,7 +310,24 @@ func handleStats() {
 
 	fmt.Printf("OmaSeal Keyring Usage Analytics\n")
 	fmt.Printf("Total Secret Accesses: %d\n", report.TotalAccesses)
-	fmt.Printf("Unique Secrets Accessed: %d\n\n", report.UniqueSecrets)
+	fmt.Printf("Unique Secrets Accessed: %d\n", report.UniqueSecrets)
+	if report.Telemetry != nil {
+		t := report.Telemetry
+		fmt.Printf("Failed operations: %d (timeouts: %d, slowest: %dms)\n", t.Failures, t.Timeouts, t.SlowestMs)
+		if len(t.ByCode) > 0 {
+			codes := make([]string, 0, len(t.ByCode))
+			for c := range t.ByCode {
+				codes = append(codes, c)
+			}
+			sort.Strings(codes)
+			parts := make([]string, 0, len(codes))
+			for _, c := range codes {
+				parts = append(parts, fmt.Sprintf("%s×%d", c, t.ByCode[c]))
+			}
+			fmt.Printf("Failure codes: %s\n", strings.Join(parts, ", "))
+		}
+	}
+	fmt.Println()
 
 	if len(report.Stats) == 0 {
 		fmt.Println("No secret access activity recorded yet.")

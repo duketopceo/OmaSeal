@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,23 @@ import (
 )
 
 const appName = "omaseal"
+
+// logOpResult records a telemetry line when a store-facing operation fails —
+// errors, keyring timeouts, and gate denials. Successes already leave stats
+// lines; failures previously left no trace at all, which made wedged daemon
+// hangs invisible until processes accumulated. `omaseal stats` aggregates
+// these lines into the failure counters.
+func logOpResult(op, target string, start time.Time, err error) {
+	if err == nil {
+		return
+	}
+	result := "error"
+	if errors.Is(err, errKeyringTimeout) {
+		result = "timeout"
+	}
+	WriteLog("op=%s target=\"%s\" dur=%dms result=%s code=%s", op, target,
+		time.Since(start).Milliseconds(), result, codeFromError(err))
+}
 
 func usage() {
 	fmt.Fprint(os.Stderr, `omaseal — system keyring for Omarchy
@@ -170,7 +188,10 @@ func handleSet() {
 		fmt.Fprintln(os.Stderr, "error: secret cannot be empty")
 		os.Exit(1)
 	}
-	if err := Set(service, account, secret); err != nil {
+	start := time.Now()
+	err = Set(service, account, secret)
+	logOpResult("set", service+"/"+account, start, err)
+	if err != nil {
 		printError("storing secret: ", err)
 		os.Exit(1)
 	}
@@ -185,7 +206,9 @@ func handleGet() {
 		usage()
 		os.Exit(1)
 	}
+	start := time.Now()
 	secret, err := Get(service, account)
+	logOpResult("get", service+"/"+account, start, err)
 	if err != nil {
 		printError("retrieving secret: ", err)
 		os.Exit(1)
@@ -201,7 +224,10 @@ func handleDel() {
 		usage()
 		os.Exit(1)
 	}
-	if err := Delete(service, account); err != nil {
+	start := time.Now()
+	err = Delete(service, account)
+	logOpResult("del", service+"/"+account, start, err)
+	if err != nil {
 		printError("deleting secret: ", err)
 		os.Exit(1)
 	}
@@ -235,7 +261,9 @@ func handleList() {
 		os.Exit(1)
 	}
 
+	start := time.Now()
 	items, err := listWithUsage(service, sortMode)
+	logOpResult("list", service, start, err)
 	if err != nil {
 		printError("listing secrets: ", err)
 		os.Exit(1)
@@ -279,11 +307,14 @@ func handleReveal() {
 		usage()
 		os.Exit(1)
 	}
+	start := time.Now()
 	if err := requireUserPresence(context.Background(), fmt.Sprintf("reveal %s/%s", service, account), loadAgentPolicyOrDefault()); err != nil {
+		logOpResult("reveal", service+"/"+account, start, err)
 		printError("user-presence gate: ", err)
 		os.Exit(1)
 	}
 	secret, err := Get(service, account)
+	logOpResult("reveal", service+"/"+account, start, err)
 	if err != nil {
 		printError("getting secret: ", err)
 		os.Exit(1)
@@ -310,7 +341,9 @@ func handleResolve() {
 		usage()
 		os.Exit(1)
 	}
+	start := time.Now()
 	secret, err := Resolve(context.Background(), service, account, true, true)
+	logOpResult("resolve", service+"/"+account, start, err)
 	if err != nil {
 		printError("resolving secret: ", err)
 		os.Exit(1)

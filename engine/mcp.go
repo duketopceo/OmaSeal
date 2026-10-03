@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // runMCP starts a Model Context Protocol server over stdio. It exposes the
@@ -94,6 +95,7 @@ func handleMCPMessage(raw []byte) *mcpResponse {
 		}
 		_ = json.Unmarshal(req.Arguments, &p)
 		WriteLog("mcp tool: %s %s/%s", req.Name, p.Service, p.Account)
+		req.startedAt = time.Now()
 		resp := callMCPTool(req)
 		resp.ID = msg.ID
 		return resp
@@ -211,6 +213,7 @@ var mcpToolsResult = map[string]any{
 type mcpToolCall struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	startedAt time.Time
 }
 
 type mcpToolCallResponse struct {
@@ -470,11 +473,33 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 	return &mcpResponse{JSONRPC: "2.0", Result: r}
 }
 
+// logMCPFailure records a telemetry line for a failed tool call — the surface
+// where agents experience errors and hangs. Successes already emit access
+// lines; failures returned isError responses that left no trace.
+func logMCPFailure(req mcpToolCall, err error) {
+	var a struct {
+		Service string `json:"service"`
+		Account string `json:"account"`
+	}
+	_ = json.Unmarshal(req.Arguments, &a)
+	target := a.Service
+	if a.Account != "" {
+		target += "/" + a.Account
+	}
+	start := req.startedAt
+	if start.IsZero() {
+		start = time.Now()
+	}
+	logOpResult("mcp-"+req.Name, target, start, err)
+}
+
 func errResp(req mcpToolCall, err error) *mcpResponse {
+	logMCPFailure(req, err)
 	return &mcpResponse{JSONRPC: "2.0", Error: newMCPError(-32602, "invalid arguments for "+req.Name+": "+err.Error())}
 }
 
 func toolErrorResp(req mcpToolCall, err error) *mcpResponse {
+	logMCPFailure(req, err)
 	text := err.Error()
 	if code := codeFromError(err); code != "" {
 		text = text + " (code: " + code + ", help: " + helpFromError(err) + ")"
