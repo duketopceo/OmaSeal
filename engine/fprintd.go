@@ -102,7 +102,15 @@ func FprintdVerify(ctx context.Context, reason string) error {
 	}
 	defer dev.CallWithContext(context.Background(), fprintDeviceIface+".Release", 0)
 
-	matchRule := fmt.Sprintf("type='signal',interface='%s',member='VerifyStatus',path='%s'", fprintDeviceIface, devicePath)
+	// Only accept VerifyStatus signals actually emitted by fprintd. Without a
+	// sender constraint, any local user can broadcast a forged verify-match on
+	// the system bus and bypass the biometric gate.
+	var fprintdOwner string
+	if err := conn.BusObject().CallWithContext(verifyCtx, "org.freedesktop.DBus.GetNameOwner", 0, fprintBusName).Store(&fprintdOwner); err != nil {
+		return fmt.Errorf("fprintd owner lookup failed: %w", err)
+	}
+
+	matchRule := fmt.Sprintf("type='signal',sender='%s',interface='%s',member='VerifyStatus',path='%s'", fprintBusName, fprintDeviceIface, devicePath)
 	if err := conn.BusObject().CallWithContext(verifyCtx, "org.freedesktop.DBus.AddMatch", 0, matchRule).Err; err != nil {
 		return fmt.Errorf("fprintd AddMatch failed: %w", err)
 	}
@@ -125,7 +133,7 @@ func FprintdVerify(ctx context.Context, reason string) error {
 			if !ok {
 				return errors.New("fingerprint signal channel closed")
 			}
-			if sig.Path != devicePath || sig.Name != fprintDeviceIface+".VerifyStatus" {
+			if sig.Sender != fprintdOwner || sig.Path != devicePath || sig.Name != fprintDeviceIface+".VerifyStatus" {
 				continue
 			}
 			if len(sig.Body) < 2 {
