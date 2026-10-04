@@ -160,7 +160,7 @@ func findItem(svc *ss.SecretService, collection dbus.BusObject, service, account
 }
 
 // Set stores a secret under service and account.
-func Set(service, account, secret string) error {
+func (ssStore) Set(service, account, secret string) error {
 	if service == "" || account == "" || secret == "" {
 		return errors.New("service, account, and secret must not be empty")
 	}
@@ -216,17 +216,8 @@ func Set(service, account, secret string) error {
 	return nil
 }
 
-// Store seams — Get/Set/Delete speak Secret Service over DBus directly and
-// ignore go-keyring's provider interface, so keyring.MockInit alone cannot
-// intercept them. Tests swap these vars for an in-memory store.
-var (
-	storeGet    = Get
-	storeSet    = Set
-	storeDelete = Delete
-)
-
 // Get retrieves the secret for service and account.
-func Get(service, account string) (string, error) {
+func (ssStore) Get(service, account string) (string, error) {
 	if service == "" || account == "" {
 		return "", errors.New("service and account must not be empty")
 	}
@@ -267,7 +258,7 @@ func Get(service, account string) (string, error) {
 }
 
 // Delete removes the secret for service and account.
-func Delete(service, account string) error {
+func (ssStore) Delete(service, account string) error {
 	if service == "" || account == "" {
 		return errors.New("service and account must not be empty")
 	}
@@ -299,7 +290,7 @@ func Delete(service, account string) error {
 // service/account attributes, regardless of which tool wrote it. Items lacking
 // either attribute are skipped — nothing in the CLI can address them. If
 // service is non-empty, only items for that service are returned.
-func List(service string) ([]Item, error) {
+func (ssStore) List(service string) ([]Item, error) {
 	svc, collection, err := keyringStore()
 	if err != nil {
 		return nil, err
