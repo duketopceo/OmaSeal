@@ -241,6 +241,16 @@ and `omaseal://` reference grammar every consumer should follow.
   anchor file outside the state dir (a synced repo, another machine), and
   `logs verify --anchor <file>` proves every sealed head is still present
   in the surviving chain — a rewritten history fails outright.
+- **Backend selection (opt-in):** `~/.config/omaseal/config.json` accepts
+  `{"backend": "native"}` to switch storage from gnome-keyring to the
+  age-encrypted native store (design: `docs/design/native-store.md`).
+  `set`/`del`/`list` work while locked — writes encrypt to a public key —
+  and `get` prompts once per session window in a terminal, then reuses a
+  tmpfs session identity (dies at logout, cleared by `agent lock`). A wrong
+  passphrase is a failed read, never a write — a failed unlock cannot
+  re-key the store. `secretservice` remains the default; the native store
+  keeps its own items under `$XDG_STATE_HOME/omaseal/native/` (nothing is
+  migrated automatically — `omaseal set` re-stores what you need).
 - `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
   CLI verb (never an MCP/IPC surface). Every attempt requires the strict
   presence gate plus a rate limit (single-pending lock, 5 attempts per

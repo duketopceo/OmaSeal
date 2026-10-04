@@ -101,6 +101,11 @@ Examples:
 func main() {
 	SetLogOutput()
 
+	if err := selectStore(); err != nil {
+		fmt.Fprintln(os.Stderr, "omaseal:", err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
