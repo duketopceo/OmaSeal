@@ -107,3 +107,11 @@ Partially mitigated: the audit log is hash-chained (`logs verify` /
 `logs seal`), so tampered *history* is provable once a head is anchored
 off the state dir — detection of rewriting, not prevention of same-uid
 writes.
+
+Native encrypted backend: spike **greenlit**
+(`docs/design/native-store.md`) — asymmetric `Set`-while-locked
+eliminates the Sept-30 re-key class by construction; all six PoC
+invariants proven. Next build step: `Store` interface extraction behind
+the existing swap vars, then `backend: native` as opt-in config
+(Secret Service stays default). The different-uid helper daemon — the
+only real same-uid confinement — stays a separate design track.
