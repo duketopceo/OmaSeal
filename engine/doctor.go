@@ -72,6 +72,7 @@ func doctorChecks() []checkResult {
 		checkJev,
 		checkAgentFit,
 		checkLogChain,
+		checkFilePerms,
 	}
 	results := make([]checkResult, len(checks))
 	var wg sync.WaitGroup
@@ -457,6 +458,49 @@ func checkLogChain() checkResult {
 		}
 		return checkResult{name: "log-chain", ok: true, message: msg}
 	}
+}
+
+// checkFilePerms audits the security-relevant config/state files for
+// group/other bits — writers use 0600, so drift means a manual copy or an
+// older version created them loose. Warn (optional), not fail: the exposure
+// is readability by other local users, not writability.
+func checkFilePerms() checkResult {
+	targets := []string{}
+	if dir := omasealConfigDir(); dir != "" {
+		targets = append(targets,
+			filepath.Join(dir, "ai-manifest.txt"),
+			filepath.Join(dir, "agent.json"),
+			filepath.Join(dir, "config.json"),
+			filepath.Join(dir, "anchors.log"))
+	}
+	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
+		targets = append(targets, filepath.Join(base, "omaseal", "omaseal.log"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		targets = append(targets, filepath.Join(home, ".local", "state", "omaseal", "omaseal.log"))
+	}
+	loose := loosePermFiles(targets)
+	if len(loose) > 0 {
+		return checkResult{name: "file-perms", ok: true, optional: true,
+			message: "loose permissions (want 600): " + strings.Join(loose, ", ") +
+				" — chmod 600 them; group/other can read your policy and access history"}
+	}
+	return checkResult{name: "file-perms", ok: true, message: "policy/config/log files are 0600"}
+}
+
+// loosePermFiles returns the basenames of existing files with group/other
+// permission bits set. Absent files are skipped — nothing to protect yet.
+func loosePermFiles(paths []string) []string {
+	var loose []string
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if fi.Mode().Perm()&0077 != 0 {
+			loose = append(loose, fmt.Sprintf("%s (%o)", filepath.Base(p), fi.Mode().Perm()))
+		}
+	}
+	return loose
 }
 
 // dirOnPATH reports whether dir appears verbatim in PATH.

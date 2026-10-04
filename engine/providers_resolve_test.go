@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
 )
 
 func TestResolveLocalHitShortCircuits(t *testing.T) {

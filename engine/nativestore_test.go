@@ -14,6 +14,63 @@ import (
 	"time"
 )
 
+// Concurrent first-inits must serialize under the flock — the loser adopts
+// the winner's identity. A mismatched identity.age/identity.pub pair would
+// encrypt to a key nobody can unwrap: silent, permanent data loss.
+func TestNativeInitRace(t *testing.T) {
+	dir := t.TempDir()
+	rt := t.TempDir()
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s := newNativeStoreAt(dir, rt)
+			s.prompt = func(string) (string, error) { return "race-pass", nil }
+			if err := s.Set("svc", "k"+strconv.Itoa(i), "v"); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent init/Set: %v", err)
+	}
+	// A fresh instance unlocked with the winning passphrase must read every
+	// item — proves identity.age and identity.pub describe the same key.
+	s := newNativeStoreAt(dir, rt)
+	s.prompt = func(string) (string, error) { return "race-pass", nil }
+	for i := 0; i < n; i++ {
+		if _, err := s.Get("svc", "k"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("read item %d after race: %v", i, err)
+		}
+	}
+}
+
+// Torn init (identity.age present, identity.pub gone — crash mid-init)
+// self-heals by unwrapping the identity and rewriting the pub file.
+func TestNativeHealPub(t *testing.T) {
+	s, dir := nativeTestStore(t)
+	initNative(t, s, "heal-pass")
+	if err := os.Remove(filepath.Join(dir, nativePubFile)); err != nil {
+		t.Fatal(err)
+	}
+	s2 := newNativeStoreAt(dir, t.TempDir())
+	s2.prompt = func(string) (string, error) { return "heal-pass", nil }
+	if err := s2.Set("a", "b", "c"); err != nil {
+		t.Fatalf("Set after torn init: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, nativePubFile)); err != nil {
+		t.Fatal("identity.pub was not rewritten by heal path")
+	}
+	if got, err := s2.Get("a", "b"); err != nil || got != "c" {
+		t.Fatalf("read after heal: got=%q err=%v", got, err)
+	}
+}
+
 // nativeTestStore returns a store rooted in temp dirs with an injectable
 // prompt — tests set prompt to drive init/unlock without a TTY.
 func nativeTestStore(t *testing.T) (*nativeStore, string) {

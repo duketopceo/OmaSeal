@@ -195,7 +195,7 @@ func verifyLogChain(logPath, statePath, anchorPath string) (*chainReport, error)
 
 	rep := &chainReport{}
 	seen := map[string]bool{}
-	var prevChained string // stored chain of the last chained line
+	var prevChained string  // stored chain of the last chained line
 	prevWasChained := false // was the immediately preceding physical line chained?
 	sawChained := false
 	lineNo := 0

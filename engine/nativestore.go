@@ -395,17 +395,70 @@ func (s *nativeStore) ensureInit() error {
 		return keyringError(err)
 	}
 	s.identityEnc = blob
-	return s.loadPub()
+	if err := s.loadPub(); err != nil {
+		// identity.age exists but identity.pub is missing/corrupt — a
+		// torn init. Self-heal: unwrap the identity (prompt on TTY) and
+		// rewrite the pub file from it, rather than wedging the store.
+		return s.healPub()
+	}
+	return nil
+}
+
+// healPub recovers a torn init: unlock the identity, then derive and write
+// the public recipient file. Needs the passphrase → prompt path only.
+func (s *nativeStore) healPub() error {
+	if err := s.ensureIdentity(); err != nil {
+		return err
+	}
+	if err := atomicWriteFile(filepath.Join(s.dir, nativePubFile),
+		[]byte(s.identity.Recipient().String()+"\n"), 0600); err != nil {
+		return keyringError(err)
+	}
+	s.pub = s.identity.Recipient()
+	return nil
 }
 
 // initFresh creates a new identity — the ONLY path that writes a passphrase-
 // wrapped file. Needs a TTY (or an injected prompt); two prompts to confirm.
+// The whole init runs under the store flock: two racing first-writers must
+// not interleave the identity.age/identity.pub pair — a mismatched pair
+// encrypts to a key nobody can unwrap (silent, permanent loss). A crash
+// mid-pair is still possible and is covered by healPub.
 func (s *nativeStore) initFresh() error {
 	if s.prompt == nil {
 		return newError("store_uninitialized",
 			"run `omaseal get` once in a terminal to initialize the native store",
 			errors.New("no identity at "+filepath.Join(s.dir, nativeIdentityFile)))
 	}
+	if err := os.MkdirAll(s.dir, 0700); err != nil {
+		return keyringError(err)
+	}
+	lp := filepath.Join(s.dir, nativeLockFile)
+	lf, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return keyringError(err)
+	}
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+		return keyringError(err)
+	}
+	defer syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+
+	// Re-check inside the lock — a racing process may have completed init
+	// while we waited; adopt its identity, never overwrite. A torn pair
+	// (identity present, pub missing/corrupt) heals through unlock.
+	blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
+	if err == nil {
+		s.identityEnc = blob
+		if perr := s.loadPub(); perr != nil {
+			return s.healPub()
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return keyringError(err)
+	}
+
 	pass, err := s.prompt("New OmaSeal passphrase (creates the native store)")
 	if err != nil || pass == "" {
 		return newError("store_uninitialized", "passphrase required", errors.New("init aborted"))
@@ -418,14 +471,11 @@ func (s *nativeStore) initFresh() error {
 	if err != nil {
 		return keyringError(err)
 	}
-	blob, err := wrapNativeIdentity(id, pass)
+	wrapped, err := wrapNativeIdentity(id, pass)
 	if err != nil {
 		return keyringError(err)
 	}
-	if err := os.MkdirAll(s.dir, 0700); err != nil {
-		return keyringError(err)
-	}
-	if err := atomicWriteFile(filepath.Join(s.dir, nativeIdentityFile), blob, 0600); err != nil {
+	if err := atomicWriteFile(filepath.Join(s.dir, nativeIdentityFile), wrapped, 0600); err != nil {
 		return keyringError(err)
 	}
 	if err := atomicWriteFile(filepath.Join(s.dir, nativePubFile),
@@ -433,7 +483,7 @@ func (s *nativeStore) initFresh() error {
 		return keyringError(err)
 	}
 	s.identity = id
-	s.identityEnc = blob
+	s.identityEnc = wrapped
 	s.pub = id.Recipient()
 	return s.seedSession(s.now().Add(s.sessionTTL))
 }

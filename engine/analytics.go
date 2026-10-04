@@ -43,10 +43,10 @@ type AccessStat struct {
 
 // AnalyticsReport is the top-level summary of keyring usage.
 type AnalyticsReport struct {
-	TotalAccesses int           `json:"total_accesses"`
-	UniqueSecrets int           `json:"unique_secrets"`
-	Stats         []AccessStat  `json:"stats"`
-	Telemetry     *OpTelemetry  `json:"telemetry,omitempty"`
+	TotalAccesses int          `json:"total_accesses"`
+	UniqueSecrets int          `json:"unique_secrets"`
+	Stats         []AccessStat `json:"stats"`
+	Telemetry     *OpTelemetry `json:"telemetry,omitempty"`
 }
 
 // statKey is the canonical map key for a credential: the exact
