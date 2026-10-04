@@ -241,19 +241,33 @@ and `omaseal://` reference grammar every consumer should follow.
   anchor file outside the state dir (a synced repo, another machine), and
   `logs verify --anchor <file>` proves every sealed head is still present
   in the surviving chain — a rewritten history fails outright.
+- **Backend selection (opt-in):** `~/.config/omaseal/config.json` accepts
+  `{"backend": "native"}` to switch storage from gnome-keyring to the
+  age-encrypted native store (design: `docs/design/native-store.md`).
+  `set`/`del`/`list` work while locked — writes encrypt to a public key —
+  and `get` prompts once per session window in a terminal, then reuses a
+  tmpfs session identity (dies at logout, cleared by `agent lock`). A wrong
+  passphrase is a failed read, never a write — a failed unlock cannot
+  re-key the store. `secretservice` remains the default; the native store
+  keeps its own items under `$XDG_STATE_HOME/omaseal/native/` (nothing is
+  migrated automatically — `omaseal set` re-stores what you need).
 - `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
   CLI verb (never an MCP/IPC surface). Every attempt requires the strict
   presence gate plus a rate limit (single-pending lock, 5 attempts per
   10 min, 10 s minimum interval — denied/expired prompts count too, so
   prompt-flooding burns budget). Each attempt is logged (`sudo:` lines in
   `omaseal.log`); headless alternative is just running `sudo` yourself.
-- `ai-manifest.txt` governs the **agent (MCP) channel only**. `omaseal get`,
-  `omaseal run`, and IPC calls skip the policy check on purpose — the user
-  who can run them already holds the keys. A DENY is a boundary for wired
-  agents, not confinement: a same-uid process that ignores OmaSeal's
-  interfaces can write the policy/session files or talk to Secret Service
-  directly. Real isolation needs agents at a different uid or in a sandbox;
-  see ROADMAP.
+- `ai-manifest.txt` + agent mode govern the **agent (MCP) channel only**.
+  `omaseal get`, `omaseal run`, `omaseal resolve`, and `omaseal ipc` skip the
+  policy checks on purpose — the user who can run them already holds the
+  keys. Concretely: `omaseal ipc get` carries no session or manifest check,
+  and `omaseal run -e X=sudo/lukekimball -- env` reads the sudo secret
+  without the `sudo` verb's presence gate or rate limit. A DENY is a
+  boundary for wired agents, not confinement: a same-uid process that
+  ignores OmaSeal's interfaces can exec the ungated lanes, write the
+  policy/session files (`echo $((2**31)) > $XDG_RUNTIME_DIR/omaseal/session`
+  is a permanent unlock), or talk to Secret Service directly. Real
+  isolation needs agents at a different uid or in a sandbox; see ROADMAP.
 - `resolve` falls back to `op` / `bw`, but always caches the result locally so
   the secret is not re-requested from the external vault. Provider misses and
   the `op` availability probe are themselves cached briefly (misses ~60s), so

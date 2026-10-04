@@ -101,6 +101,11 @@ Examples:
 func main() {
 	SetLogOutput()
 
+	if err := selectStore(); err != nil {
+		fmt.Fprintln(os.Stderr, "omaseal:", err)
+		os.Exit(1)
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
@@ -583,7 +588,14 @@ func readSecretFrom(r io.Reader, d time.Duration) (string, error) {
 	}
 	ch := make(chan result, 1)
 	go func() {
-		b, err := io.ReadAll(r)
+		// Cap the read — a same-uid caller piping an endless stream should
+		// hit a bound, not grow memory for the full deadline. Over-cap is an
+		// error, not silent truncation — a truncated secret is worse than none.
+		const maxSecret = 1 << 20
+		b, err := io.ReadAll(io.LimitReader(r, maxSecret+1))
+		if err == nil && len(b) > maxSecret {
+			err = fmt.Errorf("secret exceeds %d bytes", maxSecret)
+		}
 		ch <- result{strings.TrimSuffix(string(b), "\n"), err}
 	}()
 	select {

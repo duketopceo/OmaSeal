@@ -136,10 +136,10 @@ ASK * - fallback
 
 func TestParseRuleLine(t *testing.T) {
 	cases := []struct {
-		line                        string
-		wantPolicy                  RulePolicy
-		wantPattern, wantDesc       string
-		wantOK                      bool
+		line                  string
+		wantPolicy            RulePolicy
+		wantPattern, wantDesc string
+		wantOK                bool
 	}{
 		{`DENY github/* - source control`, PolicyDeny, "github/*", "source control", true},
 		{`ALLOW a/b`, PolicyAllow, "a/b", "", true},

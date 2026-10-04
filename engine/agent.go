@@ -187,6 +187,9 @@ func readSessionExpiry() (time.Time, bool) {
 }
 
 func clearAgentSession() error {
+	if ns, ok := currentStore.(*nativeStore); ok {
+		ns.clearNativeSession()
+	}
 	return os.Remove(agentSessionPath())
 }
 
@@ -318,6 +321,21 @@ func UnlockAgent() error {
 		return err
 	}
 	fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), p.SessionMinutes)
+
+	// Native backend: the agent session alone doesn't give agents a
+	// decryption path — seed the tmpfs session identity under the same
+	// expiry so Get can unwrap for the window. Needs a TTY passphrase;
+	// non-TTY unlocks warn and leave the store locked.
+	if ns, ok := currentStore.(*nativeStore); ok {
+		if pass, err := nativePassphrasePrompt("OmaSeal passphrase"); err == nil && pass != "" {
+			if err := ns.unlockIdentity(pass, expiry); err != nil {
+				return fmt.Errorf("native store unlock: %w", err)
+			}
+			fmt.Println("Native store unlocked for the same window.")
+		} else {
+			fmt.Fprintln(os.Stderr, "warning: native store still locked — run `omaseal agent unlock` in a terminal to unlock it.")
+		}
+	}
 	return nil
 }
 
