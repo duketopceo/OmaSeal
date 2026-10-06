@@ -87,10 +87,27 @@ var (
 	errItemExists   = errors.New("item already present")
 )
 
-// nativeKey is the store.json key for a credential — the join paired with
-// the strings.Cut split in List. Shares the namespace collision class every
-// other "/" join in the codebase accepts.
-func nativeKey(service, account string) string { return service + "/" + account }
+// nativeKey is the store.json key for a credential. Each half is percent-
+// escaped (%25 → %, %2F → /) so a '/' or '%' in a foreign SS attribute can
+// neither collide with the separator nor forge another item's key — URL-keyed
+// services (https://…) are a real credential-manager convention. Paired with
+// the strings.Cut + unescKeyPart split in List.
+func nativeKey(service, account string) string {
+	return escKeyPart(service) + "/" + escKeyPart(account)
+}
+
+func escKeyPart(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	return strings.ReplaceAll(s, "/", "%2F")
+}
+
+// unescKeyPart reverses escKeyPart; unknown %-sequences pass through
+// untouched so keys written before escaping shipped (plain svc/acct) still
+// read correctly.
+func unescKeyPart(s string) string {
+	s = strings.ReplaceAll(s, "%2F", "/")
+	return strings.ReplaceAll(s, "%25", "%")
+}
 
 const (
 	nativeIdentityFile = "identity.age"
@@ -260,10 +277,11 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(d.Items))
 	for k, it := range d.Items {
-		svc, acct, ok := strings.Cut(k, "/")
-		if !ok || svc == "" || acct == "" {
+		rawSvc, rawAcct, ok := strings.Cut(k, "/")
+		if !ok || rawSvc == "" || rawAcct == "" {
 			continue
 		}
+		svc, acct := unescKeyPart(rawSvc), unescKeyPart(rawAcct)
 		if service != "" && svc != service {
 			continue
 		}
