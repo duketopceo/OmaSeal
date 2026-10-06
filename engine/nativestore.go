@@ -59,6 +59,12 @@ type nativeItem struct {
 	CT      string `json:"ct"`
 	Created int64  `json:"created"`
 	Updated int64  `json:"updated"`
+	// External marks provenance: true means the item originated outside
+	// OmaSeal (carried over a migration); false/zero means OmaSeal wrote it.
+	// Inverted on purpose: records predating this field unmarshal as
+	// External=false → Owned=true, the correct default while only omaseal
+	// writes the native store.
+	External bool `json:"external,omitempty"`
 }
 
 // nativeEnvelope binds the plaintext to its name — a ciphertext moved under
@@ -78,7 +84,13 @@ type nativeSession struct {
 var (
 	errNativeLocked = errors.New("store locked")
 	errNativeTamper = errors.New("value not bound to this name")
+	errItemExists   = errors.New("item already present")
 )
+
+// nativeKey is the store.json key for a credential — the join paired with
+// the strings.Cut split in List. Shares the namespace collision class every
+// other "/" join in the codebase accepts.
+func nativeKey(service, account string) string { return service + "/" + account }
 
 const (
 	nativeIdentityFile = "identity.age"
@@ -117,6 +129,18 @@ func newNativeStoreAt(dir, runtimeDir string) *nativeStore {
 
 // Set encrypts value to the public recipient — works while locked.
 func (s *nativeStore) Set(service, account, secret string) error {
+	return s.set(service, account, secret, true, false)
+}
+
+// migrateSet is Set with carried provenance — used by `omaseal migrate` so an
+// item written by another tool keeps its external flag in the native store.
+// Set-if-absent under the flock: a concurrent Set landing between the
+// migrate presence check and this write must not be overwritten (errItemExists).
+func (s *nativeStore) migrateSet(service, account, secret string, owned bool) error {
+	return s.set(service, account, secret, owned, true)
+}
+
+func (s *nativeStore) set(service, account, secret string, owned, ifAbsent bool) error {
 	if service == "" || account == "" || secret == "" {
 		return errors.New("service, account, and secret must not be empty")
 	}
@@ -135,16 +159,26 @@ func (s *nativeStore) Set(service, account, secret string) error {
 	if err := w.Close(); err != nil {
 		return keyringError(err)
 	}
-	key := service + "/" + account
-	return s.update(func(d *nativeDoc) {
+	key := nativeKey(service, account)
+	var existed bool
+	err = s.update(func(d *nativeDoc) {
+		if _, ok := d.Items[key]; ok && ifAbsent {
+			existed = true
+			return
+		}
 		it, ok := d.Items[key]
 		if !ok {
 			it.Created = s.now().Unix()
 		}
 		it.CT = base64.StdEncoding.EncodeToString(buf.Bytes())
 		it.Updated = s.now().Unix()
+		it.External = !owned
 		d.Items[key] = it
 	})
+	if existed {
+		return errItemExists
+	}
+	return err
 }
 
 // Get decrypts the value bound to service/account — needs the identity.
@@ -159,7 +193,7 @@ func (s *nativeStore) Get(service, account string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	it, ok := d.Items[service+"/"+account]
+	it, ok := d.Items[nativeKey(service, account)]
 	if !ok {
 		return "", newError("not_found", "omaseal set", keyring.ErrNotFound)
 	}
@@ -196,7 +230,7 @@ func (s *nativeStore) Delete(service, account string) error {
 	if err := s.ensureInit(); err != nil {
 		return err
 	}
-	key := service + "/" + account
+	key := nativeKey(service, account)
 	var found bool
 	err := s.update(func(d *nativeDoc) {
 		if _, ok := d.Items[key]; ok {
@@ -239,7 +273,7 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 			Label:     fmt.Sprintf("OmaSeal: %s / %s", svc, acct),
 			CreatedAt: time.Unix(it.Created, 0).UTC(),
 			UpdatedAt: time.Unix(it.Updated, 0).UTC(),
-			Owned:     true,
+			Owned:     !it.External,
 		})
 	}
 	return items, nil
@@ -429,6 +463,13 @@ func (s *nativeStore) initFresh() error {
 		return newError("store_uninitialized",
 			"run `omaseal get` once in a terminal to initialize the native store",
 			errors.New("no identity at "+filepath.Join(s.dir, nativeIdentityFile)))
+	}
+	// Every production prompt is TTY-only — fail before touching the
+	// filesystem so a non-TTY first-touch leaves no stray dir+lock.
+	if !stdinIsTTY() {
+		return newError("store_uninitialized",
+			"run `omaseal get` once in a terminal to initialize the native store",
+			errors.New("no tty"))
 	}
 	if err := os.MkdirAll(s.dir, 0700); err != nil {
 		return keyringError(err)
