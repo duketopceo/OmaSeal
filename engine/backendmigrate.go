@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 )
 
 // backendmigrate.go implements `omaseal migrate` — a one-shot bulk copy from
@@ -72,14 +71,6 @@ func migrateItems(src itemSource, dst *nativeStore, dryRun bool) (*migrateSummar
 	for _, it := range items {
 		if it.Service == "" || it.Account == "" {
 			continue // unaddressable — same rule List applies
-		}
-		if strings.Contains(it.Service, "/") {
-			// The svc+"/"+acct key space can't round-trip a slash in the
-			// service half — List splits at the first "/" — so migrating it
-			// would create an entry that reads back mislabeled and fails the
-			// envelope check as apparent tamper. Name it failed instead.
-			fail(nativeKey(it.Service, it.Account), errors.New("service name contains '/' — unsupported in the native key space"))
-			continue
 		}
 		key := nativeKey(it.Service, it.Account)
 		if prev, ok := byKey[key]; !ok || (it.Owned && !prev.Owned) {

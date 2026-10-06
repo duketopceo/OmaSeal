@@ -133,6 +133,16 @@ data path, must not corrupt either store.
   init writes `identity.age`/`identity.pub`, never secret values. The
   alternative (dry-run on a non-existent store) can't evaluate presence
   and gives a worse error later.
+- **RISK-9 (caught live, fixed): `/` and `%` in foreign attributes.** The
+  first real run found 17 items keyed with URL service names
+  (`https://…`) — a credential-manager convention, not pathological data.
+  Rejecting them would leave real secrets unreachable post-flip. Fix:
+  `nativeKey` percent-escapes each half (`%`→`%25` first, `/`→`%2F`) and
+  `List` unescapes leniently — plain-name keys are escape-invariant, so
+  stores written pre-escape read unchanged. Edge accepted: a *Get* on a
+  pre-escape account-with-slash key (`svc/a/b`) misses (looks for
+  `svc/a%2Fb`); population is nil (backend shipped the same day), and
+  re-running `migrate` rewrites under the new format anyway.
 - **Follow-ups recorded, not in diff scope:** `sanitizeField` passes C1
   controls (U+0080–U+009F) and has no length cap — same gap `list`/
   `stats` already have; fix the shared helper separately. `confirm` is

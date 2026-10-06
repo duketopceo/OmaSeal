@@ -258,22 +258,31 @@ func TestMigrateConsecAbort(t *testing.T) {
 	}
 }
 
-// A '/' in the service half cannot round-trip the svc/acct key space —
-// migrate names it failed rather than writing a key that reads back as
-// apparent tamper (or silently colliding with a different item's key).
-func TestMigrateSlashServiceRejected(t *testing.T) {
+// '/'- and '%'-bearing names — URL-keyed services are a real credential-
+// manager convention — must migrate and round-trip through the escaped
+// key space, not be rejected or mis-split.
+func TestMigrateSlashServiceRoundTrips(t *testing.T) {
+	// Escaped keys keep the collision classes distinct:
+	// ("a/b","c") → a%2Fb/c   ("a","b/c") → a/b%2Fc   ("a/b","c") ≠ ("a","b/c")
+	if nativeKey("a/b", "c") == nativeKey("a", "b/c") {
+		t.Fatal("escaped keys collide — foreign attributes can alias items")
+	}
 	dst, _ := nativeTestStore(t)
 	initNative(t, dst, "slash-pass")
 	src := &fakeSource{
 		items: []Item{
-			{Service: "a/b", Account: "c"},           // rejected
-			{Service: "ok", Account: "deep/x/y"},     // account slashes round-trip
-			{Service: "uni service ☃", Account: "u"}, // spaces/unicode fine
+			{Service: "https://login.sofi.com", Account: "user@x.com"},
+			{Service: "a/b", Account: "c"},
+			{Service: "pct%2Fsvc", Account: "k"},
+			{Service: "ok", Account: "deep/x/y"},
+			{Service: "uni service ☃", Account: "u"},
 		},
 		vals: map[string]string{
-			"a/b/c":           "v1",
-			"ok/deep/x/y":     "v2",
-			"uni service ☃/u": "v3",
+			"https://login.sofi.com/user@x.com": "v1",
+			"a/b/c":                             "v2",
+			"pct%2Fsvc/k":                       "v3",
+			"ok/deep/x/y":                       "v4",
+			"uni service ☃/u":                   "v5",
 		},
 		errs: map[string]error{},
 	}
@@ -281,26 +290,37 @@ func TestMigrateSlashServiceRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrateItems: %v", err)
 	}
-	if res.Migrated != 2 || res.Failed != 1 {
-		t.Fatalf("summary = %+v, want migrated 2 failed 1", res)
+	if res.Migrated != 5 || res.Failed != 0 {
+		t.Fatalf("summary = %+v, want migrated 5 failed 0", res)
 	}
-	got, err := dst.Get("ok", "deep/x/y")
-	if err != nil || got != "v2" {
-		t.Fatalf("Get(ok deep/x/y) = %q, %v", got, err)
+	for _, tc := range []struct{ svc, acct, want string }{
+		{"https://login.sofi.com", "user@x.com", "v1"},
+		{"a/b", "c", "v2"},
+		{"pct%2Fsvc", "k", "v3"},
+		{"ok", "deep/x/y", "v4"},
+		{"uni service ☃", "u", "v5"},
+	} {
+		got, err := dst.Get(tc.svc, tc.acct)
+		if err != nil || got != tc.want {
+			t.Fatalf("Get(%q %q) = %q, %v", tc.svc, tc.acct, got, err)
+		}
 	}
-	got, err = dst.Get("uni service ☃", "u")
-	if err != nil || got != "v3" {
-		t.Fatalf("Get(uni service) = %q, %v", got, err)
-	}
-	// The rejected key must not exist in any form — a mis-split a/b/c
-	// would list back as service "a", account "b/c".
+	// List must unescape back to the original names — exact-match membership
+	// (a mis-split a/b/c would surface as "a"/"b/c" and fail this check).
 	items, err := dst.List("")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
+	found := map[string]bool{}
 	for _, it := range items {
-		if it.Service == "a" && it.Account == "b/c" {
-			t.Fatalf("slash-service item leaked into store as %s/%s", it.Service, it.Account)
+		found[it.Service+"\x00"+it.Account] = true
+	}
+	for _, want := range [][2]string{
+		{"https://login.sofi.com", "user@x.com"}, {"a/b", "c"},
+		{"pct%2Fsvc", "k"}, {"ok", "deep/x/y"}, {"uni service ☃", "u"},
+	} {
+		if !found[want[0]+"\x00"+want[1]] {
+			t.Fatalf("List missing %s/%s", want[0], want[1])
 		}
 	}
 }
