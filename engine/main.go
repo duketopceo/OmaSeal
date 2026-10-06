@@ -53,6 +53,7 @@ Usage:
   omaseal sudo [-r svc/acct] -- <cmd>      feed your sudo password after a presence check
   omaseal import 1password [vault]         import all 1Password items
   omaseal import bitwarden                 import all Bitwarden items
+  omaseal migrate [--dry-run] [-y]         copy every Secret Service item into the native store
   omaseal mcp                              start MCP stdio server
   omaseal mcp install <agent> [--dir .]    write mcp config for one agent
   omaseal mcp install-detected             wire every detected + assigned agent
@@ -164,6 +165,8 @@ func main() {
 		handleDoctor()
 	case "keyring":
 		runKeyring(os.Args[2:])
+	case "migrate":
+		handleMigrate(os.Args[2:])
 	case "logs":
 		handleLogs()
 	case "setup":

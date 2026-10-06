@@ -18,6 +18,9 @@ import (
 // the winner's identity. A mismatched identity.age/identity.pub pair would
 // encrypt to a key nobody can unwrap: silent, permanent data loss.
 func TestNativeInitRace(t *testing.T) {
+	oldTTY := stdinIsTTY
+	stdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { stdinIsTTY = oldTTY })
 	dir := t.TempDir()
 	rt := t.TempDir()
 	const n = 8
@@ -75,6 +78,10 @@ func TestNativeHealPub(t *testing.T) {
 // prompt — tests set prompt to drive init/unlock without a TTY.
 func nativeTestStore(t *testing.T) (*nativeStore, string) {
 	t.Helper()
+	// initFresh refuses to write without a TTY — tests stand in for one.
+	oldTTY := stdinIsTTY
+	stdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { stdinIsTTY = oldTTY })
 	dir := t.TempDir()
 	rt := t.TempDir()
 	return newNativeStoreAt(dir, rt), dir
