@@ -61,6 +61,7 @@ func emitCheckJSON(results []checkResult, help string) {
 func doctorChecks() []checkResult {
 	checks := []func() checkResult{
 		checkBinary,
+		checkBackend,
 		checkSecretService,
 		checkKeyringEncryption,
 		checkFprintd,
@@ -139,6 +140,35 @@ func checkBinary() checkResult {
 
 func versionInfo() string {
 	return fmt.Sprintf("omaseal %s (%s) %s", version, commit, target())
+}
+
+// checkBackend reports the configured backend and, for native, whether the
+// store is initialized and a session window is live. Informational — an
+// uninitialized native store degrades to a warning, not a doctor failure.
+func checkBackend() checkResult {
+	cfg, _ := loadConfig()
+	if cfg.Backend != "native" {
+		return checkResult{name: "backend", ok: true, optional: true,
+			message: "secretservice — gnome-keyring login collection"}
+	}
+	ns := newNativeStore()
+	if _, err := os.Stat(filepath.Join(ns.dir, nativeIdentityFile)); err != nil {
+		return checkResult{name: "backend", ok: false, optional: true,
+			message: "native — not initialized (run `omaseal migrate` or `omaseal get` in a terminal)"}
+	}
+	msg := "native — age-encrypted store"
+	raw, err := os.ReadFile(filepath.Join(ns.runtimeDir, nativeSessJSONFile))
+	if err == nil {
+		var sess nativeSession
+		if json.Unmarshal(raw, &sess) == nil && time.Now().Unix() <= sess.Expires {
+			msg += ", session live"
+		} else {
+			msg += ", session expired"
+		}
+	} else {
+		msg += ", locked"
+	}
+	return checkResult{name: "backend", ok: true, optional: true, message: msg}
 }
 
 func checkSecretService() checkResult {
