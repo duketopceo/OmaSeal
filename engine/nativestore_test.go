@@ -296,8 +296,18 @@ func TestNativeSessionIdentity(t *testing.T) {
 		t.Fatalf("expired session should be locked, got %v", err)
 	}
 
+	// Expiry scrubs the session pair — key material must not linger.
+	if _, err := os.Stat(filepath.Join(s.runtimeDir, nativeSessJSONFile)); !os.IsNotExist(err) {
+		t.Fatal("expired session json should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(s.runtimeDir, nativeSessAgeFile)); !os.IsNotExist(err) {
+		t.Fatal("expired session age should be removed")
+	}
+
 	// clearNativeSession drops the runtime files.
-	s2.clearNativeSession()
+	if err := s2.clearNativeSession(); err != nil {
+		t.Fatalf("clearNativeSession: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(s.runtimeDir, nativeSessJSONFile)); !os.IsNotExist(err) {
 		t.Fatal("session json should be removed on clear")
 	}

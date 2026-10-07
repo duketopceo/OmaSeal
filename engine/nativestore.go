@@ -395,6 +395,10 @@ func (s *nativeStore) seedSession(expires time.Time) error {
 }
 
 // loadSession unwraps the tmpfs session identity if present and unexpired.
+// An expired session is unlinked — key material must not outlive its
+// window. Corrupt sessions are left in place: seedSession writes the
+// .json/.age pair as two atomic renames, so a torn pair is a mid-write
+// window a concurrent reader must not mistake for dead files.
 func (s *nativeStore) loadSession() error {
 	raw, err := os.ReadFile(filepath.Join(s.runtimeDir, nativeSessJSONFile))
 	if err != nil {
@@ -405,6 +409,9 @@ func (s *nativeStore) loadSession() error {
 		return err
 	}
 	if s.now().Unix() > sess.Expires {
+		if rerr := s.unlinkSessionFiles(); rerr != nil {
+			return fmt.Errorf("session expired (cleanup failed: %w)", rerr)
+		}
 		return errNativeLocked
 	}
 	sid, err := age.ParseX25519Identity(sess.Key)
@@ -431,12 +438,29 @@ func (s *nativeStore) loadSession() error {
 	return nil
 }
 
+// unlinkSessionFiles removes the tmpfs session pair, reporting removal
+// failures so callers cannot mistake retained key material for scrubbed
+// material. Missing files are not errors.
+func (s *nativeStore) unlinkSessionFiles() error {
+	return errors.Join(
+		removeIfExists(filepath.Join(s.runtimeDir, nativeSessJSONFile)),
+		removeIfExists(filepath.Join(s.runtimeDir, nativeSessAgeFile)),
+	)
+}
+
+func removeIfExists(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // clearNativeSession removes the tmpfs session identity — called by
 // `agent lock` so locking the agent also drops the unwrapped key path.
-func (s *nativeStore) clearNativeSession() {
+func (s *nativeStore) clearNativeSession() error {
 	s.identity = nil
-	_ = os.Remove(filepath.Join(s.runtimeDir, nativeSessJSONFile))
-	_ = os.Remove(filepath.Join(s.runtimeDir, nativeSessAgeFile))
+	return s.unlinkSessionFiles()
 }
 
 // --- init / file layer -----------------------------------------------------
