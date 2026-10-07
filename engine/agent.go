@@ -187,10 +187,11 @@ func readSessionExpiry() (time.Time, bool) {
 }
 
 func clearAgentSession() error {
+	var nerr error
 	if ns, ok := currentStore.(*nativeStore); ok {
-		ns.clearNativeSession()
+		nerr = ns.clearNativeSession()
 	}
-	return os.Remove(agentSessionPath())
+	return errors.Join(nerr, removeIfExists(agentSessionPath()))
 }
 
 // AgentMode returns the current mode for use in status/CLI output.

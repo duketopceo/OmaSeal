@@ -282,7 +282,9 @@ func TestNativeSessionIdentity(t *testing.T) {
 	}
 
 	// clearNativeSession drops the runtime files.
-	s2.clearNativeSession()
+	if err := s2.clearNativeSession(); err != nil {
+		t.Fatalf("clearNativeSession: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(s.runtimeDir, nativeSessJSONFile)); !os.IsNotExist(err) {
 		t.Fatal("session json should be removed on clear")
 	}
