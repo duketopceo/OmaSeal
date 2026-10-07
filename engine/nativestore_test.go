@@ -243,6 +243,29 @@ func TestNativeTamperEvidence(t *testing.T) {
 	}
 }
 
+// `omaseal agent unlock` calls unlockIdentity on a store that never ran
+// ensureInit — it must load the wrapped blob itself (regression: nil
+// identityEnc produced "parsing age header: file is empty").
+func TestUnlockIdentityLazyLoadsBlob(t *testing.T) {
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	if err := s.Set("svc", "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := newNativeStoreAt(s.dir, s.runtimeDir)
+	s2.prompt = nil
+	if s2.identityEnc != nil {
+		t.Fatal("precondition: fresh store has no identityEnc")
+	}
+	if err := s2.unlockIdentity("test-pass", s2.now().Add(time.Minute)); err != nil {
+		t.Fatalf("unlockIdentity on un-initialized store: %v", err)
+	}
+	if got, err := s2.Get("svc", "k"); err != nil || got != "v" {
+		t.Fatalf("get after lazy unlock: got=%q err=%v", got, err)
+	}
+}
+
 // Session: unlock seeds tmpfs files; a fresh store instance unwraps from
 // them without the passphrase; expiry locks again.
 func TestNativeSessionIdentity(t *testing.T) {

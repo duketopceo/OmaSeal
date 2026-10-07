@@ -304,6 +304,16 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 // expires. A wrong passphrase is a failed read — nothing on disk is touched
 // (invariant I2).
 func (s *nativeStore) unlockIdentity(passphrase string, expires time.Time) error {
+	if s.identityEnc == nil {
+		blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
+		if errors.Is(err, os.ErrNotExist) {
+			return newError("store_uninitialized", "omaseal get (or migrate) in a terminal first", err)
+		}
+		if err != nil {
+			return keyringError(err)
+		}
+		s.identityEnc = blob
+	}
 	sid, err := age.NewScryptIdentity(passphrase)
 	if err != nil {
 		return keyringError(err)
