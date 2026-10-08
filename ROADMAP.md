@@ -82,13 +82,16 @@
 
 ## v0.6.0 — Marketplace stable
 
-- Marketplace revalidation: HEAD is `547ff45` — a 4-agent pentest found and
-  this tree fixed real bypasses (env-suppressed presence gate, PATH
-  prompter shims, dead DENY rules on spaced names), and the audit log is
-  now hash-chained so same-uid history rewriting is provable once a head
-  is anchored externally. Residual design limits are documented in
-  README: manifest/presence govern the MCP+IPC agent channel; same-uid
-  shell processes are outside confinement by design.
+- [x] Marketplace revalidation (#45): manifest/README/onboarding claims
+  re-audited at HEAD post-native-backend and drift fixed — description
+  names the opt-in native store, `migrate`/`stats` documented, the
+  live-session same-uid exposure stated plainly. Installed plugin
+  converted to a git-managed checkout (`omarchy plugin update` works).
+  Prior pass at `547ff45`: a 4-agent pentest found and this tree fixed
+  real bypasses (env-suppressed presence gate, PATH prompter shims, dead
+  DENY rules on spaced names), and the audit log is hash-chained so
+  same-uid history rewriting is provable once a head is anchored
+  externally.
 - Issue #12: AUR `omaseal-bin` — registration portal closed; blocked on a
   human browser step when registration reopens.
 - First-party Omarchy integration: `omarchy-secrets-*` commands +
