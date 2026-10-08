@@ -272,3 +272,46 @@ func TestChainedLinesParse(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeField(t *testing.T) {
+	tests := []struct {
+		name  string
+		in    string
+		want  string
+	}{
+		{"plain", "normal-name_123", "normal-name_123"},
+		{"c0 controls", "a\x00b\x1fc", "abc"},
+		{"newline stripped", "a\nb", "ab"},
+		{"del stripped", "a\x7fb", "ab"},
+		{"c1 controls", "a\u0080b\u009fc", "abc"},
+		{"csi via c1", "evil\u009b[0mname", "evil[0mname"},
+		{"unicode kept", "名前", "名前"},
+	}
+	for _, tt := range tests {
+		if got := sanitizeField(tt.in); got != tt.want {
+			t.Errorf("%s: sanitizeField(%q) = %q, want %q", tt.name, tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeFieldLengthCap(t *testing.T) {
+	long := strings.Repeat("a", maxSanitizeRunes+50)
+	got := sanitizeField(long)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatal("capped field should carry the truncation marker")
+	}
+	if got := len([]rune(strings.TrimSuffix(got, "…"))); got != maxSanitizeRunes {
+		t.Fatalf("kept %d runes, want %d", got, maxSanitizeRunes)
+	}
+	// Exactly at the cap: no marker.
+	exact := strings.Repeat("b", maxSanitizeRunes)
+	if got := sanitizeField(exact); got != exact {
+		t.Fatal("at-cap field should pass through unmarked")
+	}
+	// Stripped controls don't consume the cap.
+	mixed := strings.Repeat("\u0080", 500) + strings.Repeat("c", maxSanitizeRunes)
+	got = strings.TrimSuffix(sanitizeField(mixed), "…")
+	if n := len([]rune(got)); n != maxSanitizeRunes {
+		t.Fatalf("controls should not count toward cap, kept %d runes", n)
+	}
+}

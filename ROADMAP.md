@@ -59,6 +59,26 @@
   in analytics (#31)
 - [x] Postmortem — login.keyring silent re-key incident documented with
   the destructive-test isolation checklist (#29)
+- [x] `Store` interface extraction behind `currentStore` — the backend
+  seam all stores satisfy (#35)
+- [x] Native age-encrypted backend — `backend: native` opt-in: asymmetric
+  `Set`-while-locked, passphrase-scrypt identity, tmpfs session rewrap,
+  flock-serialized atomic store, tamper-evident envelope. Eliminates the
+  re-key class by construction (#38)
+- [x] `omaseal migrate` — bulk copy Secret Service → native: idempotent,
+  per-item failure isolation, provenance carried, source never written,
+  `--dry-run`, consecutive-failure abort (#40)
+- [x] Native key escaping — `%`/`/` percent-escaping so URL-shaped foreign
+  service names (`https://…`) round-trip without collision (#41)
+- [x] Session hygiene — expired sessions unlink their key files on read;
+  `agent lock` propagates removal errors; corrupt-path unlinking
+  deliberately avoided (torn-pair race) (#42)
+- [x] `agent unlock` lazy-init — `unlockIdentity` loads the wrapped blob
+  itself; the agent path no longer depends on a prior `ensureInit` (#43)
+- [x] `sanitizeField` hardening — C1 controls (U+0080–9F) stripped,
+  200-rune cap with truncation marker on all foreign metadata output
+- [x] `omaseal doctor` backend line — reports configured backend,
+  native init state, and session liveness
 
 ## v0.6.0 — Marketplace stable
 
@@ -108,10 +128,22 @@ Partially mitigated: the audit log is hash-chained (`logs verify` /
 off the state dir — detection of rewriting, not prevention of same-uid
 writes.
 
-Native encrypted backend: spike **greenlit**
-(`docs/design/native-store.md`) — asymmetric `Set`-while-locked
-eliminates the Sept-30 re-key class by construction; all six PoC
-invariants proven. Next build step: `Store` interface extraction behind
-the existing swap vars, then `backend: native` as opt-in config
-(Secret Service stays default). The different-uid helper daemon — the
-only real same-uid confinement — stays a separate design track.
+Native encrypted backend: **shipped and live** (#38, plus migrate #40,
+key escaping #41, session hygiene #42, agent-unlock lazy-init #43).
+Verified end-to-end on a real keyring: 773 items migrated, list parity,
+byte-identical spot checks, rollback = one config line.
+
+A post-flip red team exercised the same-uid surface concretely: while a
+native session is live, `native-session.json` holds the ephemeral key in
+plaintext and `native-session.age` re-wraps the real identity to it —
+two file reads yield every store item with zero passphrase, bypassing
+the CLI entirely (demonstrated 773/773). Expired session key files are
+scrubbed when a later identity load detects expiry (#42) — not on a
+timer — but a live session is plaintext-equivalent key material by design.
+`identity.age` offline brute-force (~500 ms/guess via scrypt) remains the
+only real at-rest gate once no session exists.
+
+That hardens the case for the different-uid helper daemon — the only real
+same-uid confinement: it would hold the identity in *its* memory, leaving
+nothing readable on tmpfs at all. Stays a separate design track before
+v1.0 if agent isolation becomes a requirement rather than a convenience.

@@ -405,15 +405,32 @@ func handleStats() {
 	}
 }
 
+// maxSanitizeRunes caps a sanitized metadata field — a hostile item name
+// must not flood a log line or terminal scrollback with megabytes of text.
+const maxSanitizeRunes = 200
+
 // sanitizeField strips control characters from keyring metadata before it
-// reaches a terminal, log line, or generated file. Foreign items can carry
-// arbitrary attribute strings; OmaSeal-written names are already
-// charset-constrained by validComponent.
+// reaches a terminal, log line, or generated file — C0, DEL, and C1
+// (U+0080–U+009F, where single-byte CSI/SGR-equivalent controls live).
+// Foreign items can carry arbitrary attribute strings; OmaSeal-written
+// names are already charset-constrained by validComponent. Output is
+// capped at maxSanitizeRunes with a visible truncation marker.
 func sanitizeField(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+	n := 0
+	truncated := false
+	out := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return -1
 		}
+		if n >= maxSanitizeRunes {
+			truncated = true
+			return -1
+		}
+		n++
 		return r
 	}, s)
+	if truncated {
+		out += "…"
+	}
+	return out
 }
