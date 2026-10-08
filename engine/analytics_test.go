@@ -309,7 +309,7 @@ func TestSanitizeFieldLengthCap(t *testing.T) {
 		t.Fatal("at-cap field should pass through unmarked")
 	}
 	// Stripped controls don't consume the cap.
-	mixed := strings.Repeat("\x80", 500) + strings.Repeat("c", maxSanitizeRunes)
+	mixed := strings.Repeat("\u0080", 500) + strings.Repeat("c", maxSanitizeRunes)
 	got = strings.TrimSuffix(sanitizeField(mixed), "…")
 	if n := len([]rune(got)); n != maxSanitizeRunes {
 		t.Fatalf("controls should not count toward cap, kept %d runes", n)

@@ -146,7 +146,11 @@ func versionInfo() string {
 // store is initialized and a session window is live. Informational — an
 // uninitialized native store degrades to a warning, not a doctor failure.
 func checkBackend() checkResult {
-	cfg, _ := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		return checkResult{name: "backend", ok: false, optional: true,
+			message: fmt.Sprintf("cannot read %s: %v", omasealConfigPath(), err)}
+	}
 	if cfg.Backend != "native" {
 		return checkResult{name: "backend", ok: true, optional: true,
 			message: "secretservice — gnome-keyring login collection"}
@@ -172,7 +176,19 @@ func checkBackend() checkResult {
 }
 
 func checkSecretService() checkResult {
+	// On backend: native the daemon is optional infrastructure — needed only
+	// for `omaseal migrate` and the secretservice rollback, not for reads.
+	cfg, cfgErr := loadConfig()
+	nativeBackend := cfgErr == nil && cfg.Backend == "native"
+	degraded := func(msg string) checkResult {
+		return checkResult{name: "secret-service", ok: !nativeBackend, optional: nativeBackend,
+			message: msg}
+	}
+
 	if !commandExists("gnome-keyring-daemon") {
+		if nativeBackend {
+			return degraded("backend is native — gnome-keyring not needed (needed only for `omaseal migrate` / secretservice rollback)")
+		}
 		return checkResult{
 			name: "secret-service",
 			ok:   false,
@@ -189,6 +205,9 @@ func checkSecretService() checkResult {
 		return checkResult{name: "secret-service", ok: true, message: "gnome-keyring-daemon is running"}
 	}
 
+	if nativeBackend {
+		return degraded("gnome-keyring-daemon not running — harmless on backend: native (needed only for `omaseal migrate` / secretservice rollback)")
+	}
 	return checkResult{
 		name: "secret-service",
 		ok:   false,
