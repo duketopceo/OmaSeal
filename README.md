@@ -8,9 +8,10 @@
 
 ![OmaSeal Quickshell panel](screenshot.png)
 
-OmaSeal stores API keys and other secrets in the `gnome-keyring` you already
-have, then gives every agent and plugin a single `service / account` interface
-to get them back.
+OmaSeal stores API keys and other secrets in your system keyring —
+`gnome-keyring` by default, or its own age-encrypted store
+(`{"backend": "native"}`) — then gives every agent and plugin a single
+`service / account` interface to get them back.
 
 No more `.env` files, no more `~/.config/<app>/config.json` secrets, no more
 copy-pasting API keys into dotfiles. Store once. Use everywhere.
@@ -156,6 +157,12 @@ omaseal import bitwarden
 omaseal keyring status
 omaseal keyring migrate [--dry-run] [--delete-old] [-y]
 
+# Copy every Secret Service item into the native store (idempotent, source untouched)
+omaseal migrate [--dry-run] [-y]
+
+# Usage analytics — what accessed which secrets, and when
+omaseal stats [--json]
+
 # Everywhere <service> <account> works, an omaseal:// reference works too
 omaseal get omaseal://openrouter/default
 omaseal resolve omaseal://browseros/openrouter-work/apiKey
@@ -249,8 +256,9 @@ and `omaseal://` reference grammar every consumer should follow.
   tmpfs session identity (dies at logout, cleared by `agent lock`). A wrong
   passphrase is a failed read, never a write — a failed unlock cannot
   re-key the store. `secretservice` remains the default; the native store
-  keeps its own items under `$XDG_STATE_HOME/omaseal/native/` (nothing is
-  migrated automatically — `omaseal set` re-stores what you need).
+  keeps its own items under `$XDG_STATE_HOME/omaseal/native/` — nothing
+  moves automatically, but `omaseal migrate` bulk-copies the whole login
+  collection idempotently and never modifies the source keyring.
 - `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
   CLI verb (never an MCP/IPC surface). Every attempt requires the strict
   presence gate plus a rate limit (single-pending lock, 5 attempts per

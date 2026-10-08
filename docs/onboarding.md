@@ -13,7 +13,11 @@ omaseal ping --json
 
 This checks:
 - the binary and its version
-- the `gnome-keyring-daemon` Secret Service backend
+- the configured backend (`secretservice` or `native`) — on native, whether
+  the store is initialized and a session window is live
+- the `gnome-keyring-daemon` Secret Service backend (required on
+  `secretservice`, informational on `native` — still needed for
+  `omaseal migrate` and rollback)
 - `fprintd` for biometric `reveal`
 - the presence gate behind `agent unlock`/`reveal` — fingerprint, GUI
   confirm, deliberate `allow_ungated`, or fail-closed `none`

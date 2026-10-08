@@ -5,7 +5,7 @@
   "version": "0.4.0",
   "author": "duketopceo",
   "license": "MIT",
-  "description": "A system keyring manager for Omarchy. Brings macOS Keychain-style secret storage to the bar and panel, built on the existing gnome-keyring / libsecret stack.",
+  "description": "A system keyring manager for Omarchy. Brings macOS Keychain-style secret storage to the bar and panel — gnome-keyring/libsecret by default, with an opt-in age-encrypted native store.",
   "kinds": [
     "bar-widget"
   ],
