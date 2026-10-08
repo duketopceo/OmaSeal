@@ -162,15 +162,18 @@ func checkBackend() checkResult {
 	}
 	msg := "native — age-encrypted store"
 	raw, err := os.ReadFile(filepath.Join(ns.runtimeDir, nativeSessJSONFile))
-	if err == nil {
-		var sess nativeSession
-		if json.Unmarshal(raw, &sess) == nil && time.Now().Unix() <= sess.Expires {
-			msg += ", session live"
-		} else {
-			msg += ", session expired"
-		}
-	} else {
+	if err != nil {
 		msg += ", locked"
+	} else {
+		var sess nativeSession
+		switch {
+		case json.Unmarshal(raw, &sess) != nil || time.Now().Unix() > sess.Expires:
+			msg += ", session expired"
+		case ns.loadSession() != nil:
+			msg += ", locked"
+		default:
+			msg += ", session live"
+		}
 	}
 	return checkResult{name: "backend", ok: true, optional: true, message: msg}
 }

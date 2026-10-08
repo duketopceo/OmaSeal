@@ -137,8 +137,9 @@ A post-flip red team exercised the same-uid surface concretely: while a
 native session is live, `native-session.json` holds the ephemeral key in
 plaintext and `native-session.age` re-wraps the real identity to it —
 two file reads yield every store item with zero passphrase, bypassing
-the CLI entirely (demonstrated 773/773). Expired sessions now self-scrub
-(#42), but a live session is plaintext-equivalent key material by design.
+the CLI entirely (demonstrated 773/773). Expired session key files are
+scrubbed when a later identity load detects expiry (#42) — not on a
+timer — but a live session is plaintext-equivalent key material by design.
 `identity.age` offline brute-force (~500 ms/guess via scrypt) remains the
 only real at-rest gate once no session exists.
 
