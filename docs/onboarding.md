@@ -13,7 +13,11 @@ omaseal ping --json
 
 This checks:
 - the binary and its version
-- the `gnome-keyring-daemon` Secret Service backend
+- the configured backend (`secretservice` or `native`) — on native, whether
+  the store is initialized and a session window is live
+- the `gnome-keyring-daemon` Secret Service backend (required on
+  `secretservice`, informational on `native` — still needed for
+  `omaseal migrate` and rollback)
 - `fprintd` for biometric `reveal`
 - the presence gate behind `agent unlock`/`reveal` — fingerprint, GUI
   confirm, deliberate `allow_ungated`, or fail-closed `none`
@@ -52,7 +56,7 @@ Available tools: `omaseal_get`, `omaseal_resolve`, `omaseal_set`, `omaseal_delet
 
 **Per-secret AI policy (ai-manifest):** `~/.config/omaseal/ai-manifest.txt` is a robots.txt-style file governing agent (MCP) access per secret: `ALLOW` reads freely, `ASK` requires an unlocked session even in open mode (`omaseal agent unlock` creates one), `DENY` refuses the call with code `manifest_denied` and hides the credential from `omaseal_list`/`omaseal_stats`. Generate a starting manifest with `omaseal manifest init`, inspect it with `omaseal manifest`, and query a rule with `omaseal manifest check <service> <account>`.
 
-Scope: the manifest and agent trust modes gate **agent channels only** — the MCP server that wired agents use. The CLI and the JSON IPC channel are trusted local surfaces for the user, the panel, and shell plugins; they bypass agent modes and the manifest, and should only be invoked by same-user programs. An agent with unrestricted shell access can bypass the policy entirely — DENY governs the sanctioned agent path, it is not OS-level confinement.
+Scope: the manifest and agent trust modes gate **agent channels only** — the MCP server that wired agents use. The CLI and the JSON IPC channel are trusted local surfaces for the user, the panel, and shell plugins; they bypass agent modes and the manifest, and should only be invoked by same-user programs. An agent with unrestricted shell access can bypass the policy entirely — DENY governs the sanctioned agent path, it is not OS-level confinement. On `backend: native` this goes further: a live session leaves `native-session.json`/`native-session.age` on tmpfs, which is plaintext-equivalent key material — any same-uid process can unwrap the identity and decrypt the store until expiry is detected (the pair is scrubbed on the next load after expiry, and immediately by `omaseal agent lock`).
 
 Agents should:
 - call `omaseal_set` or `omaseal_resolve` rather than reading dotfiles

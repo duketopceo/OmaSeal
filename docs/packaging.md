@@ -14,7 +14,10 @@ only), so the sole hard dep is the `org.freedesktop.secrets` virtual
 provide (gnome-keyring satisfies it on Omarchy). `fprintd`,
 `wl-clipboard`, and `pinentry` are optdepends. namcap will report
 `org.freedesktop.secrets` as "not needed" — a known false positive for
-D-Bus runtime deps; do not drop it to silence the linter.
+D-Bus runtime deps; do not drop it to silence the linter. The native
+backend (`backend: native`) does not soften this: it is opt-in, and
+Secret Service remains the default backend plus the migration source
+and rollback path — the dep stays hard.
 
 ## One-time setup (maintainer)
 
