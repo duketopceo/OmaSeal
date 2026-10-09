@@ -42,29 +42,7 @@ func graphicalSession() bool {
 // rather than ever treating a failed prompt as an empty secret. Probing and
 // prompting share one process spawn per prompter.
 func guiPromptSecret(ctx context.Context, service, account string) (string, error) {
-	order, err := guiPrompterOrder()
-	if err != nil {
-		return "", err
-	}
-	if len(order) == 0 {
-		return "", errGUIDisabled
-	}
-	var lastErr error
-	for _, kind := range order {
-		secret, err := prompterFor(kind).prompt(ctx, service, account)
-		switch {
-		case err == nil:
-			return secret, nil
-		case errors.Is(err, errPromptCancelled):
-			return "", err // the user dismissed the dialog; don't re-ask elsewhere
-		default:
-			lastErr = err // unusable prompter — fall through to the next
-		}
-	}
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return "", fmt.Errorf("%w (install pinentry with a GUI backend or zenity)", errNoGUIPrompter)
+	return guiPromptDesc(ctx, fmt.Sprintf("Enter secret for %s/%s (requested by %s)", service, account, requesterName()))
 }
 
 func prompterFor(kind string) guiPrompter {
@@ -103,11 +81,42 @@ func withPromptDeadline(ctx context.Context) (context.Context, context.CancelFun
 	return context.WithTimeout(ctx, guiPromptTimeout)
 }
 
+// guiPromptDesc asks for masked text with a caller-provided description —
+// used for prompts that are not "secret for <service>/<account>", like the
+// native store passphrase. Same prompter order and cancel semantics as
+// guiPromptSecret.
+func guiPromptDesc(ctx context.Context, desc string) (string, error) {
+	order, err := guiPrompterOrder()
+	if err != nil {
+		return "", err
+	}
+	if len(order) == 0 {
+		return "", errGUIDisabled
+	}
+	var lastErr error
+	for _, kind := range order {
+		secret, err := prompterFor(kind).promptDesc(ctx, desc)
+		switch {
+		case err == nil:
+			return secret, nil
+		case errors.Is(err, errPromptCancelled):
+			return "", err
+		default:
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("%w (install pinentry with a GUI backend or zenity)", errNoGUIPrompter)
+}
+
 type guiPrompter interface {
 	name() string
-	// available probes real capability and caches what prompt() needs.
+	// available probes real capability and caches what promptDesc() needs.
 	available(ctx context.Context) bool
-	prompt(ctx context.Context, service, account string) (string, error)
+	// promptDesc prompts with a caller-provided description line.
+	promptDesc(ctx context.Context, desc string) (string, error)
 	// confirm shows an Allow/Deny dialog. Returns nil when the user allows,
 	// errPromptCancelled when the user denies, cancels, or lets it time out,
 	// and any other error when the prompter itself is unusable.
@@ -217,7 +226,7 @@ func isNonGUIFlavor(flavor string) bool {
 	return false
 }
 
-func (p *pinentryPrompter) prompt(ctx context.Context, service, account string) (string, error) {
+func (p *pinentryPrompter) promptDesc(ctx context.Context, desc string) (string, error) {
 	paths := pinentryCandidatePaths()
 	if p.path != "" {
 		// The binary probed GUI-capable by available() goes first.
@@ -225,7 +234,7 @@ func (p *pinentryPrompter) prompt(ctx context.Context, service, account string) 
 	}
 	var lastErr error
 	for _, path := range paths {
-		secret, err := promptPinentry(ctx, path, service, account)
+		secret, err := promptPinentry(ctx, path, desc)
 		switch {
 		case err == nil:
 			return secret, nil
@@ -495,7 +504,7 @@ func confirmPinentry(ctx context.Context, path, title, desc string) error {
 	return nil
 }
 
-func promptPinentry(ctx context.Context, path, service, account string) (string, error) {
+func promptPinentry(ctx context.Context, path, desc string) (string, error) {
 	ctx, cancel := withPromptDeadline(ctx)
 	defer cancel()
 	conn, err := dialAssuan(ctx, path)
@@ -517,7 +526,7 @@ func promptPinentry(ctx context.Context, path, service, account string) (string,
 	for _, cmd := range []string{
 		"SETTITLE OmaSeal",
 		"SETPROMPT Secret:",
-		"SETDESC " + assuanEscape(fmt.Sprintf("Enter secret for %s/%s (OmaSeal, requested by %s)", service, account, requesterName())),
+		"SETDESC " + assuanEscape(desc),
 		fmt.Sprintf("SETTIMEOUT %d", int(guiPromptTimeout.Seconds())),
 	} {
 		if err := conn.command(cmd); err != nil {
@@ -564,7 +573,7 @@ func (p *zenityPrompter) available(context.Context) bool {
 	return true
 }
 
-func (p *zenityPrompter) prompt(ctx context.Context, service, account string) (string, error) {
+func (p *zenityPrompter) promptDesc(ctx context.Context, desc string) (string, error) {
 	if p.path == "" {
 		paths := zenityCandidatePaths()
 		if len(paths) == 0 {
@@ -572,7 +581,7 @@ func (p *zenityPrompter) prompt(ctx context.Context, service, account string) (s
 		}
 		p.path = paths[0]
 	}
-	return promptZenity(ctx, p.path, service, account)
+	return promptZenity(ctx, p.path, desc)
 }
 
 func (p *zenityPrompter) confirm(ctx context.Context, title, desc string) error {
@@ -614,13 +623,13 @@ func confirmZenity(ctx context.Context, path, title, desc string) error {
 // promptZenity runs `zenity --password`: the dialog masks input and the secret
 // returns on stdout. Stderr is discarded so dialog chatter cannot contaminate
 // the secret or leak it.
-func promptZenity(ctx context.Context, path, service, account string) (string, error) {
+func promptZenity(ctx context.Context, path, desc string) (string, error) {
 	ctx, cancel := withPromptDeadline(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path,
 		"--password",
 		"--title=OmaSeal",
-		"--text="+pangoEscape(fmt.Sprintf("Enter secret for %s/%s (requested by %s)", service, account, requesterName())),
+		"--text="+pangoEscape(desc),
 		fmt.Sprintf("--timeout=%d", int(guiPromptTimeout.Seconds())),
 	)
 	var out bytes.Buffer

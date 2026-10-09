@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -363,5 +364,68 @@ func TestNativePromptWrongPass(t *testing.T) {
 		if after[name] != d {
 			t.Fatalf("%s mutated by denied unlock", name)
 		}
+	}
+}
+
+// The panel's Unlock button and other no-TTY GUI callers reach
+// nativePassphrasePrompt without a terminal — a masked GUI prompter must
+// serve them, and headless pipes must stay fail-closed.
+func TestNativePassphrasePromptFallsBackToGUI(t *testing.T) {
+	oldTTY, oldGUI := stdinIsTTY, nativePromptGUI
+	stdinIsTTY = func() bool { return false }
+	t.Cleanup(func() { stdinIsTTY, nativePromptGUI = oldTTY, oldGUI })
+	t.Setenv("WAYLAND_DISPLAY", "wayland-test")
+	t.Setenv("DISPLAY", "")
+
+	var gotDesc string
+	nativePromptGUI = func(_ context.Context, desc string) (string, error) {
+		gotDesc = desc
+		return "gui-pass", nil
+	}
+	got, err := nativePassphrasePrompt("OmaSeal passphrase")
+	if err != nil || got != "gui-pass" {
+		t.Fatalf("prompt = %q, %v; want gui-pass", got, err)
+	}
+	if !strings.Contains(gotDesc, "OmaSeal passphrase") || !strings.Contains(gotDesc, "requested by") {
+		t.Errorf("desc %q missing label or requester", gotDesc)
+	}
+}
+
+// A dismissed or failed GUI prompt propagates its error — the caller warns
+// and the store stays locked rather than pretending an unlock happened.
+func TestNativePassphrasePromptGUIError(t *testing.T) {
+	oldTTY, oldGUI := stdinIsTTY, nativePromptGUI
+	stdinIsTTY = func() bool { return false }
+	t.Cleanup(func() { stdinIsTTY, nativePromptGUI = oldTTY, oldGUI })
+	t.Setenv("WAYLAND_DISPLAY", "wayland-test")
+	t.Setenv("DISPLAY", "")
+
+	nativePromptGUI = func(context.Context, string) (string, error) {
+		return "", errPromptCancelled
+	}
+	if _, err := nativePassphrasePrompt("x"); !errors.Is(err, errPromptCancelled) {
+		t.Fatalf("err = %v, want errPromptCancelled propagated", err)
+	}
+}
+
+// No TTY and no graphical session: the locked path. Agents over pipes and
+// headless shells must not block or spawn anything.
+func TestNativePassphrasePromptHeadless(t *testing.T) {
+	oldTTY, oldGUI := stdinIsTTY, nativePromptGUI
+	stdinIsTTY = func() bool { return false }
+	t.Cleanup(func() { stdinIsTTY, nativePromptGUI = oldTTY, oldGUI })
+	t.Setenv("WAYLAND_DISPLAY", "")
+	t.Setenv("DISPLAY", "")
+
+	called := false
+	nativePromptGUI = func(context.Context, string) (string, error) {
+		called = true
+		return "should-not-run", nil
+	}
+	if _, err := nativePassphrasePrompt("x"); err == nil || !strings.Contains(err.Error(), "no tty") {
+		t.Fatalf("err = %v, want 'no tty'", err)
+	}
+	if called {
+		t.Fatal("GUI prompt ran in a headless session")
 	}
 }

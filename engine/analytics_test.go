@@ -275,9 +275,9 @@ func TestChainedLinesParse(t *testing.T) {
 
 func TestSanitizeField(t *testing.T) {
 	tests := []struct {
-		name  string
-		in    string
-		want  string
+		name string
+		in   string
+		want string
 	}{
 		{"plain", "normal-name_123", "normal-name_123"},
 		{"c0 controls", "a\x00b\x1fc", "abc"},

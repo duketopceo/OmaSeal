@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -516,7 +517,7 @@ func (s *nativeStore) initFresh() error {
 			"run `omaseal get` once in a terminal to initialize the native store",
 			errors.New("no identity at "+filepath.Join(s.dir, nativeIdentityFile)))
 	}
-	// Every production prompt is TTY-only — fail before touching the
+	// First-init prompts stay TTY-only — fail before touching the
 	// filesystem so a non-TTY first-touch leaves no stray dir+lock.
 	if !stdinIsTTY() {
 		return newError("store_uninitialized",
@@ -673,18 +674,29 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmp, path)
 }
 
-// nativePassphrasePrompt reads the store passphrase on the TTY only — agents
-// and pipes get "no tty" so they take the locked path instead of blocking
-// on stdin.
+// nativePromptGUI is the masked-graphical-prompt seam for the store
+// passphrase — tests stub it; real builds bind guiPromptDesc.
+var nativePromptGUI = guiPromptDesc
+
+// nativePassphrasePrompt reads the store passphrase on the TTY when one
+// exists; without a TTY it falls back to a masked GUI prompt (pinentry or
+// zenity) in a graphical session — that's what the panel's Unlock button and
+// other no-TTY GUI callers get. Truly headless pipes get "no tty" and take
+// the locked path instead of blocking on stdin.
 func nativePassphrasePrompt(label string) (string, error) {
-	if !stdinIsTTY() {
-		return "", errors.New("no tty")
+	if stdinIsTTY() {
+		fmt.Fprintf(os.Stderr, "%s: ", label)
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr) // ReadPassword does not echo the newline
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
 	}
-	fmt.Fprintf(os.Stderr, "%s: ", label)
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Fprintln(os.Stderr) // ReadPassword does not echo the newline
-	if err != nil {
-		return "", err
+	if graphicalSession() {
+		ctx, cancel := withPromptDeadline(context.Background())
+		defer cancel()
+		return nativePromptGUI(ctx, label+" (requested by "+requesterName()+")")
 	}
-	return string(b), nil
+	return "", errors.New("no tty")
 }
