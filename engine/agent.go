@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -296,11 +298,28 @@ func gateModeChange(ctx context.Context, p AgentPolicy, mode string, ungated boo
 	}
 }
 
+// readPassphraseStdin supplies the --passphrase-stdin value — a stub seam for
+// tests. Real stdin is read line-wise and capped; the passphrase never lands
+// in argv, the environment, or logs.
+var readPassphraseStdin = func() (string, error) {
+	line, err := bufio.NewReader(io.LimitReader(os.Stdin, 4096)).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
 // UnlockAgent creates a time-bounded session after a user-presence
 // confirmation the calling process cannot answer itself (fingerprint, then
 // GUI confirm). With no presence mechanism it fails closed unless the policy
 // carries the deliberate allow_ungated opt-out.
-func UnlockAgent() error {
+//
+// passphraseStdin is the panel/GUI path: the passphrase is read from stdin
+// and unlockIdentity verifies it cryptographically — a correct passphrase IS
+// presence proof stronger than a dialog click, so the presence chain is
+// skipped. Only meaningful on the native backend, and the agent session is
+// written only after the store verifies the passphrase.
+func UnlockAgent(passphraseStdin bool) error {
 	p, err := loadAgentPolicy()
 	if err != nil {
 		return err
@@ -313,11 +332,37 @@ func UnlockAgent() error {
 		return nil
 	}
 
+	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
+
+	if passphraseStdin {
+		ns, ok := currentStore.(*nativeStore)
+		if !ok {
+			return errors.New("--passphrase-stdin requires backend: native")
+		}
+		pass, err := readPassphraseStdin()
+		if err != nil {
+			return fmt.Errorf("read passphrase: %w", err)
+		}
+		if pass == "" {
+			return errors.New("empty passphrase on stdin")
+		}
+		// Verify before granting: a wrong passphrase leaves no session.
+		if err := ns.unlockIdentity(pass, expiry); err != nil {
+			return fmt.Errorf("native store unlock: %w", err)
+		}
+		if err := writeSessionExpiry(expiry); err != nil {
+			return err
+		}
+		WriteLog("presence: passphrase-verified agent unlock (stdin)")
+		fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), p.SessionMinutes)
+		fmt.Println("Native store unlocked for the same window.")
+		return nil
+	}
+
 	if err := requireUserPresence(context.Background(), "agent unlock", p); err != nil {
 		return fmt.Errorf("agent unlock denied: %w", err)
 	}
 
-	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
 	if err := writeSessionExpiry(expiry); err != nil {
 		return err
 	}
@@ -409,6 +454,10 @@ func agentStatusJSON() (string, error) {
 	if agents == nil {
 		agents = []string{} // JSON contract: always an array, never null
 	}
+	backend := "secretservice"
+	if cfg, err := loadConfig(); err == nil && cfg.Backend != "" {
+		backend = cfg.Backend
+	}
 	out := map[string]any{
 		"mode":            p.Mode,
 		"session_minutes": p.SessionMinutes,
@@ -416,6 +465,10 @@ func agentStatusJSON() (string, error) {
 		"session_active":  false,
 		"primary_agent":   p.PrimaryAgent,
 		"agents":          agents,
+		// Panels key their unlock UX off this: native needs an inline
+		// passphrase field feeding --passphrase-stdin; secretservice's
+		// presence dialog asks for nothing.
+		"backend": backend,
 	}
 	// The presence probe spawns subprocesses; only ask mode consumes the fields.
 	if p.Mode == "ask" {
@@ -542,7 +595,7 @@ func handleAgent() {
 		WriteLog("agent mode set to %s (%dm)", mode, mins)
 		fmt.Printf("Agent mode set to %s.\n", mode)
 	case "unlock":
-		if err := UnlockAgent(); err != nil {
+		if err := UnlockAgent(hasFlag(os.Args, "--passphrase-stdin")); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

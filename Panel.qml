@@ -36,6 +36,10 @@ Panel {
   property string agentSessionExpires: ""
   property bool agentKeepAlive: false
   property bool fprintdAvailable: true
+  property string agentBackend: ""
+  // Staged only for the duration of the unlockProc stdin write; cleared
+  // immediately after — never logged or shown.
+  property string unlockPassphrase: ""
 
   // Organization state
   property bool expanded: false
@@ -100,6 +104,8 @@ Panel {
 
   function close() {
     root.controller.hide()
+    passphraseField.text = ""
+    root.unlockPassphrase = ""
   }
 
   function toggle() {
@@ -296,17 +302,35 @@ Panel {
       root.agentSessionExpires = d.session_expires || ""
       root.agentKeepAlive = d.keep_alive === true
       root.fprintdAvailable = d.fprintd_available !== false
+      root.agentBackend = d.backend || ""
     } catch (e) {
       root.agentMode = ""
       root.agentSessionActive = false
       root.agentSessionExpires = ""
       root.agentKeepAlive = false
       root.fprintdAvailable = true
+      root.agentBackend = ""
     }
   }
 
   function unlockAgent() {
-    if (!unlockProc.running) unlockProc.running = true
+    if (unlockProc.running) return
+    if (root.agentBackend === "native") {
+      // The passphrase is piped to `agent unlock --passphrase-stdin`, which
+      // verifies it cryptographically — no dialogs at all on this path.
+      var pass = passphraseField.text
+      if (!pass) {
+        root.notice = "Enter the OmaSeal passphrase to unlock"
+        passphraseField.forceActiveFocus()
+        return
+      }
+      root.unlockPassphrase = pass
+      unlockProc.command = ["omaseal", "agent", "unlock", "--passphrase-stdin"]
+    } else {
+      root.unlockPassphrase = ""
+      unlockProc.command = ["omaseal", "agent", "unlock"]
+    }
+    unlockProc.running = true
   }
 
   function applyLogs(raw) {
@@ -533,11 +557,20 @@ Panel {
 
   Process {
     id: unlockProc
-    command: ["omaseal", "agent", "unlock"]
+    stdinEnabled: true
     stderr: StdioCollector {}
+    onStarted: {
+      if (root.unlockPassphrase !== "") {
+        unlockProc.write(root.unlockPassphrase + "\n")
+      }
+      root.unlockPassphrase = ""
+      unlockProc.stdinEnabled = false
+    }
     onExited: function(exitCode) {
+      passphraseField.text = ""
       if (exitCode === 0) {
         root.refreshAgentStatus()
+        root.refresh() // the store may have just unlocked — repopulate
       } else {
         var lines = (unlockProc.stderr.text || "").split("\n")
         var detail = ""
@@ -950,6 +983,19 @@ Panel {
                 bordered: true
                 onClicked: root.unlockAgent()
               }
+            }
+
+            // Native backend: unlock takes the store passphrase inline —
+            // piped to `agent unlock --passphrase-stdin`, no dialogs.
+            TextField {
+              id: passphraseField
+              Layout.fillWidth: true
+              visible: root.agentMode === "ask" && !root.agentSessionActive &&
+                       root.agentBackend === "native"
+              password: true
+              placeholderText: "OmaSeal passphrase"
+              foreground: root.fg
+              Keys.onReturnPressed: root.unlockAgent()
             }
 
             // fprintd availability notice — only relevant when ask mode gates on it.
