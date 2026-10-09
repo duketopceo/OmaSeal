@@ -325,16 +325,19 @@ func UnlockAgent() error {
 
 	// Native backend: the agent session alone doesn't give agents a
 	// decryption path — seed the tmpfs session identity under the same
-	// expiry so Get can unwrap for the window. Needs a TTY passphrase;
-	// non-TTY unlocks warn and leave the store locked.
+	// expiry so Get can unwrap for the window. Prompts on the TTY, or a
+	// masked GUI prompt when a graphical session has no TTY (e.g. the
+	// panel's Unlock button); only truly headless callers land here.
 	if ns, ok := currentStore.(*nativeStore); ok {
 		if pass, err := nativePassphrasePrompt("OmaSeal passphrase"); err == nil && pass != "" {
 			if err := ns.unlockIdentity(pass, expiry); err != nil {
 				return fmt.Errorf("native store unlock: %w", err)
 			}
 			fmt.Println("Native store unlocked for the same window.")
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: native store still locked — prompt failed: %v; re-run `omaseal agent unlock` to retry.\n", err)
 		} else {
-			fmt.Fprintln(os.Stderr, "warning: native store still locked — run `omaseal agent unlock` in a terminal to unlock it.")
+			fmt.Fprintln(os.Stderr, "warning: native store still locked — empty passphrase; re-run `omaseal agent unlock` to retry.")
 		}
 	}
 	return nil

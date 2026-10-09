@@ -43,7 +43,7 @@ exit 0
 
 func TestPromptPinentryHappyPath(t *testing.T) {
 	stub, logPath := pinentryStub(t, "gnome3", `printf 'D s%%25ecret%%20here\nOK\n'`)
-	got, err := promptPinentry(context.Background(), stub, "svc", "acct/one")
+	got, err := promptPinentry(context.Background(), stub, "Enter secret for svc/acct/one")
 	if err != nil {
 		t.Fatalf("promptPinentry: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestPromptPinentryHappyPath(t *testing.T) {
 
 func TestPromptPinentryEscapesDialogText(t *testing.T) {
 	stub, logPath := pinentryStub(t, "gtk3", `printf 'D x\nOK\n'`)
-	if _, err := promptPinentry(context.Background(), stub, "s%vc\nINJECTED", "a"); err != nil {
+	if _, err := promptPinentry(context.Background(), stub, "s%vc\nINJECTED"); err != nil {
 		t.Fatalf("promptPinentry: %v", err)
 	}
 	log, _ := os.ReadFile(logPath)
@@ -74,13 +74,13 @@ func TestPromptPinentryEscapesDialogText(t *testing.T) {
 		}
 	}
 	if !strings.Contains(string(log), "s%25vc%0AINJECTED") {
-		t.Errorf("service not percent-escaped in SETDESC:\n%s", log)
+		t.Errorf("desc not percent-escaped in SETDESC:\n%s", log)
 	}
 }
 
 func TestPromptPinentryCancel(t *testing.T) {
 	stub, _ := pinentryStub(t, "gnome3", `printf 'ERR 83886179 cancelled\n'`)
-	_, err := promptPinentry(context.Background(), stub, "s", "a")
+	_, err := promptPinentry(context.Background(), stub, "s")
 	if !errors.Is(err, errPromptCancelled) {
 		t.Errorf("err = %v, want errPromptCancelled", err)
 	}
@@ -90,7 +90,7 @@ func TestPromptPinentryTimeout(t *testing.T) {
 	stub, _ := pinentryStub(t, "gnome3", `sleep 30`)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := promptPinentry(ctx, stub, "s", "a")
+	_, err := promptPinentry(ctx, stub, "s")
 	if !errors.Is(err, errPromptCancelled) {
 		t.Errorf("err = %v, want errPromptCancelled on deadline", err)
 	}
@@ -139,7 +139,7 @@ func zenityStub(t *testing.T, body string) string {
 
 func TestPromptZenityHappyPath(t *testing.T) {
 	stub := zenityStub(t, `printf 'hunter2\n'`)
-	got, err := promptZenity(context.Background(), stub, "s", "a")
+	got, err := promptZenity(context.Background(), stub, "s")
 	if err != nil {
 		t.Fatalf("promptZenity: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestPromptZenityHappyPath(t *testing.T) {
 
 func TestPromptZenityCancel(t *testing.T) {
 	stub := zenityStub(t, `exit 1`)
-	_, err := promptZenity(context.Background(), stub, "s", "a")
+	_, err := promptZenity(context.Background(), stub, "s")
 	if !errors.Is(err, errPromptCancelled) {
 		t.Errorf("err = %v, want errPromptCancelled", err)
 	}
