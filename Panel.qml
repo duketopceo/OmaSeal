@@ -957,7 +957,7 @@ Panel {
               visible: root.agentMode === "ask" && !root.fprintdAvailable
               Layout.fillWidth: true
               text: "no fingerprint reader — unlock is ungated"
-              color: root.dim
+              color: root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
