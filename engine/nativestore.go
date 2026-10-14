@@ -305,6 +305,18 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 // expires. A wrong passphrase is a failed read — nothing on disk is touched
 // (invariant I2).
 func (s *nativeStore) unlockIdentity(passphrase string, expires time.Time) error {
+	if err := s.unwrapIdentity(passphrase); err != nil {
+		return err
+	}
+	return s.seedSession(expires)
+}
+
+// unwrapIdentity is unlockIdentity minus the tmpfs session seed — the
+// provider daemon's prompt-derived unlock stops here, holding identity in
+// memory only so file-derived vs prompt-derived provenance stays
+// distinguishable and `agent lock` revocation is never faked by leftover
+// session files (KTD2).
+func (s *nativeStore) unwrapIdentity(passphrase string) error {
 	if s.identityEnc == nil {
 		blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
 		if errors.Is(err, os.ErrNotExist) {
@@ -332,7 +344,7 @@ func (s *nativeStore) unlockIdentity(passphrase string, expires time.Time) error
 		return keyringError(err)
 	}
 	s.identity = id
-	return s.seedSession(expires)
+	return nil
 }
 
 // ensureIdentity resolves the decryption identity: memory → tmpfs session →
@@ -348,6 +360,7 @@ func (s *nativeStore) ensureIdentity() error {
 		pass, err := s.prompt("OmaSeal passphrase")
 		if err == nil && pass != "" {
 			if uerr := s.unlockIdentity(pass, s.now().Add(s.sessionTTL)); uerr == nil {
+				mintAgentSessionIfAsk()
 				return nil
 			} else {
 				return uerr

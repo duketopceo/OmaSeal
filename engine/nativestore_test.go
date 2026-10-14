@@ -456,3 +456,63 @@ func TestEnsureIdentityNeverGUIPrompts(t *testing.T) {
 		t.Fatal("ensureIdentity spawned a GUI prompt for a non-TTY caller")
 	}
 }
+
+// One unlock unlocks both windows: a passphrase-verified store unlock via
+// the ensureIdentity prompt path (GUI prompt, TTY prompt — anywhere but
+// `agent unlock` itself) must also mint the agent session in ask mode.
+func TestStorePromptUnlockMintsAgentSession(t *testing.T) {
+	setupAgentEnv(t)
+	askPolicy(t, false)
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	s.clearNativeSession()
+
+	if _, err := s.Get("svc", "acct"); err != nil {
+		t.Fatalf("prompt unlock via Get: %v", err)
+	}
+	exp, ok := readSessionExpiry()
+	if !ok {
+		t.Fatal("store unlock did not mint the agent session")
+	}
+	if exp.Before(time.Now().UTC().Add(14 * time.Minute)) {
+		t.Fatalf("agent session expiry too soon: %v", exp)
+	}
+}
+
+// Mode "lock" still denies agents — a store unlock must not arm them.
+func TestStorePromptUnlockSkipsAgentSessionInLockMode(t *testing.T) {
+	setupAgentEnv(t)
+	if err := saveAgentPolicy(AgentPolicy{Mode: "lock", SessionMinutes: 15}); err != nil {
+		t.Fatalf("save policy: %v", err)
+	}
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	s.clearNativeSession()
+
+	if _, err := s.Get("svc", "acct"); err != nil {
+		t.Fatalf("store unlock: %v", err)
+	}
+	if _, ok := readSessionExpiry(); ok {
+		t.Fatal("lock mode minted an agent session")
+	}
+}
+
+// An existing agent session that outlives the new window must not shrink.
+func TestStorePromptUnlockNeverShrinksSession(t *testing.T) {
+	setupAgentEnv(t)
+	askPolicy(t, false)
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	s.clearNativeSession()
+
+	long := time.Now().UTC().Add(48 * time.Hour)
+	if err := writeSessionExpiry(long); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := s.Get("svc", "acct"); err != nil {
+		t.Fatalf("store unlock: %v", err)
+	}
+	if exp, _ := readSessionExpiry(); exp.Unix() < long.Unix() {
+		t.Fatalf("mint shrank existing session: %v < %v", exp, long)
+	}
+}

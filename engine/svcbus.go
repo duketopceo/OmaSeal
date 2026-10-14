@@ -37,9 +37,17 @@ type svcDaemon struct {
 	conn  *dbus.Conn
 	store *nativeStore
 
-	mu       sync.Mutex
-	sessions map[dbus.ObjectPath]*svcSession
-	// prompts and index join in U5/U4.
+	mu        sync.Mutex
+	sessions  map[dbus.ObjectPath]*svcSession
+	prompts   map[dbus.ObjectPath]*svcPrompt
+	promptOps map[dbus.ObjectPath]func() error // runs off-mutex
+	index     *svcIndex
+
+	// Prompt-derived unlock provenance (KTD2): identity held in memory
+	// only, revoked by unlock-epoch marker removal, Service.Lock, or TTL.
+	promptIdentity bool
+	promptExpiry   time.Time
+
 	lostName chan struct{} // closed when the well-known name is lost
 
 	now func() time.Time
@@ -168,16 +176,26 @@ func (d *svcDaemon) watchNames() {
 	}()
 }
 
-// reapSender drops everything a disconnected unique name owned.
+// reapSender drops everything a disconnected unique name owned — sessions
+// die with their client; orphaned prompts complete dismissed so nobody
+// waits on a dead caller.
 func (d *svcDaemon) reapSender(name string) {
+	var orphans []dbus.ObjectPath
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	for path, s := range d.sessions {
 		if s.owner == name {
 			delete(d.sessions, path)
 		}
 	}
-	// U5: prompts owned by name get finish(dismissed=true) here.
+	for path, p := range d.prompts {
+		if p.owner == name {
+			orphans = append(orphans, path)
+		}
+	}
+	d.mu.Unlock()
+	for _, path := range orphans {
+		d.finishPrompt(path, true, nil)
+	}
 }
 
 // dropDumpable masks core dumps at exec — belt to the unit's LimitCORE=0

@@ -87,11 +87,14 @@ func providerServe() error {
 	}
 
 	d := &svcDaemon{
-		conn:     conn,
-		store:    store,
-		sessions: map[dbus.ObjectPath]*svcSession{},
-		lostName: make(chan struct{}),
-		now:      func() time.Time { return time.Now().UTC() },
+		conn:      conn,
+		store:     store,
+		sessions:  map[dbus.ObjectPath]*svcSession{},
+		prompts:   map[dbus.ObjectPath]*svcPrompt{},
+		promptOps: map[dbus.ObjectPath]func() error{},
+		index:     loadSvcIndex(svcIndexPath()),
+		lostName:  make(chan struct{}),
+		now:       func() time.Time { return time.Now().UTC() },
 	}
 	if err := d.installObjects(); err != nil {
 		_ = conn.Close()
@@ -109,10 +112,6 @@ func providerServe() error {
 func storeIdentityPath(s *nativeStore) string {
 	return s.dir + "/" + nativeIdentityFile
 }
-
-// installObjects is wired by the object-surface unit (U3): exports the
-// subtree router + static paths. Present here so serve compiles standalone.
-func (d *svcDaemon) installObjects() error { return nil }
 
 // providerStatus reports who owns org.freedesktop.secrets. The enabled-state
 // and activation-path reporting lands with the packaging unit (U6).

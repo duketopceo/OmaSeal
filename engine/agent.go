@@ -151,6 +151,26 @@ func writeSessionExpiry(expiry time.Time) error {
 	return writeFileMode(path, []byte(sessionExpiryText(expiry)), 0600)
 }
 
+// mintAgentSessionIfAsk arms the agent session after a passphrase-verified
+// store unlock (any path: TTY/GUI prompt inside list/get, panel field). A
+// correct passphrase is the same presence proof UnlockAgent relies on, so
+// ask-mode callers get one unlock for the store and the agent window alike.
+// Mode "lock" still denies agents; mode "open" needs no session. Never
+// shrinks an existing session that already outlives the new window.
+func mintAgentSessionIfAsk() {
+	p, err := loadAgentPolicy()
+	if err != nil || p.Mode != "ask" {
+		return
+	}
+	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
+	if cur, ok := readSessionExpiry(); ok && cur.After(expiry) {
+		return
+	}
+	if err := writeSessionExpiry(expiry); err != nil {
+		WriteLog("agent session mint after store unlock failed: %v", err)
+	}
+}
+
 // renewSessionExpiry updates an existing session file in place. Unlike
 // writeSessionExpiry it never creates the file, so a keep-alive renewal can
 // never resurrect a session revoked by `agent lock` mid-operation. The
@@ -191,7 +211,9 @@ func clearAgentSession() error {
 	if ns, ok := currentStore.(*nativeStore); ok {
 		nerr = ns.clearNativeSession()
 	}
-	return errors.Join(nerr, removeIfExists(agentSessionPath()))
+	// The unlock-epoch marker is how a running provider daemon revokes a
+	// prompt-derived in-memory unlock — agent lock must reach it too.
+	return errors.Join(nerr, removeIfExists(agentSessionPath()), removeIfExists(svcUnlockEpochPath()))
 }
 
 // AgentMode returns the current mode for use in status/CLI output.
