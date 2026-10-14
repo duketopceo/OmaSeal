@@ -163,6 +163,13 @@ omaseal keyring migrate [--dry-run] [--delete-old] [-y]
 # Copy every Secret Service item into the native store (idempotent, source untouched)
 omaseal migrate [--dry-run] [-y]
 
+# Serve org.freedesktop.secrets yourself — OmaSeal becomes the system keyring
+# (every libsecret client: gh, VS Code, copilot, docker credential helpers)
+omaseal provider status     # who owns the name + whether activation is installed
+omaseal provider enable     # install the D-Bus activation shadow + systemd unit
+omaseal provider disable    # stop the daemon, remove activation, restore the OS provider
+omaseal provider serve      # foreground serve (usually started by bus activation)
+
 # Usage analytics — what accessed which secrets, and when
 omaseal stats [--json]
 

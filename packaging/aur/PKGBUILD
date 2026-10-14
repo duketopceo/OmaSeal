@@ -37,5 +37,8 @@ package() {
   install -Dm644 BarWidget.qml -t "${_plugindir}/"
   install -Dm644 Panel.qml -t "${_plugindir}/"
   install -Dm644 manifest.json -t "${_plugindir}/"
+  # Secret Service provider unit — installed inert; `omaseal provider enable`
+  # writes the per-user D-Bus activation shadow that hands the name over.
+  install -Dm644 contrib/omaseal-provider.service -t "${pkgdir}/usr/lib/systemd/user/"
   install -Dm644 LICENSE -t "${pkgdir}/usr/share/licenses/${pkgname}/"
 }

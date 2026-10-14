@@ -1,9 +1,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -113,8 +113,8 @@ func storeIdentityPath(s *nativeStore) string {
 	return s.dir + "/" + nativeIdentityFile
 }
 
-// providerStatus reports who owns org.freedesktop.secrets. The enabled-state
-// and activation-path reporting lands with the packaging unit (U6).
+// providerStatus reports the name owner, enabled state, activation paths,
+// and whether a running provider's environment can reach a GUI prompter.
 func providerStatus() error {
 	conn, err := svcConnect("")
 	if err != nil {
@@ -126,12 +126,39 @@ func providerStatus() error {
 	err = conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique)
 	if err != nil {
 		fmt.Println(svcBusName, "is unowned — first activation wins")
-		return nil
+	} else {
+		fmt.Printf("%s owned by %s\n", svcBusName, svcOwnerDesc(conn))
+		if ours, _ := svcOwnerIsOurs(conn); ours {
+			svcWarnIfNoDisplay(conn, unique)
+		}
 	}
-	fmt.Printf("%s owned by %s\n", svcBusName, svcOwnerDesc(conn))
+
+	_, actErr := os.Stat(svcActivationPath())
+	_, unitErr := os.Stat(svcUnitPath())
+	if actErr == nil || unitErr == nil {
+		fmt.Println("enabled: activation/unit installed")
+		fmt.Println("  " + svcActivationPath())
+		fmt.Println("  " + svcUnitPath())
+	} else {
+		fmt.Println("not enabled — `omaseal provider enable` installs activation")
+	}
 	return nil
 }
 
-// providerEnable/providerDisable are the packaging unit's bodies (U6).
-func providerEnable(_ []string) error { return errors.New("not yet implemented") }
-func providerDisable() error          { return errors.New("not yet implemented") }
+// svcWarnIfNoDisplay checks a running provider's environment for display
+// access — without WAYLAND_DISPLAY/DISPLAY the Prompt path fails closed and
+// unlock prompts silently can't render.
+func svcWarnIfNoDisplay(conn *dbus.Conn, unique string) {
+	pid, err := svcPeerPID(conn, unique)
+	if err != nil {
+		return
+	}
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+	if err != nil {
+		return
+	}
+	env := string(raw)
+	if !strings.Contains(env, "WAYLAND_DISPLAY=") && !strings.Contains(env, "DISPLAY=") {
+		fmt.Println("warning: provider environment has no WAYLAND_DISPLAY/DISPLAY — GUI unlock prompts will fail")
+	}
+}

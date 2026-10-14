@@ -188,6 +188,16 @@ func checkSecretService() checkResult {
 			message: msg}
 	}
 
+	// OmaSeal itself may own the name — that's the provider working, not a
+	// missing keyring. Check ownership before diagnosing gnome-keyring.
+	if conn, err := svcConnect(""); err == nil {
+		defer func() { _ = conn.Close() }()
+		if ours, owner := svcOwnerIsOurs(conn); ours {
+			return checkResult{name: "secret-service", ok: true,
+				message: "omaseal provider owns org.freedesktop.secrets (" + owner + ")"}
+		}
+	}
+
 	if !commandExists("gnome-keyring-daemon") {
 		if nativeBackend {
 			return degraded("backend is native — gnome-keyring not needed (needed only for `omaseal migrate` / secretservice rollback)")

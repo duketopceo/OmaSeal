@@ -114,6 +114,13 @@
   plugin adoption.
 - Panel component extraction (the single-file panel has outgrown its
   structure) and first-run `manifest init` prompt.
+- **Secret Service provider daemon** (in flight): `omaseal provider serve`
+  claims `org.freedesktop.secrets` on the session bus and answers the full
+  libsecret surface — `gh`, VS Code, copilot, docker credential helpers, and
+  `secret-tool` store straight into the native vault with per-caller
+  uid/pid/exe audit. `provider enable` installs the activation shadow that
+  politely takes the name from gnome-keyring on next activation; the
+  different-UID confinement track below folds into this daemon.
 
 ## Confinement (research track)
 

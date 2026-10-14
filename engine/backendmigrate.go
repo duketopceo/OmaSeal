@@ -148,6 +148,18 @@ func handleMigrate(args []string) {
 		}
 	}
 
+	// Self-serve guard: if our own provider daemon owns org.freedesktop.secrets,
+	// migrate would read OmaSeal back into itself. Require an explicit disable
+	// rather than silently looping the same store through the bus.
+	if conn, err := svcConnect(""); err == nil {
+		defer func() { _ = conn.Close() }()
+		if ours, owner := svcOwnerIsOurs(conn); ours {
+			fmt.Fprintf(os.Stderr, "error: %s is owned by this omaseal daemon (%s) — migrate would self-serve.\n", svcBusName, owner)
+			fmt.Fprintln(os.Stderr, "Run `omaseal provider disable` first, then retry.")
+			os.Exit(1)
+		}
+	}
+
 	dst := newNativeStore()
 	src := ssStore{}
 
