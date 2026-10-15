@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -47,18 +48,13 @@ type svcItem struct {
 
 // svcIndex is the daemon's item registry.
 type svcIndex struct {
-	path  string
-	Items map[string]*svcItem `json:"items"` // keyed by item path
+	path            string
+	Items           map[string]*svcItem `json:"items"` // keyed by item path
+	CollectionLabel string              `json:"collection_label,omitempty"`
 }
 
 func svcIndexPath() string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			base = filepath.Join(home, ".local", "state")
-		}
-	}
-	return filepath.Join(base, "omaseal", svcIndexFile)
+	return filepath.Join(svcXDGDir("XDG_STATE_HOME", ".local", "state"), "omaseal", svcIndexFile)
 }
 
 // loadSvcIndex reads items.json; a corrupt file yields an empty index (the
@@ -70,10 +66,16 @@ func loadSvcIndex(path string) *svcIndex {
 	if err != nil {
 		return idx // fresh
 	}
-	if err := json.Unmarshal(raw, &idx.Items); err != nil {
+	var doc struct {
+		Items map[string]*svcItem `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
 		_ = os.Rename(path, path+".bak") // retain for forensics
 		WriteLog("provider: corrupt %s moved aside to .bak", path)
-		idx.Items = map[string]*svcItem{}
+		return idx
+	}
+	if doc.Items != nil {
+		idx.Items = doc.Items
 	}
 	return idx
 }
@@ -97,6 +99,17 @@ func svcItemID(storeKey string) string {
 
 func svcItemPath(id string) dbus.ObjectPath {
 	return dbus.ObjectPath(string(svcCollectionPath()) + "/" + id)
+}
+
+// svcRandID mints a 128-bit hex id for session/prompt paths. crypto/rand
+// failure is unrecoverable — a zeroed id would be guessable — so it aborts
+// the process rather than minting a weak path.
+func svcRandID() string {
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(id)
 }
 
 // svcSyntheticKey builds the native key for an item carrying no
@@ -135,9 +148,9 @@ func svcItemKey(attrs map[string]string) string {
 
 // ensureStoreIdentity gives the daemon a read identity: adopt a live CLI
 // session file when present (file-derived provenance, KTD2); prompt-derived
-// identities are already in s.identity.
+// identities are already held in memory.
 func (d *svcDaemon) ensureStoreIdentity() error {
-	if d.store.identity != nil {
+	if d.store.identity.Load() != nil {
 		return nil
 	}
 	return d.store.loadSession() // errNativeLocked when nothing to adopt
@@ -154,16 +167,16 @@ func (d *svcDaemon) locked() bool {
 // provenance rules: prompt-derived identity dies with its marker/TTL;
 // file-derived (adopted CLI session) dies when the session files go away.
 func (d *svcDaemon) lockedLocked() bool {
-	if d.store.identity != nil {
+	if d.store.identity.Load() != nil {
 		if d.promptIdentity {
 			d.checkPromptIdentity()
 		} else if err := d.store.loadSession(); err != nil {
-			d.store.identity = nil // session files removed or expired
+			d.store.identity.Store(nil) // session files removed or expired
 		}
 	} else {
 		_ = d.ensureStoreIdentity() // adopt a live CLI session if present
 	}
-	return d.store.identity == nil
+	return d.store.identity.Load() == nil
 }
 
 // reconcile folds store.json rows into the index: new CLI rows get
@@ -182,16 +195,26 @@ func (d *svcDaemon) reconcile() error {
 		seen[path] = true
 		row, ok := d.index.Items[path]
 		if !ok {
+			// New store row — seed index-owned fields once. After this the
+			// index is authoritative for Label/Attrs/Type (KTD7): a bus
+			// client's Properties.Set survives the next enumerate.
 			row = &svcItem{
-				Path:  path,
-				Key:   key,
-				Attrs: map[string]string{"service": it.Service, "account": it.Account},
+				Path:     path,
+				Key:      key,
+				Label:    it.Label,
+				Attrs:    map[string]string{"service": it.Service, "account": it.Account},
+				Created:  it.CreatedAt,
+				Modified: it.UpdatedAt,
 			}
 			d.index.Items[path] = row
+			continue
 		}
-		row.Label = it.Label
-		row.Created = it.CreatedAt
-		row.Modified = it.UpdatedAt
+		// Existing row: the store's UpdatedAt is a real item modification
+		// (secret rotation) — fold it in, but never let it move Modified
+		// backwards past a later index-side write.
+		if it.UpdatedAt.After(row.Modified) {
+			row.Modified = it.UpdatedAt
+		}
 	}
 	for path := range d.index.Items {
 		if !seen[path] {
@@ -238,7 +261,9 @@ func (d *svcDaemon) itemAt(path dbus.ObjectPath) (*svcItem, *dbus.Error) {
 func (d *svcDaemon) searchItems(attrs map[string]string) []dbus.ObjectPath {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_ = d.reconcile()
+	if err := d.reconcile(); err != nil {
+		WriteLog("provider: reconcile: %v", err)
+	}
 	var out []dbus.ObjectPath
 	for p, it := range d.index.Items {
 		if attrsMatch(it.Attrs, attrs) {
@@ -258,7 +283,7 @@ func attrsMatch(have, want map[string]string) bool {
 	return true
 }
 
-// storeKeyFor decodes an index key back to native store svc/acct.
+// svcSplitKey decodes an index key back to native store svc/acct.
 func svcSplitKey(key string) (svc, acct string, ok bool) {
 	s, a, found := strings.Cut(key, "/")
 	if !found {
@@ -267,35 +292,27 @@ func svcSplitKey(key string) (svc, acct string, ok bool) {
 	return unescKeyPart(s), unescKeyPart(a), true
 }
 
-func (d *svcDaemon) setItemLabel(path dbus.ObjectPath, it *svcItem, label string) *dbus.Error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	it.Label = label
-	it.Modified = d.now()
-	if err := d.index.save(); err != nil {
-		return svcErrFailed(err.Error())
+// svcAttrBytes estimates a dict's wire size for the attr ceiling — keys +
+// values, nothing else reaches it.
+func svcAttrBytes(attrs map[string]string) int {
+	n := 0
+	for k, v := range attrs {
+		n += len(k) + len(v)
 	}
-	return nil
+	return n
 }
 
-func (d *svcDaemon) setItemAttrs(path dbus.ObjectPath, it *svcItem, attrs map[string]string) *dbus.Error {
+// mutateItem applies a single-property write to an index row: stamp
+// Modified, persist, and emit PropertiesChanged on the item path.
+func (d *svcDaemon) mutateItem(path dbus.ObjectPath, it *svcItem, prop string, v dbus.Variant, apply func()) *dbus.Error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	it.Attrs = attrs
+	apply()
 	it.Modified = d.now()
 	if err := d.index.save(); err != nil {
+		d.mu.Unlock()
 		return svcErrFailed(err.Error())
 	}
-	return nil
-}
-
-func (d *svcDaemon) setItemType(path dbus.ObjectPath, it *svcItem, t string) *dbus.Error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	it.ItemType = t
-	it.Modified = d.now()
-	if err := d.index.save(); err != nil {
-		return svcErrFailed(err.Error())
-	}
+	d.mu.Unlock()
+	d.emitPropsChanged(path, "org.freedesktop.Secret.Item", map[string]dbus.Variant{prop: v})
 	return nil
 }

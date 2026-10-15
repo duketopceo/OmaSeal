@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -33,7 +34,7 @@ func handleProvider() {
 			os.Exit(1)
 		}
 	case "status":
-		if err := providerStatus(); err != nil {
+		if err := providerStatus(os.Args[3:]); err != nil {
 			fmt.Fprintln(os.Stderr, "provider status:", err)
 			os.Exit(1)
 		}
@@ -77,30 +78,34 @@ func providerServe() error {
 		return fmt.Errorf("native store not initialized (no %s) — run `omaseal set` once in a terminal first", storeIdentityPath(store))
 	}
 
-	conn, err := svcConnect("")
+	conn, err := svcConnectAmbient()
 	if err != nil {
-		return err
-	}
-	if err := svcClaimName(conn); err != nil {
-		_ = conn.Close()
 		return err
 	}
 
 	d := &svcDaemon{
-		conn:      conn,
-		store:     store,
-		sessions:  map[dbus.ObjectPath]*svcSession{},
-		prompts:   map[dbus.ObjectPath]*svcPrompt{},
-		promptOps: map[dbus.ObjectPath]func() error{},
-		index:     loadSvcIndex(svcIndexPath()),
-		lostName:  make(chan struct{}),
-		now:       func() time.Time { return time.Now().UTC() },
+		conn:     conn,
+		store:    store,
+		sessions: map[dbus.ObjectPath]*svcSession{},
+		prompts:  map[dbus.ObjectPath]*svcPrompt{},
+		index:    loadSvcIndex(svcIndexPath()),
+		lostName: make(chan struct{}),
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 	if err := d.installObjects(); err != nil {
 		_ = conn.Close()
 		return fmt.Errorf("export object surface: %w", err)
 	}
-	d.watchNames()
+	if err := d.watchNames(); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("name watch: %w", err)
+	}
+	// Claim last: no client may reach the name before the object surface
+	// and the loss watch are armed.
+	if err := svcClaimName(conn); err != nil {
+		_ = conn.Close()
+		return err
+	}
 
 	WriteLog("provider: serving %s on the session bus", svcBusName)
 	<-d.lostName
@@ -115,27 +120,57 @@ func storeIdentityPath(s *nativeStore) string {
 
 // providerStatus reports the name owner, enabled state, activation paths,
 // and whether a running provider's environment can reach a GUI prompter.
-func providerStatus() error {
-	conn, err := svcConnect("")
+// --json emits the same facts machine-readably for panels and scripts.
+func providerStatus(args []string) error {
+	asJSON := false
+	for _, a := range args {
+		switch a {
+		case "--json":
+			asJSON = true
+		default:
+			return fmt.Errorf("unknown flag %q — usage: omaseal provider status [--json]", a)
+		}
+	}
+	conn, err := svcConnectAmbient()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
 
 	var unique string
-	err = conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique)
-	if err != nil {
+	owned := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique) == nil
+	ours, ownerDesc := svcOwnerIsOurs(conn)
+	_, actErr := os.Stat(svcActivationPath())
+	_, unitErr := os.Stat(svcUnitPath())
+	enabled := actErr == nil || unitErr == nil
+
+	if asJSON {
+		out := map[string]any{
+			"name":    svcBusName,
+			"owned":   owned,
+			"ours":    ours,
+			"enabled": enabled,
+		}
+		if owned {
+			out["owner"] = ownerDesc
+		}
+		if enabled {
+			out["activation"] = svcActivationPath()
+			out["unit"] = svcUnitPath()
+		}
+		enc := json.NewEncoder(os.Stdout)
+		return enc.Encode(out)
+	}
+
+	if !owned {
 		fmt.Println(svcBusName, "is unowned — first activation wins")
 	} else {
 		fmt.Printf("%s owned by %s\n", svcBusName, svcOwnerDesc(conn))
-		if ours, _ := svcOwnerIsOurs(conn); ours {
+		if ours {
 			svcWarnIfNoDisplay(conn, unique)
 		}
 	}
-
-	_, actErr := os.Stat(svcActivationPath())
-	_, unitErr := os.Stat(svcUnitPath())
-	if actErr == nil || unitErr == nil {
+	if enabled {
 		fmt.Println("enabled: activation/unit installed")
 		fmt.Println("  " + svcActivationPath())
 		fmt.Println("  " + svcUnitPath())

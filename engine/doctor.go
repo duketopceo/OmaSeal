@@ -241,7 +241,7 @@ func containsLine(text, needle string) bool {
 
 // keyringsDir returns the directory holding gnome-keyring *.keyring files.
 func keyringsDir() string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+	if xdg := svcXDGDir("XDG_DATA_HOME", ".local", "share"); xdg != "" {
 		return filepath.Join(xdg, "keyrings")
 	}
 	home, err := os.UserHomeDir()
@@ -535,10 +535,8 @@ func checkFilePerms() checkResult {
 			filepath.Join(dir, "config.json"),
 			filepath.Join(dir, "anchors.log"))
 	}
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
+	if base := svcXDGDir("XDG_STATE_HOME", ".local", "state"); base != "" {
 		targets = append(targets, filepath.Join(base, "omaseal", "omaseal.log"))
-	} else if home, err := os.UserHomeDir(); err == nil {
-		targets = append(targets, filepath.Join(home, ".local", "state", "omaseal", "omaseal.log"))
 	}
 	loose := loosePermFiles(targets)
 	if len(loose) > 0 {

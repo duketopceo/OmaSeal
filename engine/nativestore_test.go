@@ -144,7 +144,7 @@ func TestNativeSetWhileLocked(t *testing.T) {
 func TestNativeBadUnlockNeverWrites(t *testing.T) {
 	s, dir := nativeTestStore(t)
 	initNative(t, s, "right-pass")
-	s.identity = nil
+	s.identity.Store(nil)
 
 	before := nativeDigests(t, dir)
 	for i := 0; i < 5; i++ {
@@ -238,7 +238,7 @@ func TestNativeTamperEvidence(t *testing.T) {
 	}
 	// The original still reads fine.
 	s.prompt = func(string) (string, error) { return "test-pass", nil }
-	s.identity = nil
+	s.identity.Store(nil)
 	if got, err := s.Get("real", "key"); err != nil || got != "secret-value" {
 		t.Fatalf("legit value after tamper test: got=%q err=%v", got, err)
 	}
@@ -318,7 +318,7 @@ func TestNativeSessionIdentity(t *testing.T) {
 func TestNativeLockedErrorCode(t *testing.T) {
 	s, _ := nativeTestStore(t)
 	initNative(t, s, "test-pass")
-	s.identity = nil
+	s.identity.Store(nil)
 	s.prompt = nil
 	if err := os.RemoveAll(s.runtimeDir); err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestNativeUninitializedNonTTY(t *testing.T) {
 func TestNativePromptWrongPass(t *testing.T) {
 	s, dir := nativeTestStore(t)
 	initNative(t, s, "right")
-	s.identity = nil
+	s.identity.Store(nil)
 	_ = os.RemoveAll(s.runtimeDir)
 	s.runtimeDir = t.TempDir()
 	s.prompt = func(string) (string, error) { return "wrong", nil }

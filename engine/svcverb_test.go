@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,13 +66,17 @@ func newSvcTestDaemon(t *testing.T, bus *svcTestBus) *svcDaemon {
 		conn:     conn,
 		store:    newNativeStoreAt(t.TempDir(), t.TempDir()),
 		sessions: map[dbus.ObjectPath]*svcSession{},
+		prompts:  map[dbus.ObjectPath]*svcPrompt{},
+		index:    &svcIndex{Items: map[string]*svcItem{}, path: filepath.Join(t.TempDir(), svcIndexFile)},
 		lostName: make(chan struct{}),
 		now:      func() time.Time { return time.Now().UTC() },
 	}
 	if err := d.installObjects(); err != nil {
 		t.Fatalf("install objects: %v", err)
 	}
-	d.watchNames()
+	if err := d.watchNames(); err != nil {
+		t.Fatalf("watch names: %v", err)
+	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return d
 }

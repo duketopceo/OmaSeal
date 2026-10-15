@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -37,11 +38,10 @@ type svcDaemon struct {
 	conn  *dbus.Conn
 	store *nativeStore
 
-	mu        sync.Mutex
-	sessions  map[dbus.ObjectPath]*svcSession
-	prompts   map[dbus.ObjectPath]*svcPrompt
-	promptOps map[dbus.ObjectPath]func() error // runs off-mutex
-	index     *svcIndex
+	mu       sync.Mutex
+	sessions map[dbus.ObjectPath]*svcSession
+	prompts  map[dbus.ObjectPath]*svcPrompt
+	index    *svcIndex
 
 	// Prompt-derived unlock provenance (KTD2): identity held in memory
 	// only, revoked by unlock-epoch marker removal, Service.Lock, or TTL.
@@ -95,19 +95,14 @@ func svcClaimName(conn *dbus.Conn) error {
 	return fmt.Errorf("%s is already owned by %s — refusing to queue for it", svcBusName, owner)
 }
 
-// svcOwnerDesc describes the current owner of the well-known name:
-// unique name, pid, and executable where resolvable.
+// svcOwnerDesc describes the current owner of the well-known name —
+// delegates to the single owner→pid→exe resolver in svcOwnerIsOurs.
 func svcOwnerDesc(conn *dbus.Conn) string {
-	var unique string
-	err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique)
-	if err != nil {
+	_, owner := svcOwnerIsOurs(conn)
+	if owner == "" {
 		return "unknown owner"
 	}
-	pid, err := svcPeerPID(conn, unique)
-	if err != nil {
-		return unique
-	}
-	return fmt.Sprintf("%s pid=%d exe=%s", unique, pid, svcPeerExe(pid))
+	return owner
 }
 
 // svcPeerUID resolves a unique sender name (":1.42") to its unix uid.
@@ -149,15 +144,21 @@ func svcPeerInfo(conn *dbus.Conn, sender string) (uid, pid uint32, exe string, e
 
 // watchNames registers a NameOwnerChanged match; losing the well-known name
 // closes lostName (caller exits); losing a client's unique name reaps its
-// sessions and prompts.
-func (d *svcDaemon) watchNames() {
-	_ = d.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
-		"type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged'")
+// sessions and prompts. Only the bus driver may send this signal — a peer
+// forging it could kill the daemon or reap live clients, so sender is
+// pinned to org.freedesktop.DBus both in the match rule and the check.
+func (d *svcDaemon) watchNames() error {
+	call := d.conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
+		"type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'")
+	if call.Err != nil {
+		return fmt.Errorf("addmatch NameOwnerChanged: %w", call.Err)
+	}
 	ch := make(chan *dbus.Signal, 32)
 	d.conn.Signal(ch)
 	go func() {
 		for sig := range ch {
-			if sig.Name != "org.freedesktop.DBus.NameOwnerChanged" || len(sig.Body) != 3 {
+			if sig.Sender != "org.freedesktop.DBus" ||
+				sig.Name != "org.freedesktop.DBus.NameOwnerChanged" || len(sig.Body) != 3 {
 				continue
 			}
 			name, _ := sig.Body[0].(string)
@@ -173,7 +174,11 @@ func (d *svcDaemon) watchNames() {
 				d.reapSender(name)
 			}
 		}
+		// The bus dropped the signal channel — the connection is gone and
+		// with it the name claim. Exit rather than zombie-serve nothing.
+		close(d.lostName)
 	}()
+	return nil
 }
 
 // reapSender drops everything a disconnected unique name owned — sessions
@@ -194,7 +199,7 @@ func (d *svcDaemon) reapSender(name string) {
 	}
 	d.mu.Unlock()
 	for _, path := range orphans {
-		d.finishPrompt(path, true, nil)
+		d.finishPrompt(path, true, nil, context.Canceled)
 	}
 }
 

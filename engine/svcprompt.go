@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,9 +28,10 @@ const svcMaxPromptsGlobal = 256
 type svcPrompt struct {
 	owner   string // unique name that may Prompt()/Dismiss()
 	uid     uint32
-	exe     string
 	running bool
-	done    chan struct{} // closed exactly once on completion
+	cancel  context.CancelFunc // non-nil while the op is in flight
+	op      func(ctx context.Context) ([]dbus.ObjectPath, error)
+	objects []dbus.ObjectPath // unlocked paths echoed back via Completed
 }
 
 func svcUnlockEpochPath() string {
@@ -47,8 +46,14 @@ func svcAgentModeLocked() bool {
 }
 
 // mintPrompt registers a Prompt object and returns its path. One active
-// prompt per sender — a second Unlock from the same client reuses it.
-func (d *svcDaemon) mintPrompt(sender, exe, desc string, op func() error) dbus.ObjectPath {
+// prompt per sender — a second mint from the same client reuses it.
+// objects is what Completed echoes on success (the paths the caller asked
+// to have unlocked); op runs off-mutex with a cancel wired to Dismiss.
+func (d *svcDaemon) mintPrompt(sender, exe string, objects []dbus.ObjectPath, op func(context.Context) ([]dbus.ObjectPath, error)) dbus.ObjectPath {
+	// Peer uid resolution is a bus round-trip — do it BEFORE taking mu so a
+	// slow bus can't serialize the daemon behind one lookup.
+	uid, _ := svcPeerUID(d.conn, sender)
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for path, p := range d.prompts {
@@ -57,17 +62,13 @@ func (d *svcDaemon) mintPrompt(sender, exe, desc string, op func() error) dbus.O
 		}
 	}
 	if n := d.promptsForUIDLocked(0); n >= svcMaxPromptsGlobal {
-		return "/" // silently refuse: caller sees no prompt path
+		return "/" // budget exhausted: caller sees no prompt path
 	}
-	uid, _ := svcPeerUID(d.conn, sender)
 	if d.promptsForUIDLocked(uid) >= svcMaxPromptsPerUID {
 		return "/"
 	}
-	id := make([]byte, 16)
-	_, _ = rand.Read(id)
-	path := dbus.ObjectPath(string(svcBasePath) + "/prompt/" + hex.EncodeToString(id))
-	d.prompts[path] = &svcPrompt{owner: sender, uid: uid, exe: exe, done: make(chan struct{})}
-	d.promptOps[path] = op
+	path := dbus.ObjectPath(string(svcBasePath) + "/prompt/" + svcRandID())
+	d.prompts[path] = &svcPrompt{owner: sender, uid: uid, op: op, objects: objects}
 	WriteLog("provider: mint prompt %s sender=%s exe=%s", path, sender, exe)
 	return path
 }
@@ -99,21 +100,25 @@ func (d *svcDaemon) drivePrompt(path dbus.ObjectPath, sender string) *dbus.Error
 		d.mu.Unlock()
 		return nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	p.running = true
-	op := d.promptOps[path]
+	p.cancel = cancel
+	op := p.op
 	d.mu.Unlock()
 
 	go func() {
+		var unlocked []dbus.ObjectPath
 		var err error
 		if op != nil {
-			err = op()
+			unlocked, err = op(ctx)
 		}
-		d.finishPrompt(path, false, err)
+		d.finishPrompt(path, false, unlocked, err)
 	}()
 	return nil
 }
 
-// dismissPrompt cancels the prompt — Completed fires with dismissed=true.
+// dismissPrompt cancels the prompt — the in-flight op's context dies so a
+// deferred unlock can still be vetoed — and Completed fires dismissed.
 func (d *svcDaemon) dismissPrompt(path dbus.ObjectPath, sender string) *dbus.Error {
 	d.mu.Lock()
 	p, ok := d.prompts[path]
@@ -125,13 +130,19 @@ func (d *svcDaemon) dismissPrompt(path dbus.ObjectPath, sender string) *dbus.Err
 		d.mu.Unlock()
 		return svcErrAccessDenied("prompt owned by another client")
 	}
+	cancel := p.cancel
 	d.mu.Unlock()
-	d.finishPrompt(path, true, nil)
+	if cancel != nil {
+		cancel()
+	}
+	d.finishPrompt(path, true, nil, context.Canceled)
 	return nil
 }
 
 // finishPrompt emits Completed exactly once and removes the object.
-func (d *svcDaemon) finishPrompt(path dbus.ObjectPath, dismissed bool, opErr error) {
+// Per spec the result variant echoes the object paths the prompt unlocked —
+// libsecret branches on the array, not the error text.
+func (d *svcDaemon) finishPrompt(path dbus.ObjectPath, dismissed bool, unlocked []dbus.ObjectPath, opErr error) {
 	d.mu.Lock()
 	p, ok := d.prompts[path]
 	if !ok {
@@ -139,67 +150,98 @@ func (d *svcDaemon) finishPrompt(path dbus.ObjectPath, dismissed bool, opErr err
 		return
 	}
 	delete(d.prompts, path)
-	delete(d.promptOps, path)
-	close(p.done)
+	objects := p.objects
 	d.mu.Unlock()
 
 	if opErr != nil {
 		WriteLog("provider: prompt %s failed: %v", path, opErr)
 	}
-	// Completed(dismissed bool, result variant) — result echoes unlocked
-	// paths for Unlock flows; callers key on the signal, not the value here.
-	_ = d.conn.Emit(path, "org.freedesktop.Secret.Prompt.Completed", dismissed, dbus.MakeVariant([]dbus.ObjectPath{}))
+	var result dbus.Variant
+	switch {
+	case dismissed || opErr != nil:
+		result = dbus.MakeVariant([]dbus.ObjectPath{})
+	case unlocked != nil:
+		result = dbus.MakeVariant(unlocked)
+	default:
+		result = dbus.MakeVariant(objects)
+	}
+	_ = d.conn.Emit(path, "org.freedesktop.Secret.Prompt.Completed", dismissed || opErr != nil, result)
 }
 
 // unlockViaPrompt runs the GUI passphrase prompt (caller exe attributed in
 // the description) and, on success, holds the identity in memory only —
 // plus the unlock-epoch marker that lets `agent lock` revoke it later.
-func (d *svcDaemon) unlockViaPrompt(exe string) error {
-	ctx, cancel := withPromptDeadline(context.Background())
+// The passphrase/unwrap work happens OFF d.mu; only the state commit locks.
+// A cancelled context vetoes the commit — Dismiss mid-prompt must not
+// leave the vault armed.
+func (d *svcDaemon) unlockViaPrompt(ctx context.Context, exe string) error {
+	pctx, cancel := withPromptDeadline(ctx)
 	defer cancel()
-	pass, err := guiPromptDesc(ctx, "Unlock the OmaSeal vault (requested by "+exe+")")
+	pass, err := guiPromptDesc(pctx, "Unlock the OmaSeal vault (requested by "+exe+")")
 	if err != nil {
 		return err
 	}
 	if pass == "" {
 		return fmt.Errorf("empty passphrase")
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	// scrypt unwrap is the ~500ms path — keep it off the daemon mutex.
+	if err := d.store.unwrapIdentity(pass); err != nil {
+		return err
+	}
 	expiry := d.now().Add(defaultNativeTTL)
 	if p, perr := loadAgentPolicy(); perr == nil && p.SessionMinutes > 0 {
 		expiry = d.now().Add(time.Duration(p.SessionMinutes) * time.Minute)
 	}
-	if err := d.store.unwrapIdentity(pass); err != nil {
-		return err
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if ctx.Err() != nil {
+		// Dismissed while the prompter was open — the passphrase succeeded
+		// but the caller asked us not to commit it.
+		d.store.identity.Store(nil)
+		return ctx.Err()
 	}
 	d.promptIdentity = true
 	d.promptExpiry = expiry
 	if werr := writeFileMode(svcUnlockEpochPath(), []byte(fmt.Sprintf("%d", expiry.Unix())), 0600); werr != nil {
-		WriteLog("provider: unlock-epoch marker write failed: %v", werr)
+		d.promptIdentity = false
+		d.store.identity.Store(nil)
+		return fmt.Errorf("unlock-epoch marker: %w", werr)
 	}
 	WriteLog("provider: vault unlocked via prompt (memory only, expiry %s)", expiry.Format(time.RFC3339))
 	return nil
 }
 
-// lockDaemon drops the in-memory identity and the marker — the bus-side
-// revocation channel for prompt-derived unlocks.
+// lockDaemon drops the in-memory identity, the marker, AND the native CLI
+// session files — Service.Lock must leave the vault actually locked, or a
+// still-live `omaseal agent unlock` session would be silently re-adopted on
+// the next call and the Lock return value would lie.
 func (d *svcDaemon) lockDaemon() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.store.identity = nil
+	d.lockDaemonLocked()
+}
+
+// lockDaemonLocked is lockDaemon under mu. Per the plan: a real Lock unlinks
+// the session files so nothing re-adopts a file-derived identity.
+func (d *svcDaemon) lockDaemonLocked() {
+	d.store.identity.Store(nil)
 	d.promptIdentity = false
+	if err := d.store.unlinkSessionFiles(); err != nil {
+		WriteLog("provider: native session unlink: %v", err)
+	}
 	if err := os.Remove(svcUnlockEpochPath()); err != nil && !os.IsNotExist(err) {
 		WriteLog("provider: unlock-epoch marker remove: %v", err)
 	}
-	WriteLog("provider: vault locked via Service.Lock")
+	d.emitPropsChanged(svcCollectionPath(), "org.freedesktop.Secret.Collection",
+		map[string]dbus.Variant{"Locked": dbus.MakeVariant(true)})
+	WriteLog("provider: vault locked")
 }
 
 // checkPromptIdentity enforces the prompt-derived lifecycle: TTL expiry and
 // external marker removal (agent lock) both relock. Called from lockedLocked
 // under mu; does no prompting, just stat+time checks.
 func (d *svcDaemon) checkPromptIdentity() {
-	if !d.promptIdentity || d.store.identity == nil {
+	if !d.promptIdentity || d.store.identity.Load() == nil {
 		return
 	}
 	if d.now().After(d.promptExpiry) {
@@ -211,10 +253,4 @@ func (d *svcDaemon) checkPromptIdentity() {
 		WriteLog("provider: unlock-epoch marker gone — relocking")
 		d.lockDaemonLocked()
 	}
-}
-
-func (d *svcDaemon) lockDaemonLocked() {
-	d.store.identity = nil
-	d.promptIdentity = false
-	_ = os.Remove(svcUnlockEpochPath())
 }

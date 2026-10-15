@@ -111,6 +111,9 @@ omaseal selftest        # set/get/delete round-trip against the live keyring
 omaseal mcp status      # which agents are detected and already wired
 omaseal agent mode <open|ask|lock> [min] [--ungated]  # set agent/MCP trust mode
 omaseal agent unlock                      # presence-gated unlock for ask mode
+                                          # (any store unlock mints a session
+                                          # too — CLI get/set, panel field,
+                                          # or a Secret Service prompt)
 omaseal agent unlock --passphrase-stdin   # native backend: passphrase piped on
                                           # stdin; verified cryptographically —
                                           # no dialog needed (panels, launchers)

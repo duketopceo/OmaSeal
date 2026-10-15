@@ -154,8 +154,10 @@ func TestSvcE2ESecretToolRoundTrip(t *testing.T) {
 	}
 
 	found := env.secretTool(t, "", "search", "--all", "purpose", "e2e")
-	// search --all prints [<item-id>] headers, not full paths.
-	if !strings.Contains(found, "label = OmaSeal") {
+	// search --all prints [<item-id>] headers, not full paths. The item's
+	// label must be the client-supplied one — the index owns labels, not
+	// the synthesized native-store key.
+	if !strings.Contains(found, "label = e2e item") {
 		t.Fatalf("search found no item: %q", found)
 	}
 	if !strings.Contains(found, "attribute.acct = demo") {

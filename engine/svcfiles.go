@@ -43,39 +43,73 @@ Restart=on-failure
 WantedBy=default.target
 `
 
-func svcActivationPath() string {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			base = filepath.Join(home, ".local", "share")
-		}
+// svcXDGDir resolves an XDG base dir with the spec fallback — the single
+// home for the env-or-~ pattern the provider paths all share.
+func svcXDGDir(envKey string, fallbackParts ...string) string {
+	if base := os.Getenv(envKey); base != "" {
+		return base
 	}
-	return filepath.Join(base, "dbus-1", "services", "org.freedesktop.secrets.service")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(append([]string{home}, fallbackParts...)...)
+}
+
+func svcActivationPath() string {
+	return filepath.Join(svcXDGDir("XDG_DATA_HOME", ".local", "share"), "dbus-1", "services", "org.freedesktop.secrets.service")
 }
 
 func svcUnitPath() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			base = filepath.Join(home, ".config")
-		}
-	}
-	return filepath.Join(base, "systemd", "user", "omaseal-provider.service")
+	return filepath.Join(svcXDGDir("XDG_CONFIG_HOME", ".config"), "systemd", "user", "omaseal-provider.service")
+}
+
+// svcSystemctl is the systemctl seam — tests stub it so enable/disable
+// never execs the real user's service manager.
+var svcSystemctl = func(args ...string) ([]byte, error) {
+	cmd := exec.Command("systemctl", args...)
+	return cmd.CombinedOutput()
+}
+
+// svcConnectAmbient dials the session bus — a seam so tests never touch
+// the real user's Secret Service owner.
+var svcConnectAmbient = func() (*dbus.Conn, error) {
+	return svcConnect("")
 }
 
 func svcDaemonReload() error {
-	cmd := exec.Command("systemctl", "--user", "daemon-reload")
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-	return cmd.Run()
+	_, err := svcSystemctl("--user", "daemon-reload")
+	return err
 }
 
 func svcStopUnit() error {
-	cmd := exec.Command("systemctl", "--user", "stop", "omaseal-provider.service")
-	out, err := cmd.CombinedOutput()
+	out, err := svcSystemctl("--user", "stop", "omaseal-provider.service")
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// svcActivationIsOurs reports whether the installed activation file Execs an
+// omaseal binary — compared by basename so an omaseal at any prefix counts.
+// An installed-but-inactive omaseal activation can take the name mid-migrate
+// (the moment the foreign owner exits or a call activates us), so guards
+// that check only the live owner miss it.
+func svcActivationIsOurs() bool {
+	data, err := os.ReadFile(svcActivationPath())
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "Exec=") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "Exec="))
+		if len(fields) > 0 && filepath.Base(fields[0]) == "omaseal" {
+			return true
+		}
+	}
+	return false
 }
 
 // svcOwnerIsOurs reports whether the name's current owner is an omaseal
@@ -97,7 +131,10 @@ func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string) {
 }
 
 // providerEnable installs the activation shadow + user unit.
-func providerEnable(_ []string) error {
+func providerEnable(args []string) error {
+	for _, a := range args {
+		return fmt.Errorf("unknown flag %q — `omaseal provider enable` takes none", a)
+	}
 	exe, err := os.Executable()
 	if err == nil && !strings.HasPrefix(exe, "/usr/") {
 		fmt.Fprintf(os.Stderr, "warning: templates pin ExecStart=/usr/bin/omaseal but this binary is %s — install the package or the unit will not start\n", exe)
@@ -128,7 +165,7 @@ func providerEnable(_ []string) error {
 	fmt.Println("  " + svcActivationPath())
 	fmt.Println("  " + svcUnitPath())
 
-	conn, err := svcConnect("")
+	conn, err := svcConnectAmbient()
 	if err == nil {
 		defer func() { _ = conn.Close() }()
 		ours, owner := svcOwnerIsOurs(conn)
@@ -169,7 +206,7 @@ func providerDisable() error {
 			fmt.Println("  removed", p)
 		}
 	}
-	conn, err := svcConnect("")
+	conn, err := svcConnectAmbient()
 	if err == nil {
 		defer func() { _ = conn.Close() }()
 		if _, owner := svcOwnerIsOurs(conn); owner != "" {

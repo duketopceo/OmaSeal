@@ -1,8 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"context"
 	"fmt"
 	"os"
 
@@ -21,6 +20,16 @@ type svcSecret struct {
 	Params      []byte
 	Value       []byte
 	ContentType string
+}
+
+// svcGuard converts a handler panic into a wire error instead of a daemon
+// crash — godbus runs each call in a goroutine with no recover, so any
+// panic kills the process. Defer this in every exported method.
+func svcGuard(err **dbus.Error) {
+	if r := recover(); r != nil {
+		WriteLog("provider: handler panic: %v", r)
+		*err = svcErrFailed("internal error")
+	}
 }
 
 // svcGate checks the per-call sender policy: same-uid + agent-mode check.
@@ -45,7 +54,8 @@ func (d *svcDaemon) svcGate(msg dbus.Message) (uid, pid uint32, exe string, err 
 
 // --- Service -------------------------------------------------------------
 
-func (s svcServiceAPI) OpenSession(msg dbus.Message, algorithm string, input dbus.Variant) (dbus.Variant, dbus.ObjectPath, *dbus.Error) {
+func (s svcServiceAPI) OpenSession(msg dbus.Message, algorithm string, input dbus.Variant) (out dbus.Variant, sessionPath dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return dbus.Variant{}, "/", svcErrUnknownObject("OpenSession on non-service path")
 	}
@@ -56,7 +66,6 @@ func (s svcServiceAPI) OpenSession(msg dbus.Message, algorithm string, input dbu
 	sender := svcMsgSender(msg)
 
 	var codec svcSessionCodec
-	var out dbus.Variant
 	switch algorithm {
 	case svcAlgPlain:
 		codec = svcPlainCodec{}
@@ -84,9 +93,7 @@ func (s svcServiceAPI) OpenSession(msg dbus.Message, algorithm string, input dbu
 		s.d.mu.Unlock()
 		return dbus.Variant{}, "/", svcErrAccessDenied("session budget exhausted")
 	}
-	id := make([]byte, 16)
-	_, _ = rand.Read(id)
-	path := dbus.ObjectPath(string(svcBasePath) + "/session/" + hex.EncodeToString(id))
+	path := dbus.ObjectPath(string(svcBasePath) + "/session/" + svcRandID())
 	s.d.sessions[path] = &svcSession{owner: sender, uid: uid, codec: codec, created: s.d.now()}
 	s.d.mu.Unlock()
 
@@ -94,12 +101,14 @@ func (s svcServiceAPI) OpenSession(msg dbus.Message, algorithm string, input dbu
 	return out, path, nil
 }
 
-func (s svcServiceAPI) CreateCollection(msg dbus.Message, _ map[string]dbus.Variant, _ string) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+func (s svcServiceAPI) CreateCollection(msg dbus.Message, _ map[string]dbus.Variant, _ string) (coll dbus.ObjectPath, prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	// v1 serves one fixed collection — R-scoped deferral.
 	return "/", "/", svcErrNotSupported("single fixed collection")
 }
 
-func (s svcServiceAPI) SearchItems(msg dbus.Message, attrs map[string]string) ([]dbus.ObjectPath, []dbus.ObjectPath, *dbus.Error) {
+func (s svcServiceAPI) SearchItems(msg dbus.Message, attrs map[string]string) (unlocked []dbus.ObjectPath, locked []dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return nil, nil, svcErrUnknownObject("SearchItems on non-service path")
 	}
@@ -113,7 +122,8 @@ func (s svcServiceAPI) SearchItems(msg dbus.Message, attrs map[string]string) ([
 	return found, nil, nil
 }
 
-func (s svcServiceAPI) Unlock(msg dbus.Message, objects []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+func (s svcServiceAPI) Unlock(msg dbus.Message, objects []dbus.ObjectPath) (unlocked []dbus.ObjectPath, prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return nil, "/", svcErrUnknownObject("Unlock on non-service path")
 	}
@@ -128,16 +138,43 @@ func (s svcServiceAPI) Unlock(msg dbus.Message, objects []dbus.ObjectPath) ([]db
 			return nil, "/", svcErrNoSuchObject(string(o))
 		}
 	}
+	resolved := s.d.resolvableObjects(objects)
 	if !s.d.locked() {
-		return objects, "/", nil
+		return resolved, "/", nil
 	}
-	prompt := s.d.mintPrompt(svcMsgSender(msg), exe, "unlock the vault", func() error {
-		return s.d.unlockViaPrompt(exe)
+	sender := svcMsgSender(msg)
+	prompt = s.d.mintPrompt(sender, exe, resolved, func(ctx context.Context) ([]dbus.ObjectPath, error) {
+		if err := s.d.unlockViaPrompt(ctx, exe); err != nil {
+			return nil, err
+		}
+		// Re-resolve after unlock: a path could have been deleted while the
+		// prompt was up, and echoing it back would lie to state-tracking
+		// clients.
+		return s.d.resolvableObjects(objects), nil
 	})
 	return nil, prompt, nil
 }
 
-func (s svcServiceAPI) Lock(msg dbus.Message, objects []dbus.ObjectPath) ([]dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+// resolvableObjects filters requested paths to what actually exists —
+// service/collection by class, items only if they're in the index. Echoing
+// unresolvable paths back as "unlocked" lies to clients tracking state.
+func (d *svcDaemon) resolvableObjects(objects []dbus.ObjectPath) []dbus.ObjectPath {
+	var out []dbus.ObjectPath
+	for _, o := range objects {
+		switch svcClassify(o) {
+		case svcClassCollection, svcClassService:
+			out = append(out, o)
+		case svcClassItem:
+			if it, err := d.itemAt(o); err == nil && it != nil {
+				out = append(out, o)
+			}
+		}
+	}
+	return out
+}
+
+func (s svcServiceAPI) Lock(msg dbus.Message, objects []dbus.ObjectPath) (locked []dbus.ObjectPath, prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return nil, "/", svcErrUnknownObject("Lock on non-service path")
 	}
@@ -148,9 +185,13 @@ func (s svcServiceAPI) Lock(msg dbus.Message, objects []dbus.ObjectPath) ([]dbus
 	return objects, "/", nil
 }
 
-func (s svcServiceAPI) GetSecrets(msg dbus.Message, items []dbus.ObjectPath, sessionPath dbus.ObjectPath) (map[dbus.ObjectPath]svcSecret, *dbus.Error) {
+func (s svcServiceAPI) GetSecrets(msg dbus.Message, items []dbus.ObjectPath, sessionPath dbus.ObjectPath) (secrets map[dbus.ObjectPath]svcSecret, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return nil, svcErrUnknownObject("GetSecrets on non-service path")
+	}
+	if _, _, _, err := s.d.svcGate(msg); err != nil {
+		return nil, err
 	}
 	sess, err := s.d.sessionFor(msg, sessionPath)
 	if err != nil {
@@ -183,7 +224,8 @@ func (s svcServiceAPI) GetSecrets(msg dbus.Message, items []dbus.ObjectPath, ses
 	return out, nil
 }
 
-func (s svcServiceAPI) ReadAlias(msg dbus.Message, name string) (dbus.ObjectPath, *dbus.Error) {
+func (s svcServiceAPI) ReadAlias(msg dbus.Message, name string) (coll dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return "/", svcErrUnknownObject("ReadAlias on non-service path")
 	}
@@ -193,7 +235,8 @@ func (s svcServiceAPI) ReadAlias(msg dbus.Message, name string) (dbus.ObjectPath
 	return "/", nil
 }
 
-func (s svcServiceAPI) SetAlias(msg dbus.Message, name string, collection dbus.ObjectPath) *dbus.Error {
+func (s svcServiceAPI) SetAlias(msg dbus.Message, name string, collection dbus.ObjectPath) (derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return svcErrUnknownObject("SetAlias on non-service path")
 	}
@@ -210,7 +253,8 @@ func (s svcServiceAPI) SetAlias(msg dbus.Message, name string, collection dbus.O
 
 // --- Collection ----------------------------------------------------------
 
-func (c svcCollectionAPI) Delete(msg dbus.Message) (dbus.ObjectPath, *dbus.Error) {
+func (c svcCollectionAPI) Delete(msg dbus.Message) (prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassCollection {
 		return "/", svcErrUnknownObject("Delete on non-collection path")
 	}
@@ -221,7 +265,8 @@ func (c svcCollectionAPI) Delete(msg dbus.Message) (dbus.ObjectPath, *dbus.Error
 	return "/", svcErrAccessDenied("the login collection cannot be deleted")
 }
 
-func (c svcCollectionAPI) SearchItems(msg dbus.Message, attrs map[string]string) ([]dbus.ObjectPath, *dbus.Error) {
+func (c svcCollectionAPI) SearchItems(msg dbus.Message, attrs map[string]string) (results []dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassCollection {
 		return nil, svcErrUnknownObject("SearchItems on non-collection path")
 	}
@@ -231,7 +276,8 @@ func (c svcCollectionAPI) SearchItems(msg dbus.Message, attrs map[string]string)
 	return c.d.searchItems(attrs), nil
 }
 
-func (c svcCollectionAPI) CreateItem(msg dbus.Message, props map[string]dbus.Variant, secret svcSecret, replace bool) (dbus.ObjectPath, dbus.ObjectPath, *dbus.Error) {
+func (c svcCollectionAPI) CreateItem(msg dbus.Message, props map[string]dbus.Variant, secret svcSecret, replace bool) (item dbus.ObjectPath, prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	if svcClassify(svcMsgPath(msg)) != svcClassCollection {
 		return "/", "/", svcErrUnknownObject("CreateItem on non-collection path")
 	}
@@ -242,9 +288,9 @@ func (c svcCollectionAPI) CreateItem(msg dbus.Message, props map[string]dbus.Var
 	if err != nil {
 		return "/", "/", err
 	}
-	plain, derr := sess.codec.decrypt(secret.Params, secret.Value)
-	if derr != nil {
-		return "/", "/", svcErrInvalidArgs("secret decode: " + derr.Error())
+	plain, derr2 := sess.codec.decrypt(secret.Params, secret.Value)
+	if derr2 != nil {
+		return "/", "/", svcErrInvalidArgs("secret decode: " + derr2.Error())
 	}
 	if len(plain) > svcMaxSecretBytes {
 		return "/", "/", svcErrInvalidArgs("secret exceeds 1 MiB")
@@ -256,7 +302,10 @@ func (c svcCollectionAPI) CreateItem(msg dbus.Message, props map[string]dbus.Var
 	key := svcItemKey(attrs)
 	svc, acct, _ := svcSplitKey(key)
 
-	path := c.d.createItem(key, svc, acct, string(plain), attrs, label, itemType, replace)
+	path, cerr := c.d.createItem(key, svc, acct, string(plain), attrs, label, itemType, replace)
+	if cerr != nil {
+		return "/", "/", cerr
+	}
 	if path == "" {
 		return "/", "/", svcErrInvalidArgs("item exists (set replace=true)")
 	}
@@ -266,7 +315,8 @@ func (c svcCollectionAPI) CreateItem(msg dbus.Message, props map[string]dbus.Var
 
 // --- Item ----------------------------------------------------------------
 
-func (i svcItemAPI) Delete(msg dbus.Message) (dbus.ObjectPath, *dbus.Error) {
+func (i svcItemAPI) Delete(msg dbus.Message) (prompt dbus.ObjectPath, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassItem {
 		return "/", svcErrUnknownObject("Delete on non-item path")
@@ -286,14 +336,18 @@ func (i svcItemAPI) Delete(msg dbus.Message) (dbus.ObjectPath, *dbus.Error) {
 	delete(i.d.index.Items, string(path))
 	_ = i.d.index.save()
 	i.d.mu.Unlock()
-	i.d.emitItemChanged(path)
+	i.d.emitItemDeleted(path)
 	return "/", nil
 }
 
-func (i svcItemAPI) GetSecret(msg dbus.Message, sessionPath dbus.ObjectPath) (svcSecret, *dbus.Error) {
+func (i svcItemAPI) GetSecret(msg dbus.Message, sessionPath dbus.ObjectPath) (secret svcSecret, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassItem {
 		return svcSecret{}, svcErrUnknownObject("GetSecret on non-item path")
+	}
+	if _, _, _, err := i.d.svcGate(msg); err != nil {
+		return svcSecret{}, err
 	}
 	sess, err := i.d.sessionFor(msg, sessionPath)
 	if err != nil {
@@ -315,10 +369,12 @@ func (i svcItemAPI) GetSecret(msg dbus.Message, sessionPath dbus.ObjectPath) (sv
 	if cerr != nil {
 		return svcSecret{}, svcErrFailed(cerr.Error())
 	}
+	WriteLog("provider: getsecret %s sender=%s", path, svcMsgSender(msg))
 	return svcSecret{Session: sessionPath, Params: params, Value: value, ContentType: "text/plain"}, nil
 }
 
-func (i svcItemAPI) SetSecret(msg dbus.Message, secret svcSecret) *dbus.Error {
+func (i svcItemAPI) SetSecret(msg dbus.Message, secret svcSecret) (derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassItem {
 		return svcErrUnknownObject("SetSecret on non-item path")
@@ -330,9 +386,9 @@ func (i svcItemAPI) SetSecret(msg dbus.Message, secret svcSecret) *dbus.Error {
 	if err != nil {
 		return err
 	}
-	plain, derr := sess.codec.decrypt(secret.Params, secret.Value)
-	if derr != nil {
-		return svcErrInvalidArgs("secret decode: " + derr.Error())
+	plain, derr2 := sess.codec.decrypt(secret.Params, secret.Value)
+	if derr2 != nil {
+		return svcErrInvalidArgs("secret decode: " + derr2.Error())
 	}
 	if len(plain) > svcMaxSecretBytes {
 		return svcErrInvalidArgs("secret exceeds 1 MiB")
@@ -351,7 +407,8 @@ func (i svcItemAPI) SetSecret(msg dbus.Message, secret svcSecret) *dbus.Error {
 
 // --- Session -------------------------------------------------------------
 
-func (s svcSessionAPI) Close(msg dbus.Message) *dbus.Error {
+func (s svcSessionAPI) Close(msg dbus.Message) (derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassSession {
 		return svcErrUnknownObject("Close on non-session path")
@@ -372,7 +429,8 @@ func (s svcSessionAPI) Close(msg dbus.Message) *dbus.Error {
 
 // --- Prompt --------------------------------------------------------------
 
-func (p svcPromptAPI) Prompt(msg dbus.Message, _ string) *dbus.Error {
+func (p svcPromptAPI) Prompt(msg dbus.Message, _ string) (derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassPrompt {
 		return svcErrUnknownObject("Prompt on non-prompt path")
@@ -380,7 +438,8 @@ func (p svcPromptAPI) Prompt(msg dbus.Message, _ string) *dbus.Error {
 	return p.d.drivePrompt(path, svcMsgSender(msg))
 }
 
-func (p svcPromptAPI) Dismiss(msg dbus.Message) *dbus.Error {
+func (p svcPromptAPI) Dismiss(msg dbus.Message) (derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	if svcClassify(path) != svcClassPrompt {
 		return svcErrUnknownObject("Dismiss on non-prompt path")
@@ -432,30 +491,70 @@ func (d *svcDaemon) emitItemChanged(path dbus.ObjectPath) {
 	_ = d.conn.Emit(svcCollectionPath(), "org.freedesktop.Secret.Collection.ItemChanged", path)
 }
 
+// emitItemCreated fires ItemCreated on the collection for a brand-new item.
+func (d *svcDaemon) emitItemCreated(path dbus.ObjectPath) {
+	_ = d.conn.Emit(svcCollectionPath(), "org.freedesktop.Secret.Collection.ItemCreated", path)
+}
+
+// emitItemDeleted fires ItemDeleted on the collection after removal.
+func (d *svcDaemon) emitItemDeleted(path dbus.ObjectPath) {
+	_ = d.conn.Emit(svcCollectionPath(), "org.freedesktop.Secret.Collection.ItemDeleted", path)
+}
+
+// emitPropsChanged fires org.freedesktop.DBus.Properties.PropertiesChanged
+// on the object's own path — clients watching Locked/Label/Attributes see
+// every mutation the moment it lands.
+func (d *svcDaemon) emitPropsChanged(path dbus.ObjectPath, iface string, changed map[string]dbus.Variant) {
+	_ = d.conn.Emit(path, "org.freedesktop.DBus.Properties.PropertiesChanged", iface, changed, []string{})
+}
+
 // createItem writes to the native store (works locked by design) and indexes.
-func (d *svcDaemon) createItem(key, svc, acct, secret string, attrs map[string]string, label, itemType string, replace bool) string {
+// The path return is "" only when replace=false blocks an existing item —
+// store/index failures come back through err so callers report them as
+// Failed, not "item exists".
+func (d *svcDaemon) createItem(key, svc, acct, secret string, attrs map[string]string, label, itemType string, replace bool) (string, *dbus.Error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	id := svcItemID(key)
-	path := string(svcItemPath(id))
-	if _, exists := d.index.Items[path]; exists && !replace {
-		return ""
+	// Reconcile first: a CLI-created row not yet indexed must still block
+	// replace=false, otherwise the write silently clobbers it.
+	if err := d.reconcile(); err != nil {
+		d.mu.Unlock()
+		return "", svcErrFailed(err.Error())
+	}
+	path := string(svcItemPath(svcItemID(key)))
+	prev, existed := d.index.Items[path]
+	switch {
+	case existed && !replace:
+		d.mu.Unlock()
+		return "", nil
+	case len(d.index.Items) >= svcMaxItemsGlobal && !existed:
+		d.mu.Unlock()
+		return "", svcErrInvalidArgs(fmt.Sprintf("item budget exhausted (%d)", svcMaxItemsGlobal))
+	case svcAttrBytes(attrs) > svcMaxAttrBytes:
+		d.mu.Unlock()
+		return "", svcErrInvalidArgs("attributes exceed 64 KiB")
 	}
 	if err := d.store.Set(svc, acct, secret); err != nil {
+		d.mu.Unlock()
 		WriteLog("provider: createitem %s: %v", svc+"/"+acct, err)
-		return ""
+		return "", svcErrFrom(err)
 	}
 	if label == "" {
 		label = fmt.Sprintf("%s / %s", svc, acct)
 	}
 	now := d.now()
 	row := &svcItem{Path: path, Key: key, Label: label, Attrs: attrs, ItemType: itemType, Created: now, Modified: now}
-	if prev, ok := d.index.Items[path]; ok {
+	if existed {
 		row.Created = prev.Created
 	}
 	d.index.Items[path] = row
 	if err := d.index.save(); err != nil {
 		WriteLog("provider: index save: %v", err)
 	}
-	return path
+	d.mu.Unlock()
+	if existed {
+		d.emitItemChanged(dbus.ObjectPath(path))
+	} else {
+		d.emitItemCreated(dbus.ObjectPath(path))
+	}
+	return path, nil
 }

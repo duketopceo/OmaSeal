@@ -37,10 +37,6 @@ func svcCollectionPath() dbus.ObjectPath {
 	return dbus.ObjectPath(string(svcBasePath) + "/collection/" + svcCollectionID)
 }
 
-func svcAliasPath(alias string) dbus.ObjectPath {
-	return dbus.ObjectPath(string(svcBasePath) + "/aliases/" + alias)
-}
-
 func svcClassify(path dbus.ObjectPath) svcPathClass {
 	rest, ok := strings.CutPrefix(string(path), string(svcBasePath))
 	if !ok {
@@ -118,7 +114,8 @@ func (d *svcDaemon) installObjects() error {
 
 // --- Introspectable — served by our own dispatch --------------------------
 
-func (svcIntroAPI) Introspect(msg dbus.Message) (string, *dbus.Error) {
+func (svcIntroAPI) Introspect(msg dbus.Message) (data string, derr *dbus.Error) {
+	defer svcGuard(&derr)
 	path := svcMsgPath(msg)
 	var node *introspect.Node
 	switch svcClassify(path) {
@@ -135,15 +132,42 @@ func (svcIntroAPI) Introspect(msg dbus.Message) (string, *dbus.Error) {
 	default:
 		return "", svcErrUnknownObject(string(path))
 	}
-	data, err := xml.Marshal(node)
+	raw, err := xml.Marshal(node)
 	if err != nil {
 		return "", svcErrFailed(err.Error())
 	}
-	return introspect.IntrospectDeclarationString + string(data), nil
+	return introspect.IntrospectDeclarationString + string(raw), nil
 }
 
 func svcInterfaceDoc(name string, members []introspect.Method, props []introspect.Property) introspect.Interface {
 	return introspect.Interface{Name: name, Methods: members, Properties: props}
+}
+
+// svcPropsDoc is the shared org.freedesktop.DBus.Properties fragment —
+// every node exports it and emits PropertiesChanged.
+func svcPropsDoc() introspect.Interface {
+	return introspect.Interface{
+		Name: "org.freedesktop.DBus.Properties",
+		Signals: []introspect.Signal{
+			{Name: "PropertiesChanged", Args: []introspect.Arg{
+				{Name: "interface", Type: "s"}, {Name: "changed_properties", Type: "a{sv}"}, {Name: "invalidated_properties", Type: "as"},
+			}},
+		},
+	}
+}
+
+// svcIntroDoc is the shared org.freedesktop.DBus.Introspectable fragment.
+func svcIntroDoc() introspect.Interface {
+	return introspect.Interface{Name: "org.freedesktop.DBus.Introspectable", Methods: []introspect.Method{
+		{Name: "Introspect", Args: []introspect.Arg{{Name: "data", Type: "s", Direction: "out"}}},
+	}}
+}
+
+// svcItemSignals are the Collection's item-lifecycle signals.
+var svcItemSignals = []introspect.Signal{
+	{Name: "ItemCreated", Args: []introspect.Arg{{Name: "item", Type: "o"}}},
+	{Name: "ItemDeleted", Args: []introspect.Arg{{Name: "item", Type: "o"}}},
+	{Name: "ItemChanged", Args: []introspect.Arg{{Name: "item", Type: "o"}}},
 }
 
 func svcServiceIntrospect() *introspect.Node {
@@ -160,27 +184,28 @@ func svcServiceIntrospect() *introspect.Node {
 		}, []introspect.Property{
 			{Name: "Collections", Type: "ao", Access: "read"},
 		}),
-		svcInterfaceDoc("org.freedesktop.DBus.Properties", nil, nil),
-		svcInterfaceDoc("org.freedesktop.DBus.Introspectable", []introspect.Method{
-			{Name: "Introspect", Args: []introspect.Arg{{Name: "data", Type: "s", Direction: "out"}}},
-		}, nil),
+		svcPropsDoc(),
+		svcIntroDoc(),
 	}}
 }
 
 func svcCollectionIntrospect() *introspect.Node {
+	iface := svcInterfaceDoc("org.freedesktop.Secret.Collection", []introspect.Method{
+		{Name: "Delete", Args: []introspect.Arg{{Name: "prompt", Type: "o", Direction: "out"}}},
+		{Name: "SearchItems", Args: []introspect.Arg{{Name: "attributes", Type: "a{ss}", Direction: "in"}, {Name: "results", Type: "ao", Direction: "out"}}},
+		{Name: "CreateItem", Args: []introspect.Arg{{Name: "properties", Type: "a{sv}", Direction: "in"}, {Name: "secret", Type: "(oayays)", Direction: "in"}, {Name: "replace", Type: "b", Direction: "in"}, {Name: "item", Type: "o", Direction: "out"}, {Name: "prompt", Type: "o", Direction: "out"}}},
+	}, []introspect.Property{
+		{Name: "Items", Type: "ao", Access: "read"},
+		{Name: "Label", Type: "s", Access: "readwrite"},
+		{Name: "Locked", Type: "b", Access: "read"},
+		{Name: "Created", Type: "t", Access: "read"},
+		{Name: "Modified", Type: "t", Access: "read"},
+	})
+	iface.Signals = svcItemSignals
 	return &introspect.Node{Interfaces: []introspect.Interface{
-		svcInterfaceDoc("org.freedesktop.Secret.Collection", []introspect.Method{
-			{Name: "Delete", Args: []introspect.Arg{{Name: "prompt", Type: "o", Direction: "out"}}},
-			{Name: "SearchItems", Args: []introspect.Arg{{Name: "attributes", Type: "a{ss}", Direction: "in"}, {Name: "results", Type: "ao", Direction: "out"}}},
-			{Name: "CreateItem", Args: []introspect.Arg{{Name: "properties", Type: "a{sv}", Direction: "in"}, {Name: "secret", Type: "(oayays)", Direction: "in"}, {Name: "replace", Type: "b", Direction: "in"}, {Name: "item", Type: "o", Direction: "out"}, {Name: "prompt", Type: "o", Direction: "out"}}},
-		}, []introspect.Property{
-			{Name: "Items", Type: "ao", Access: "read"},
-			{Name: "Label", Type: "s", Access: "readwrite"},
-			{Name: "Locked", Type: "b", Access: "read"},
-			{Name: "Created", Type: "t", Access: "read"},
-			{Name: "Modified", Type: "t", Access: "read"},
-		}),
-		svcInterfaceDoc("org.freedesktop.DBus.Properties", nil, nil),
+		iface,
+		svcPropsDoc(),
+		svcIntroDoc(),
 	}}
 }
 
@@ -198,7 +223,8 @@ func svcItemIntrospect() *introspect.Node {
 			{Name: "Created", Type: "t", Access: "read"},
 			{Name: "Modified", Type: "t", Access: "read"},
 		}),
-		svcInterfaceDoc("org.freedesktop.DBus.Properties", nil, nil),
+		svcPropsDoc(),
+		svcIntroDoc(),
 	}}
 }
 
@@ -207,22 +233,38 @@ func svcSessionIntrospect() *introspect.Node {
 		svcInterfaceDoc("org.freedesktop.Secret.Session", []introspect.Method{
 			{Name: "Close"},
 		}, nil),
+		svcPropsDoc(),
+		svcIntroDoc(),
 	}}
 }
 
 func svcPromptIntrospect() *introspect.Node {
 	return &introspect.Node{Interfaces: []introspect.Interface{
-		svcInterfaceDoc("org.freedesktop.Secret.Prompt", []introspect.Method{
-			{Name: "Prompt", Args: []introspect.Arg{{Name: "window-id", Type: "s", Direction: "in"}}},
-			{Name: "Dismiss"},
-		}, nil),
+		func() introspect.Interface {
+			i := svcInterfaceDoc("org.freedesktop.Secret.Prompt", []introspect.Method{
+				{Name: "Prompt", Args: []introspect.Arg{{Name: "window-id", Type: "s", Direction: "in"}}},
+				{Name: "Dismiss"},
+			}, nil)
+			i.Signals = []introspect.Signal{
+				{Name: "Completed", Args: []introspect.Arg{
+					{Name: "dismissed", Type: "b"}, {Name: "result", Type: "v"},
+				}},
+			}
+			return i
+		}(),
+		svcPropsDoc(),
+		svcIntroDoc(),
 	}}
 }
 
 // --- org.freedesktop.DBus.Properties — store-backed per path class --------
 
 // Get dispatches a property read on the called path.
-func (p svcPropsAPI) Get(msg dbus.Message, iface, name string) (dbus.Variant, *dbus.Error) {
+func (p svcPropsAPI) Get(msg dbus.Message, iface, name string) (v dbus.Variant, derr *dbus.Error) {
+	defer svcGuard(&derr)
+	if _, _, _, err := p.d.svcGate(msg); err != nil {
+		return dbus.Variant{}, err
+	}
 	path := svcMsgPath(msg)
 	v, err := p.d.propGet(path, iface, name)
 	if err != nil {
@@ -231,11 +273,19 @@ func (p svcPropsAPI) Get(msg dbus.Message, iface, name string) (dbus.Variant, *d
 	return v, nil
 }
 
-func (p svcPropsAPI) Set(msg dbus.Message, iface, name string, v dbus.Variant) *dbus.Error {
+func (p svcPropsAPI) Set(msg dbus.Message, iface, name string, v dbus.Variant) (derr *dbus.Error) {
+	defer svcGuard(&derr)
+	if _, _, _, err := p.d.svcGate(msg); err != nil {
+		return err
+	}
 	return p.d.propSet(svcMsgPath(msg), iface, name, v)
 }
 
-func (p svcPropsAPI) GetAll(msg dbus.Message, iface string) (map[string]dbus.Variant, *dbus.Error) {
+func (p svcPropsAPI) GetAll(msg dbus.Message, iface string) (all map[string]dbus.Variant, derr *dbus.Error) {
+	defer svcGuard(&derr)
+	if _, _, _, err := p.d.svcGate(msg); err != nil {
+		return nil, err
+	}
 	return p.d.propGetAll(svcMsgPath(msg), iface)
 }
 
@@ -258,7 +308,13 @@ func (d *svcDaemon) propGet(path dbus.ObjectPath, iface, name string) (dbus.Vari
 		case "Items":
 			return dbus.MakeVariant(d.itemPaths()), nil
 		case "Label":
-			return dbus.MakeVariant("login"), nil
+			d.mu.Lock()
+			label := d.index.CollectionLabel
+			d.mu.Unlock()
+			if label == "" {
+				label = svcCollectionID
+			}
+			return dbus.MakeVariant(label), nil
 		case "Locked":
 			return dbus.MakeVariant(d.locked()), nil
 		case "Created", "Modified":
@@ -296,7 +352,19 @@ func (d *svcDaemon) propSet(path dbus.ObjectPath, iface, name string, v dbus.Var
 		if svcClassify(path) != svcClassCollection || name != "Label" {
 			return svcErrInvalidArgs(name)
 		}
-		return nil // label is fixed "login"; writes are accepted harmlessly
+		s, ok := v.Value().(string)
+		if !ok {
+			return svcErrInvalidArgs(name)
+		}
+		d.mu.Lock()
+		d.index.CollectionLabel = s
+		if err := d.index.save(); err != nil {
+			d.mu.Unlock()
+			return svcErrFailed(err.Error())
+		}
+		d.mu.Unlock()
+		d.emitPropsChanged(path, iface, map[string]dbus.Variant{name: v})
+		return nil
 	case "org.freedesktop.Secret.Item":
 		it, derr := d.itemAt(path)
 		if derr != nil {
@@ -305,15 +373,18 @@ func (d *svcDaemon) propSet(path dbus.ObjectPath, iface, name string, v dbus.Var
 		switch name {
 		case "Label":
 			if s, ok := v.Value().(string); ok {
-				return d.setItemLabel(path, it, s)
+				return d.mutateItem(path, it, name, v, func() { it.Label = s })
 			}
 		case "Attributes":
 			if m, ok := v.Value().(map[string]string); ok {
-				return d.setItemAttrs(path, it, m)
+				if svcAttrBytes(m) > svcMaxAttrBytes {
+					return svcErrInvalidArgs("attributes exceed 64 KiB")
+				}
+				return d.mutateItem(path, it, name, v, func() { it.Attrs = m })
 			}
 		case "Type":
 			if s, ok := v.Value().(string); ok {
-				return d.setItemType(path, it, s)
+				return d.mutateItem(path, it, name, v, func() { it.ItemType = s })
 			}
 		}
 		return svcErrInvalidArgs(name)

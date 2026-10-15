@@ -15,7 +15,6 @@ const (
 	svcErrNameInvalidArgs  = "org.freedesktop.DBus.Error.InvalidArgs"
 	svcErrNameNotSupported = "org.freedesktop.DBus.Error.NotSupported"
 	svcErrNameUnknownObj   = "org.freedesktop.DBus.Error.UnknownObject"
-	svcErrNameUnknownMeth  = "org.freedesktop.DBus.Error.UnknownMethod"
 	svcErrNameFailed       = "org.freedesktop.DBus.Error.Failed"
 )
 
@@ -39,9 +38,6 @@ func svcErrNotSupported(what string) *dbus.Error {
 }
 func svcErrUnknownObject(what string) *dbus.Error {
 	return dbus.NewError(svcErrNameUnknownObj, []any{what})
-}
-func svcErrUnknownMethod(what string) *dbus.Error {
-	return dbus.NewError(svcErrNameUnknownMeth, []any{what})
 }
 func svcErrFailed(what string) *dbus.Error {
 	return dbus.NewError(svcErrNameFailed, []any{what})

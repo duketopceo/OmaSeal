@@ -22,9 +22,14 @@ const (
 // mode:
 //   - "open"  : agents can read and write secrets freely. Opt-in only — the
 //     default for a missing policy is "ask", never "open".
-//   - "ask"   : agents must run `omaseal agent unlock` (biometric if available)
-//     before any MCP tool that touches secrets.
-//   - "lock"  : agents cannot access secrets at all.
+//   - "ask"   : agents need a live session before any MCP tool that touches
+//     secrets. A session is minted by `omaseal agent unlock` (biometric if
+//     available) OR by any passphrase-verified store unlock — CLI get/set,
+//     the panel's unlock field, or a Secret Service Prompt through the
+//     provider daemon — because a correct passphrase is the same presence
+//     proof. `omaseal agent lock` revokes the session file.
+//   - "lock"  : agents cannot access secrets at all. The provider daemon
+//     fails closed too — per-call gate, live sessions included.
 //
 // primary_agent is the user's main agent; agents lists the assigned defaults.
 // Both are used by `omaseal mcp install-detected` and `omaseal setup` so the
@@ -55,13 +60,9 @@ func defaultAgentPolicy() AgentPolicy {
 // without creating it — write paths layer MkdirAll on top so reads never
 // conjure the directory as a side effect.
 func omasealConfigDir() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
+	base := svcXDGDir("XDG_CONFIG_HOME", ".config")
 	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		base = filepath.Join(home, ".config")
+		return ""
 	}
 	return filepath.Join(base, agentConfigDirName)
 }
