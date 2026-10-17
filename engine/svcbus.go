@@ -163,9 +163,9 @@ func (d *svcDaemon) watchNames() error {
 			}
 			name, _ := sig.Body[0].(string)
 			newOwner, _ := sig.Body[2].(string)
-			if name == svcBusName && newOwner != "" && newOwner != d.conn.Names()[0] {
-				// Lost the name to a foreign claimant — exit rather than
-				// linger as a shadow object surface.
+			if name == svcBusName && newOwner != d.conn.Names()[0] {
+				// Lost the name — to a foreign claimant or released to no
+				// owner. Exit rather than linger as a shadow object surface.
 				WriteLog("provider: lost %s to %s", svcBusName, newOwner)
 				close(d.lostName)
 				return
