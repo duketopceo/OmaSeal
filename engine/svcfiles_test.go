@@ -34,7 +34,14 @@ func TestProviderEnableWritesActivationAndUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activation file: %v", err)
 	}
-	for _, want := range []string{"Name=org.freedesktop.secrets", "SystemdService=omaseal-provider.service", "Exec=/usr/bin/omaseal provider serve"} {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	for _, want := range []string{"Name=org.freedesktop.secrets", "SystemdService=omaseal-provider.service", "Exec=" + exe + " provider serve"} {
 		if !strings.Contains(string(act), want) {
 			t.Errorf("activation missing %q", want)
 		}
@@ -43,7 +50,7 @@ func TestProviderEnableWritesActivationAndUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unit file: %v", err)
 	}
-	for _, want := range []string{"Type=dbus", "BusName=org.freedesktop.secrets", "LimitCORE=0", "ExecStart=/usr/bin/omaseal provider serve"} {
+	for _, want := range []string{"Type=dbus", "BusName=org.freedesktop.secrets", "LimitCORE=0", "ExecStart=" + exe + " provider serve"} {
 		if !strings.Contains(string(unit), want) {
 			t.Errorf("unit missing %q", want)
 		}

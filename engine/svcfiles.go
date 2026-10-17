@@ -136,19 +136,26 @@ func providerEnable(args []string) error {
 		return fmt.Errorf("unknown flag %q — `omaseal provider enable` takes none", a)
 	}
 	exe, err := os.Executable()
-	if err == nil && !strings.HasPrefix(exe, "/usr/") {
-		fmt.Fprintf(os.Stderr, "warning: templates pin ExecStart=/usr/bin/omaseal but this binary is %s — install the package or the unit will not start\n", exe)
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
 	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	// Templates pin /usr/bin/omaseal; substitute the resolved binary so a
+	// /usr/local/bin or per-user install still produces working activation.
+	activation := strings.ReplaceAll(svcActivationContents, "/usr/bin/omaseal", exe)
+	unit := strings.ReplaceAll(svcUnitContents, "/usr/bin/omaseal", exe)
 	if err := os.MkdirAll(filepath.Dir(svcActivationPath()), 0755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(svcUnitPath()), 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(svcActivationPath(), []byte(svcActivationContents), 0644); err != nil {
+	if err := os.WriteFile(svcActivationPath(), []byte(activation), 0644); err != nil {
 		return fmt.Errorf("activation file: %w", err)
 	}
-	if err := os.WriteFile(svcUnitPath(), []byte(svcUnitContents), 0644); err != nil {
+	if err := os.WriteFile(svcUnitPath(), []byte(unit), 0644); err != nil {
 		return fmt.Errorf("unit file: %w", err)
 	}
 	if err := svcDaemonReload(); err != nil {

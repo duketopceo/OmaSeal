@@ -229,6 +229,9 @@ func (s svcServiceAPI) ReadAlias(msg dbus.Message, name string) (coll dbus.Objec
 	if svcClassify(svcMsgPath(msg)) != svcClassService {
 		return "/", svcErrUnknownObject("ReadAlias on non-service path")
 	}
+	if _, _, _, err := s.d.svcGate(msg); err != nil {
+		return "/", err
+	}
 	if name == "default" {
 		return svcCollectionPath(), nil
 	}
@@ -334,7 +337,9 @@ func (i svcItemAPI) Delete(msg dbus.Message) (prompt dbus.ObjectPath, derr *dbus
 	}
 	i.d.mu.Lock()
 	delete(i.d.index.Items, string(path))
-	_ = i.d.index.save()
+	if err := i.d.index.save(); err != nil {
+		WriteLog("provider: index save after delete: %v", err)
+	}
 	i.d.mu.Unlock()
 	i.d.emitItemDeleted(path)
 	return "/", nil
@@ -548,7 +553,17 @@ func (d *svcDaemon) createItem(key, svc, acct, secret string, attrs map[string]s
 	}
 	d.index.Items[path] = row
 	if err := d.index.save(); err != nil {
-		WriteLog("provider: index save: %v", err)
+		// store.Set already committed — roll back the in-memory row so a
+		// retry sees clean state (reconcile re-indexes the stored secret),
+		// report the partial commit, and emit no success signal.
+		if existed {
+			d.index.Items[path] = prev
+		} else {
+			delete(d.index.Items, path)
+		}
+		d.mu.Unlock()
+		WriteLog("provider: index save after set: %v", err)
+		return "", svcErrFailed(fmt.Sprintf("secret stored but index persist failed: %v", err))
 	}
 	d.mu.Unlock()
 	if existed {
