@@ -15,7 +15,7 @@ Design direction: [DESIGN.md](DESIGN.md). Written directly rather than via `ce-p
 | U7 Different-uid policy daemon (confinement) | Later | research | hard | needs setuid or polkit brokering; large attack-surface change | state the same-uid limits plainly (already in README/ROADMAP) |
 | U8 Stable v1.0 API | Later | open | medium | needs third-party consumers | freeze `service/account` and IPC only |
 
-Simplification found: the engine carries two stores (Secret Service and native) plus `keyringmigrate.go` and `backendmigrate.go`; once the native store is the default and migration is done for existing users, the Secret Service path is the delete candidate. Not before U4's outcome is known.
+Simplification found: the engine carries two stores (Secret Service and native) plus `keyringmigrate.go` and `backendmigrate.go`; once the native store is the default and migration is done for existing users, the Secret Service path is the delete candidate. Not before U4's outcome is known — and not before migration verifies parity: `migrateItems` today skips a source key the native store already lists without comparing values, so "done" must mean read-and-compared equality for every addressable source item, not just presence.
 
 ---
 
