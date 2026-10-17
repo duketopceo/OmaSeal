@@ -92,7 +92,7 @@ Panel {
 
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
-  readonly property color urgent: Color.urgent !== undefined ? Color.urgent : "#f38ba8"
+  readonly property color urgent: Color.urgent !== undefined ? Color.urgent : Color.accent
   readonly property color accent: Color.accent
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
 
@@ -1005,7 +1005,7 @@ Panel {
               visible: root.agentMode === "ask" && !root.fprintdAvailable
               Layout.fillWidth: true
               text: "no fingerprint reader — unlock is ungated"
-              color: root.dim
+              color: root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
