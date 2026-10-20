@@ -70,6 +70,8 @@ if [ -n "$qmllint" ]; then
     lint_out=$("$qmllint" "$f" 2>&1 || true)
     grep -q '\[syntax\]' <<< "$lint_out" && fail "qmllint syntax error in $f"
   done
+else
+  fail "qmllint is required for the panel syntax check (qt6-declarative tools)"
 fi
 
 echo "check-panel: PASS"

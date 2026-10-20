@@ -44,15 +44,16 @@ component types automatically, no `import` needed, manifest untouched.
 | File | Concern | ~Lines |
 |---|---|---|
 | `Panel.qml` | Boundary contract (props/functions/signals), state properties, view composition, close/open lifecycle | ~300 |
-| `PanelJobs.qml` (QtObject) | All `Process`/`Component` job objects + job functions: `copySecret`, `deleteSecret`, `saveSecret`, `unlockAgent`, `refresh`, `refreshAgentStatus`, log refresh, clipclear. Exposes `lastCopied`, `agentMode/SessionActive/Backend`, `notice` | ~450 |
-| `PanelModel.qml` (QtObject) | `secretsModel`, `logModel`, `secrets`/`applySecrets`/`applyLogs`, filter/sort/search state, `secretKey` | ~150 |
+| `PanelJobs.qml` (Item) | All `Process`/`Component` job objects + job functions: `copySecret`, `deleteSecret`, `saveSecret`, `unlockAgent`, `refresh`, `refreshAgentStatus`, log refresh, clipclear. Exposes `lastCopied`, `agentMode/SessionActive/Backend`, `notice` | ~450 |
+| `PanelModel.qml` (Item) | `secretsModel`, `logModel`, `secrets`/`applySecrets`/`applyLogs`, filter/sort/search state, `secretKey` | ~150 |
 | `SecretsView.qml` | The ListView + delegate rows + empty state | ~200 |
 | `AgentSection.qml` | Agent status row, mode cycling, `passphraseField`, unlock button, fprintd notice | ~150 |
 | `AddEditForm.qml` | service/account/secret fields + save/cancel + validation notice | ~150 |
 
 > **Erratum (2026-10-19, post-implementation):** the `QtObject` root guidance below was falsified at runtime — `QtObject`'s `data` property is `list<QtObject>`, so `ListModel`/`Process`/`Component` children fail to instantiate and the panel silently never opens. `PanelJobs.qml` and `PanelModel.qml` shipped with `Item` roots and bare `id:` children. Also falsified-by-runtime: sibling files could not reach `id`s in other files — `secretsModel`/`logModel` became `property var` properties. See `docs/solutions/developer-experience/qml-sibling-split-silent-load-failures.md`.
 
-Non-visual concerns use `QtObject` roots (valid non-visual component type);
+Non-visual containers that own `Process`/`ListModel`/`Component` children use
+`Item` roots — `QtObject` cannot hold those children (see erratum above);
 views use `Item`/`Rectangle` per current layout. Root instantiates:
 
 ```qml
@@ -64,9 +65,13 @@ SecretsView { jobs: jobs; model: model.secretsModel; onCopyRequested: jobs.copyS
 
 ## Copy-path fix (the leak)
 
-- `copySecret(svc, acct)` spawns one proc:
-  `["sh", "-c", "omaseal get \"$1\" \"$2\" | wl-copy --sensitive", "omaseal-copy", svc, acct]`
-  — args positional, never interpolated into the script string.
+- `copySecret(svc, acct)` spawns one proc running the shipped sentinel flow —
+  `out=$(omaseal get "$1" "$2"; rc=$?; if [ $rc -eq 0 ]; then printf x; else
+  exit $rc; fi) && out=${out%x} && [ -n "$out" ] && printf %s "$out" |
+  wl-copy --sensitive` — args positional, never interpolated into the script
+  string. `wl-copy` starts only after `get` succeeded and produced non-empty
+  output: a failed or empty read exits before touching the clipboard, and the
+  sentinel byte preserves trailing newlines that `$()` would strip.
 - `getText` property deleted; `pendingCopy` queue semantics preserved (a copy
   request must always complete; double-clicks don't drop or deadlock).
 - `lastCopied` identity + 30s `clipclear` timer unchanged.
