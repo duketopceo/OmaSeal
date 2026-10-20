@@ -50,6 +50,8 @@ component types automatically, no `import` needed, manifest untouched.
 | `AgentSection.qml` | Agent status row, mode cycling, `passphraseField`, unlock button, fprintd notice | ~150 |
 | `AddEditForm.qml` | service/account/secret fields + save/cancel + validation notice | ~150 |
 
+> **Erratum (2026-10-19, post-implementation):** the `QtObject` root guidance below was falsified at runtime — `QtObject`'s `data` property is `list<QtObject>`, so `ListModel`/`Process`/`Component` children fail to instantiate and the panel silently never opens. `PanelJobs.qml` and `PanelModel.qml` shipped with `Item` roots and bare `id:` children. Also falsified-by-runtime: sibling files could not reach `id`s in other files — `secretsModel`/`logModel` became `property var` properties. See `docs/solutions/developer-experience/qml-sibling-split-silent-load-failures.md`.
+
 Non-visual concerns use `QtObject` roots (valid non-visual component type);
 views use `Item`/`Rectangle` per current layout. Root instantiates:
 
