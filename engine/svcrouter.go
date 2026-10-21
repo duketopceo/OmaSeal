@@ -380,6 +380,12 @@ func (d *svcDaemon) propSet(path dbus.ObjectPath, iface, name string, v dbus.Var
 				if svcAttrBytes(m) > svcMaxAttrBytes {
 					return svcErrInvalidArgs("attributes exceed 64 KiB")
 				}
+				// service/account are the item's identity — a dict that
+				// implies a different store key would orphan the secret it
+				// points at, so SearchItems lies about what's stored.
+				if svcItemKey(m) != it.Key {
+					return svcErrInvalidArgs("service/account are item identity and cannot change")
+				}
 				return d.mutateItem(path, it, name, v, func() { it.Attrs = m })
 			}
 		case "Type":

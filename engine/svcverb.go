@@ -139,7 +139,7 @@ func providerStatus(args []string) error {
 
 	var unique string
 	owned := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique) == nil
-	ours, ownerDesc := svcOwnerIsOurs(conn)
+	ours, ownerDesc, _ := svcOwnerIsOurs(conn)
 	_, actErr := os.Stat(svcActivationPath())
 	_, unitErr := os.Stat(svcUnitPath())
 	enabled := actErr == nil || unitErr == nil

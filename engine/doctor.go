@@ -192,7 +192,7 @@ func checkSecretService() checkResult {
 	// missing keyring. Check ownership before diagnosing gnome-keyring.
 	if conn, err := svcConnect(""); err == nil {
 		defer func() { _ = conn.Close() }()
-		if ours, owner := svcOwnerIsOurs(conn); ours {
+		if ours, owner, _ := svcOwnerIsOurs(conn); ours {
 			return checkResult{name: "secret-service", ok: true,
 				message: "omaseal provider owns org.freedesktop.secrets (" + owner + ")"}
 		}

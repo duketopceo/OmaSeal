@@ -169,7 +169,11 @@ func mintAgentSessionIfAsk() {
 	}
 	if err := writeSessionExpiry(expiry); err != nil {
 		WriteLog("agent session mint after store unlock failed: %v", err)
+		return
 	}
+	// The unlock also armed same-UID agents — say so on stderr (stdout can
+	// carry a secret) so the grant is never silent.
+	fmt.Fprintf(os.Stderr, "omaseal: store unlock armed the agent session for %dm — `omaseal agent lock` revokes\n", p.SessionMinutes)
 }
 
 // renewSessionExpiry updates an existing session file in place. Unlike

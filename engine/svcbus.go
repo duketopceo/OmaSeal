@@ -98,7 +98,7 @@ func svcClaimName(conn *dbus.Conn) error {
 // svcOwnerDesc describes the current owner of the well-known name —
 // delegates to the single owner→pid→exe resolver in svcOwnerIsOurs.
 func svcOwnerDesc(conn *dbus.Conn) string {
-	_, owner := svcOwnerIsOurs(conn)
+	_, owner, _ := svcOwnerIsOurs(conn)
 	if owner == "" {
 		return "unknown owner"
 	}

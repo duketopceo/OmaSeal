@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -115,19 +117,28 @@ func svcActivationIsOurs() bool {
 // svcOwnerIsOurs reports whether the name's current owner is an omaseal
 // binary — resolved via pid → /proc/<pid>/exe against os.Executable, so a
 // foreign process claiming the name never counts.
-func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string) {
+func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string, pid uint32) {
 	var unique string
 	if err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique); err != nil {
-		return false, ""
+		return false, "", 0
 	}
-	pid, err := svcPeerPID(conn, unique)
+	p, err := svcPeerPID(conn, unique)
 	if err != nil {
-		return false, unique
+		return false, unique, 0
 	}
 	self, _ := os.Executable()
-	target, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	target, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", p))
 	ours = target != "" && self != "" && target == self
-	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, pid, filepath.Base(target))
+	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, p, filepath.Base(target)), p
+}
+
+// svcFileIsOurs reports whether an existing file at path is omaseal-authored
+// (its Exec/unit lines invoke `provider serve` — the marker survives the exe
+// path substitution, unlike the binary's own name). A foreign file at one of
+// these paths belongs to another provider and is never ours to remove.
+func svcFileIsOurs(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(data), "provider serve")
 }
 
 // providerEnable installs the activation shadow + user unit.
@@ -152,6 +163,21 @@ func providerEnable(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(svcUnitPath()), 0755); err != nil {
 		return err
 	}
+	// Never clobber a foreign file at these paths — the activation name is
+	// the spec's shared slot, so another provider's entry moves aside and
+	// comes back on disable rather than being destroyed.
+	for _, p := range []string{svcActivationPath(), svcUnitPath()} {
+		if svcFileIsOurs(p) {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			bak := p + ".omaseal-bak"
+			if rerr := os.Rename(p, bak); rerr != nil {
+				return fmt.Errorf("foreign file at %s, backup failed: %w", p, rerr)
+			}
+			fmt.Printf("existing foreign file moved to %s\n", bak)
+		}
+	}
 	if err := os.WriteFile(svcActivationPath(), []byte(activation), 0644); err != nil {
 		return fmt.Errorf("activation file: %w", err)
 	}
@@ -175,7 +201,7 @@ func providerEnable(args []string) error {
 	conn, err := svcConnectAmbient()
 	if err == nil {
 		defer func() { _ = conn.Close() }()
-		ours, owner := svcOwnerIsOurs(conn)
+		ours, owner, _ := svcOwnerIsOurs(conn)
 		switch {
 		case ours:
 			fmt.Println("omaseal already owns " + svcBusName)
@@ -189,17 +215,34 @@ func providerEnable(args []string) error {
 }
 
 // providerDisable stops the unit, then removes the activation shadow so the
-// next activation returns to the system provider (gnome-keyring).
+// next activation returns to the system provider (gnome-keyring). Only
+// omaseal-authored files are removed — a foreign file is left alone, and one
+// we backed up at enable is restored.
 func providerDisable() error {
 	if err := svcStopUnit(); err != nil {
 		fmt.Fprintf(os.Stderr, "note: unit stop: %v (non-systemd session or unit inactive)\n", err)
 	}
 	var removed []string
 	for _, p := range []string{svcActivationPath(), svcUnitPath()} {
-		if err := os.Remove(p); err == nil {
-			removed = append(removed, p)
-		} else if !os.IsNotExist(err) {
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			continue
+		}
+		if !svcFileIsOurs(p) {
+			fmt.Printf("note: %s left in place — not an omaseal file\n", p)
+			continue
+		}
+		if err := os.Remove(p); err != nil {
 			return fmt.Errorf("remove %s: %w", p, err)
+		}
+		removed = append(removed, p)
+	}
+	// Restore whatever a foreign file was moved aside as at enable.
+	for _, p := range []string{svcActivationPath(), svcUnitPath()} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			continue
+		}
+		if rerr := os.Rename(p+".omaseal-bak", p); rerr == nil {
+			fmt.Println("  restored " + p)
 		}
 	}
 	if err := svcDaemonReload(); err != nil {
@@ -216,7 +259,26 @@ func providerDisable() error {
 	conn, err := svcConnectAmbient()
 	if err == nil {
 		defer func() { _ = conn.Close() }()
-		if _, owner := svcOwnerIsOurs(conn); owner != "" {
+		ours, owner, pid := svcOwnerIsOurs(conn)
+		switch {
+		case ours:
+			// Removing the activation file does not release a name already
+			// owned: a directly Exec-activated daemon survives `systemctl
+			// stop`. The owner is verified omaseal — SIGTERM is the same-UID
+			// shutdown path.
+			_ = syscall.Kill(int(pid), syscall.SIGTERM)
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if still, _, _ := svcOwnerIsOurs(conn); !still {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if still, _, _ := svcOwnerIsOurs(conn); still {
+				return fmt.Errorf("omaseal daemon (pid %d) still owns %s — kill it manually", pid, svcBusName)
+			}
+			fmt.Printf("stopped omaseal daemon (pid %d)\n", pid)
+		case owner != "":
 			fmt.Printf("note: %s still owned by %s until that process exits\n", svcBusName, owner)
 		}
 	}

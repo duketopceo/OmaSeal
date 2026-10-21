@@ -313,34 +313,45 @@ func (s *nativeStore) unlockIdentity(passphrase string, expires time.Time) error
 // distinguishable and `agent lock` revocation is never faked by leftover
 // session files (KTD2).
 func (s *nativeStore) unwrapIdentity(passphrase string) error {
+	id, err := s.unwrapIdentityPass(passphrase)
+	if err != nil {
+		return err
+	}
+	s.identity.Store(id)
+	return nil
+}
+
+// unwrapIdentityPass is unwrapIdentity minus the memory commit — callers
+// that must gate publication (the provider's prompt path) store the identity
+// themselves only after their veto checks pass.
+func (s *nativeStore) unwrapIdentityPass(passphrase string) (*age.X25519Identity, error) {
 	if s.identityEnc == nil {
 		blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
 		if errors.Is(err, os.ErrNotExist) {
-			return newError("store_uninitialized", "omaseal get (or migrate) in a terminal first", err)
+			return nil, newError("store_uninitialized", "omaseal get (or migrate) in a terminal first", err)
 		}
 		if err != nil {
-			return keyringError(err)
+			return nil, keyringError(err)
 		}
 		s.identityEnc = blob
 	}
 	sid, err := age.NewScryptIdentity(passphrase)
 	if err != nil {
-		return keyringError(err)
+		return nil, keyringError(err)
 	}
 	src, err := age.Decrypt(bytes.NewReader(s.identityEnc), sid)
 	if err != nil {
-		return newError("unlock_denied", "wrong passphrase", fmt.Errorf("unlock: %w", err))
+		return nil, newError("unlock_denied", "wrong passphrase", fmt.Errorf("unlock: %w", err))
 	}
 	raw, err := io.ReadAll(src)
 	if err != nil {
-		return keyringError(err)
+		return nil, keyringError(err)
 	}
 	id, err := age.ParseX25519Identity(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return keyringError(err)
+		return nil, keyringError(err)
 	}
-	s.identity.Store(id)
-	return nil
+	return id, nil
 }
 
 // ensureIdentity resolves the decryption identity: memory → tmpfs session →

@@ -70,9 +70,12 @@ func TestSvcPromptCompletedEchoesObjects(t *testing.T) {
 	sigs := svcSignals(t, client)
 
 	objects := []dbus.ObjectPath{svcCollectionPath()}
-	path := d.mintPrompt(":1.42", "test", objects, func(ctx context.Context) ([]dbus.ObjectPath, error) {
+	path, derr := d.mintPrompt(":1.42", "test", objects, func(ctx context.Context) ([]dbus.ObjectPath, error) {
 		return objects, nil
 	})
+	if derr != nil {
+		t.Fatalf("mint: %v", derr)
+	}
 	if err := d.drivePrompt(path, ":1.42"); err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -117,9 +120,12 @@ func TestSvcPromptOpErrorIsDismissed(t *testing.T) {
 	client := bus.connect(t)
 	sigs := svcSignals(t, client)
 
-	path := d.mintPrompt(":1.42", "test", nil, func(context.Context) ([]dbus.ObjectPath, error) {
+	path, derr := d.mintPrompt(":1.42", "test", nil, func(context.Context) ([]dbus.ObjectPath, error) {
 		return nil, fmt.Errorf("wrong passphrase")
 	})
+	if derr != nil {
+		t.Fatalf("mint: %v", derr)
+	}
 	if err := d.drivePrompt(path, ":1.42"); err != nil {
 		t.Fatalf("drive: %v", err)
 	}
@@ -151,7 +157,7 @@ func TestSvcDismissCancelsInFlightOp(t *testing.T) {
 
 	opStarted := make(chan struct{})
 	opDone := make(chan error, 1)
-	path := d.mintPrompt(":1.42", "test", nil, func(ctx context.Context) ([]dbus.ObjectPath, error) {
+	path, derr := d.mintPrompt(":1.42", "test", nil, func(ctx context.Context) ([]dbus.ObjectPath, error) {
 		close(opStarted)
 		select {
 		case <-ctx.Done():
@@ -162,6 +168,9 @@ func TestSvcDismissCancelsInFlightOp(t *testing.T) {
 			return nil, nil
 		}
 	})
+	if derr != nil {
+		t.Fatalf("mint: %v", derr)
+	}
 	if err := d.drivePrompt(path, ":1.42"); err != nil {
 		t.Fatalf("drive: %v", err)
 	}

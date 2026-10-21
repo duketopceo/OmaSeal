@@ -92,7 +92,7 @@ func TestSvcOwnerIsOursSelfClaim(t *testing.T) {
 	if err := svcClaimName(conn); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	ours, owner := svcOwnerIsOurs(conn)
+	ours, owner, _ := svcOwnerIsOurs(conn)
 	if !ours {
 		t.Fatalf("owner %s should resolve as ours", owner)
 	}
@@ -104,7 +104,7 @@ func TestSvcOwnerIsOursSelfClaim(t *testing.T) {
 func TestSvcOwnerIsOursForeignAndUnowned(t *testing.T) {
 	bus := newSvcTestBus(t)
 	conn := bus.connect(t)
-	ours, owner := svcOwnerIsOurs(conn)
+	ours, owner, _ := svcOwnerIsOurs(conn)
 	if ours {
 		t.Fatal("unowned name resolved as ours")
 	}

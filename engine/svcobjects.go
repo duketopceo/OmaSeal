@@ -143,7 +143,7 @@ func (s svcServiceAPI) Unlock(msg dbus.Message, objects []dbus.ObjectPath) (unlo
 		return resolved, "/", nil
 	}
 	sender := svcMsgSender(msg)
-	prompt = s.d.mintPrompt(sender, exe, resolved, func(ctx context.Context) ([]dbus.ObjectPath, error) {
+	prompt, derr = s.d.mintPrompt(sender, exe, resolved, func(ctx context.Context) ([]dbus.ObjectPath, error) {
 		if err := s.d.unlockViaPrompt(ctx, exe); err != nil {
 			return nil, err
 		}
@@ -152,6 +152,9 @@ func (s svcServiceAPI) Unlock(msg dbus.Message, objects []dbus.ObjectPath) (unlo
 		// clients.
 		return s.d.resolvableObjects(objects), nil
 	})
+	if derr != nil {
+		return nil, "/", derr
+	}
 	return nil, prompt, nil
 }
 

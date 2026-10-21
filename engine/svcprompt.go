@@ -49,7 +49,7 @@ func svcAgentModeLocked() bool {
 // prompt per sender — a second mint from the same client reuses it.
 // objects is what Completed echoes on success (the paths the caller asked
 // to have unlocked); op runs off-mutex with a cancel wired to Dismiss.
-func (d *svcDaemon) mintPrompt(sender, exe string, objects []dbus.ObjectPath, op func(context.Context) ([]dbus.ObjectPath, error)) dbus.ObjectPath {
+func (d *svcDaemon) mintPrompt(sender, exe string, objects []dbus.ObjectPath, op func(context.Context) ([]dbus.ObjectPath, error)) (dbus.ObjectPath, *dbus.Error) {
 	// Peer uid resolution is a bus round-trip — do it BEFORE taking mu so a
 	// slow bus can't serialize the daemon behind one lookup.
 	uid, _ := svcPeerUID(d.conn, sender)
@@ -58,25 +58,30 @@ func (d *svcDaemon) mintPrompt(sender, exe string, objects []dbus.ObjectPath, op
 	defer d.mu.Unlock()
 	for path, p := range d.prompts {
 		if p.owner == sender {
-			return path // dedup
+			return path, nil // dedup
 		}
 	}
-	if n := d.promptsForUIDLocked(0); n >= svcMaxPromptsGlobal {
-		return "/" // budget exhausted: caller sees no prompt path
+	// A refused mint is an error, not "/" — to a client, "/" reads as
+	// "unlocked nothing, no prompt needed", which hides the refusal.
+	if len(d.prompts) >= svcMaxPromptsGlobal {
+		return "", svcErrAccessDenied("prompt budget exhausted")
 	}
 	if d.promptsForUIDLocked(uid) >= svcMaxPromptsPerUID {
-		return "/"
+		return "", svcErrAccessDenied("per-uid prompt budget exhausted")
 	}
 	path := dbus.ObjectPath(string(svcBasePath) + "/prompt/" + svcRandID())
 	d.prompts[path] = &svcPrompt{owner: sender, uid: uid, op: op, objects: objects}
 	WriteLog("provider: mint prompt %s sender=%s exe=%s", path, sender, exe)
-	return path
+	return path, nil
 }
 
+// promptsForUIDLocked counts prompts owned by one uid. A failed uid lookup
+// lands callers in the uid==0 bucket — capped like any other, never a
+// silent count-all.
 func (d *svcDaemon) promptsForUIDLocked(uid uint32) int {
 	n := 0
 	for _, p := range d.prompts {
-		if uid == 0 || p.uid == uid {
+		if p.uid == uid {
 			n++
 		}
 	}
@@ -184,8 +189,12 @@ func (d *svcDaemon) unlockViaPrompt(ctx context.Context, exe string) error {
 	if pass == "" {
 		return fmt.Errorf("empty passphrase")
 	}
-	// scrypt unwrap is the ~500ms path — keep it off the daemon mutex.
-	if err := d.store.unwrapIdentity(pass); err != nil {
+	// scrypt unwrap is the ~500ms path — keep it off the daemon mutex. The
+	// identity is NOT published here: an in-flight unwrap completing after
+	// Service.Lock or Dismiss must not arm the vault behind its back, so
+	// the store happens only under mu after the cancellation check.
+	id, err := d.store.unwrapIdentityPass(pass)
+	if err != nil {
 		return err
 	}
 	expiry := d.now().Add(defaultNativeTTL)
@@ -195,11 +204,11 @@ func (d *svcDaemon) unlockViaPrompt(ctx context.Context, exe string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if ctx.Err() != nil {
-		// Dismissed while the prompter was open — the passphrase succeeded
-		// but the caller asked us not to commit it.
-		d.store.identity.Store(nil)
+		// Dismissed or locked while the prompter was open — the passphrase
+		// succeeded but the identity was never published.
 		return ctx.Err()
 	}
+	d.store.identity.Store(id)
 	d.promptIdentity = true
 	d.promptExpiry = expiry
 	if werr := writeFileMode(svcUnlockEpochPath(), []byte(fmt.Sprintf("%d", expiry.Unix())), 0600); werr != nil {
@@ -222,8 +231,15 @@ func (d *svcDaemon) lockDaemon() {
 }
 
 // lockDaemonLocked is lockDaemon under mu. Per the plan: a real Lock unlinks
-// the session files so nothing re-adopts a file-derived identity.
+// the session files so nothing re-adopts a file-derived identity. In-flight
+// prompt ops are cancelled first — otherwise their commit section can
+// re-publish the identity after this clear.
 func (d *svcDaemon) lockDaemonLocked() {
+	for _, p := range d.prompts {
+		if p.cancel != nil {
+			p.cancel()
+		}
+	}
 	d.store.identity.Store(nil)
 	d.promptIdentity = false
 	if err := d.store.unlinkSessionFiles(); err != nil {
