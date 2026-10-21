@@ -9,10 +9,12 @@ import (
 )
 
 // graphical forces the session probe on — CI has no display, and the
-// prompter binaries are stubbed so nothing real is spawned.
+// prompter binaries are stubbed so nothing real is spawned. The runtime
+// dir is isolated so the ask-save throttle stamp can't leak between tests.
 func graphical(t *testing.T) {
 	t.Helper()
 	t.Setenv("WAYLAND_DISPLAY", "test-wayland")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 }
 
 // forceZenity stubs the prompter list to exactly the given zenity script —
@@ -103,6 +105,63 @@ func TestAskSaveDescCapped(t *testing.T) {
 	}
 	if n := strings.Count(string(raw), "Q"); n != 200 {
 		t.Errorf("desc should carry exactly the 200-char cap, got %d Q's", n)
+	}
+}
+
+func TestAskSaveDescSanitized(t *testing.T) {
+	mockKeyring(t)
+	graphical(t)
+	marker := t.TempDir() + "/desc"
+	forceZenity(t, `printf '%s' "$*" > "`+marker+`"; printf 'v\n'`)
+
+	// Newlines and control bytes could fake extra prompt lines; they must
+	// flatten to spaces, and the note must be labelled untrusted.
+	err := askSave(context.Background(), "svc", "acct", "line one\nline two: press OK\x07")
+	if err != nil {
+		t.Fatalf("askSave: %v", err)
+	}
+	raw, rerr := os.ReadFile(marker)
+	if rerr != nil {
+		t.Fatalf("stub did not record argv: %v", rerr)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "Agent note (untrusted): line one line two: press OK") {
+		t.Errorf("desc not flattened/labelled: %q", got)
+	}
+}
+
+func TestAskSaveRateLimited(t *testing.T) {
+	mockKeyring(t)
+	graphical(t)
+	forceZenity(t, `printf 'v\n'`)
+
+	if err := askSave(context.Background(), "svc", "acct", ""); err != nil {
+		t.Fatalf("first askSave: %v", err)
+	}
+	// A cancelled or completed prompt still burns the slot — the second
+	// call inside the cooldown is refused before any dialog opens.
+	err := askSave(context.Background(), "svc", "acct", "")
+	if code := codeFromError(err); code != "rate_limited" {
+		t.Fatalf("code = %q, want rate_limited (err %v)", code, err)
+	}
+}
+
+// MCP surface end-to-end: valid call through callMCPTool prompts (stubbed),
+// stores, and returns ok — exercising dispatch, policy, and persistence.
+func TestMCPAskSaveStoresDialogValue(t *testing.T) {
+	cfg, ms := mcpFixture(t)
+	writeAgentPolicy(t, cfg, "open", false)
+	graphical(t)
+	forceZenity(t, `printf 'hunter2\n'`)
+
+	resp := mcpCall("omaseal_ask_save", map[string]any{"service": "svc", "account": "acct"})
+	isErr, txt := mcpIsError(t, resp)
+	if isErr || txt != "ok" {
+		t.Fatalf("want ok, got isErr=%v text=%q", isErr, txt)
+	}
+	got, err := ms.get("svc", "acct")
+	if err != nil || got != "hunter2" {
+		t.Fatalf("stored %q, err %v — want hunter2", got, err)
 	}
 }
 

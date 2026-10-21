@@ -5,26 +5,70 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// askSaveCooldown paces popup requests — a cancelled dialog still burns the
+// slot, so an agent can't spam prompts faster than the user can read them.
+const askSaveCooldown = 5 * time.Second
+
+// askSaveRateLimited enforces the cooldown via a runtime-dir stamp so CLI
+// invocations (new process each call) and MCP calls share the limit.
+func askSaveRateLimited() error {
+	dir := agentRuntimeDir()
+	stamp := filepath.Join(dir, "ask-save.stamp")
+	now := time.Now()
+	if raw, err := os.ReadFile(stamp); err == nil {
+		if last, perr := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); perr == nil {
+			if wait := askSaveCooldown - now.Sub(time.Unix(last, 0)); wait > 0 {
+				return newError("rate_limited", fmt.Sprintf("retry in %ds", int(wait.Seconds())+1),
+					errors.New("prompted save requested too soon after the previous one"))
+			}
+		}
+	}
+	// Best-effort stamp — a throttle write failure must not fail the save.
+	if err := os.MkdirAll(dir, 0o700); err == nil {
+		_ = os.WriteFile(stamp, []byte(strconv.FormatInt(now.Unix(), 10)), 0o600)
+	}
+	return nil
+}
+
+// sanitizeAskDesc flattens agent-controlled dialog copy to one line:
+// newlines and control bytes could fake extra prompt text or instructions
+// in front of the user. Capped by runes so multibyte input never splits.
+func sanitizeAskDesc(desc string) string {
+	const maxDesc = 200
+	flat := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, desc)
+	if r := []rune(flat); len(r) > maxDesc {
+		return string(r[:maxDesc])
+	}
+	return flat
+}
 
 // askSave collects a secret from the USER in a masked GUI dialog and stores
 // it — the value never transits the requesting agent's context, tool call,
 // or process args. desc is optional caller context shown in the dialog
-// (agent-supplied, untrusted: escaped by the prompter and length-capped here).
+// (agent-supplied, untrusted: sanitized, labelled, and capped here).
 // Errors are typed so an agent gets a recovery path, not a bare failure.
 func askSave(ctx context.Context, service, account, desc string) error {
 	if !graphicalSession() {
 		return newError("no_gui_session", "run `omaseal ask-save <service> <account>` from a desktop session, or `omaseal set` in a terminal",
 			errNoGUIPrompter)
 	}
+	if err := askSaveRateLimited(); err != nil {
+		return err
+	}
 	text := fmt.Sprintf("Enter the secret to save for %s/%s (requested by %s)", service, account, requesterName())
 	if desc != "" {
-		const maxDesc = 200 // dialog copy is attacker-influenced when agents call
-		if len(desc) > maxDesc {
-			desc = desc[:maxDesc]
-		}
-		text += "\n\n" + desc
+		text += "\n\nAgent note (untrusted): " + sanitizeAskDesc(desc)
 	}
 	secret, err := guiPromptDesc(ctx, text)
 	switch {
