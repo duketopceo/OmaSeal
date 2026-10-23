@@ -1,7 +1,7 @@
 ---
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-plan user-directed
-external_source: tailscale/setec (github.com/tailscale/setec) — 484★, BSD-3, Go, pushed 2026-10-02; + tailscale/tsidp (683★, MCP-auth IdP, notes only)
+external_source: tailscale/setec (github.com/tailscale/setec) @ bc168fdb23 (main, 2026-10-02), BSD-3, Go; + tailscale/tsidp @ 4047a40f7f (main, 2026-10-21, notes only). Snapshot metrics dated 2026-10-22: setec 485★, tsidp 685★.
 ---
 
 # setec design-read — what a production secrets service does that we don't
@@ -14,7 +14,7 @@ Read Tailscale's setec — a real secrets-management service with versioned secr
 
 ### The comparison that matters
 
-OmaSeal is local-first: `omaseal get/set` against a local keyring with a manifest policy (`ai-manifest.txt` — ALLOW/ASK/DENY per secret) and agent sessions. setec is a *service*: secrets live server-side, clients fetch over WireGuard-encrypted HTTP at runtime, access scoped by tailnet identity + ACL document. Different center of gravity — which is exactly why it's worth reading: it answers "what does the server-side version of this look like?"
+OmaSeal is local-first: `omaseal get/set` against a local keyring with a manifest policy (`ai-manifest.txt` — ALLOW/ASK/DENY per secret) and agent sessions. The policy boundary is narrower than it looks: the manifest and agent trust modes govern only the MCP/agent channel — the CLI and JSON IPC are trusted local surfaces that bypass it, and an agent with unrestricted shell access can reach the raw CLI and skip the sanctioned agent path entirely. setec is a *service*: secrets live server-side, clients fetch over WireGuard-encrypted HTTP at runtime, access scoped by tailnet identity + ACL document — its ACL is the *only* boundary and it is enforced uniformly. Different center of gravity — which is exactly why it's worth reading: it answers "what does the server-side version of this look like?"
 
 ### The features to evaluate borrowing
 
@@ -40,6 +40,10 @@ OmaSeal is local-first: `omaseal get/set` against a local keyring with a manifes
 ### Acceptance examples
 
 - The notes doc lists every setec feature and maps it: have/need/want — no item left unevaluated.
+- The notes cite coverage of both `server.md` and `api.md` in full, not a skim of the README.
+- Every "borrow" row carries a concrete `if we add X it should look like their Y` pointer (file/doc/mechanism), per Requirement 4.
+- A reciprocal table lists OmaSeal capabilities setec lacks (e.g. manifest ALLOW/ASK/DENY, same-UID agent sessions), per Requirement 3.
+- Each verdict states the local-first reasoning honestly — a "not wanted" with rationale counts as evaluated, per Requirement 2 and the scope boundary that no architecture change is being adopted.
 
 ## Repo Touchpoints
 
