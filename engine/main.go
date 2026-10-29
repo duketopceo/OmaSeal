@@ -235,6 +235,7 @@ func handleSet() {
 	// warning every read surface about a credential that no longer exists.
 	if err := UnflagRotation(service, account); err != nil {
 		WriteLog("set %s/%s: flag clear failed: %v", service, account, err)
+		fmt.Fprintf(os.Stderr, "warning: value stored but rotation flag still set: %v\n", err)
 	}
 	WriteLog("set %s/%s", service, account)
 	fmt.Println("ok")
@@ -271,16 +272,25 @@ func handleFlag() {
 		}
 		positionals = append(positionals, a)
 	}
-	if len(positionals) < 2 {
+	var credArgs []string
+	reason := ""
+	switch {
+	case len(positionals) == 0:
+		fmt.Fprintln(os.Stderr, "error: want <service> <account> [reason]")
+		usage()
+		os.Exit(1)
+	case isOmaSealFamily(positionals[0]):
+		credArgs = positionals[:1]
+		reason = strings.Join(positionals[1:], " ")
+	case len(positionals) >= 2:
+		credArgs = positionals[:2]
+		reason = strings.Join(positionals[2:], " ")
+	default:
 		fmt.Fprintln(os.Stderr, "error: want <service> <account> [reason]")
 		usage()
 		os.Exit(1)
 	}
-	reason := ""
-	if len(positionals) > 2 {
-		reason = strings.Join(positionals[2:], " ")
-	}
-	service, account, err := argCredentialsLoose(positionals[:2])
+	service, account, err := argCredentialsLoose(credArgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		usage()

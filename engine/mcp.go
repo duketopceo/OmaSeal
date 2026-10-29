@@ -430,6 +430,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		// A stored new value completes the rotation — drop a stale flag.
 		if err := UnflagRotation(service, account); err != nil {
 			WriteLog("mcp set %s/%s: flag clear failed: %v", service, account, err)
+			r.Content = append(r.Content, map[string]any{"type": "text", "text": fmt.Sprintf("warning: value stored but rotation flag still set: %v", err)})
 		}
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": "ok"})
 

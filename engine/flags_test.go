@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -101,6 +103,45 @@ func TestCorruptFlagsFileFails(t *testing.T) {
 	}
 	if _, err := loadFlags(); err == nil {
 		t.Fatal("corrupt flags file must error, not silently reset")
+	}
+}
+
+// Concurrent flag writes must not lose updates — the read-modify-write cycle
+// runs under a flock on flags.json.lock.
+func TestUpdateFlagsSerializesConcurrentWriters(t *testing.T) {
+	stubFlagsFile(t)
+	const n = 8
+	old := listItems
+	listItems = func(string, string) ([]Item, error) {
+		items := make([]Item, 0, n)
+		for i := 0; i < n; i++ {
+			items = append(items, Item{Service: "svc", Account: fmt.Sprintf("acct-%d", i), Owned: true})
+		}
+		return items, nil
+	}
+	t.Cleanup(func() { listItems = old })
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := FlagRotation("svc", fmt.Sprintf("acct-%d", i), "leak", "cli"); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	flags, err := loadFlags()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flags) != n {
+		t.Fatalf("lost update: want %d flags, got %d", n, len(flags))
 	}
 }
 
