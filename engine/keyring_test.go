@@ -9,8 +9,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/godbus/dbus/v5"
 	ss "github.com/zalando/go-keyring/secret_service"
 )
+
+// skipIfSelfProviderLocked skips keyring-compat tests when omaseal itself
+// owns org.freedesktop.secrets but its collection is locked for this
+// process. In that state the legacy client path cannot complete Unlock —
+// the failures exercise our own provider, not gnome-keyring. When the vault
+// is unlocked the tests run through the live provider, which is better
+// coverage than a skip (it dogfoods the provider end-to-end).
+func skipIfSelfProviderLocked(t *testing.T) {
+	t.Helper()
+	conn, err := svcConnectAmbient()
+	if err != nil {
+		return // no bus — let the test surface its own failure
+	}
+	defer conn.Close()
+	ours, _, _ := svcOwnerIsOurs(conn)
+	if !ours {
+		return
+	}
+	var v dbus.Variant
+	err = conn.Object(svcBusName, svcCollectionPath()).
+		Call("org.freedesktop.DBus.Properties.Get", 0,
+			"org.freedesktop.Secret.Collection", "Locked").Store(&v)
+	if err != nil {
+		t.Skipf("omaseal owns %s; collection Locked state unreadable (%v)", svcBusName, err)
+	}
+	if locked, _ := v.Value().(bool); locked {
+		t.Skip("omaseal owns org.freedesktop.secrets and the vault is locked — `omaseal agent unlock`, then rerun")
+	}
+}
 
 func randomName(t *testing.T) string {
 	t.Helper()
@@ -22,6 +52,7 @@ func randomName(t *testing.T) string {
 }
 
 func TestKeyringRoundTrip(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	service := randomName(t)
 	account := randomName(t)
 	secret := randomName(t)
@@ -65,6 +96,7 @@ func TestKeyringRoundTrip(t *testing.T) {
 }
 
 func TestKeyringEmptyList(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	service := randomName(t)
 	items, err := List(service)
 	if err != nil {
@@ -93,6 +125,7 @@ func TestKeyringValidation(t *testing.T) {
 }
 
 func TestKeyringReplacesExisting(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	service := randomName(t)
 	account := randomName(t)
 	if err := Set(service, account, "old"); err != nil {
@@ -138,6 +171,7 @@ func TestKeyringErrorMessage(t *testing.T) {
 // by another tool (no app=oma-ring attribute) is readable, updatable in place
 // without duplicating, listed as not-owned, and deletable.
 func TestKeyringForeignItem(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	svc, collection, err := keyringStore()
 	if err != nil {
 		t.Fatalf("keyring store: %v", err)
@@ -223,6 +257,7 @@ func TestKeyringForeignItem(t *testing.T) {
 // so the namespace stays coherent, and Delete removes every copy so the
 // credential is actually gone.
 func TestKeyringDuplicatePair(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	svc, collection, err := keyringStore()
 	if err != nil {
 		t.Fatalf("keyring store: %v", err)
