@@ -42,6 +42,9 @@ type Item struct {
 	// service/account namespace but written by other tools report false so
 	// consumers can distinguish provenance before mutating them.
 	Owned bool `json:"owned"`
+	// Version is the active version number (1 for stores predating
+	// versioning and for backends without version support).
+	Version int `json:"version,omitempty"`
 	// RotationFlagged marks secrets a caller flagged for rotation via
 	// `omaseal flag`; RotationReason carries the optional note. Read
 	// surfaces alert on these — the value itself is still served.

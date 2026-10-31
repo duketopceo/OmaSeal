@@ -57,7 +57,19 @@ type nativeDoc struct {
 	Items map[string]nativeItem `json:"items"`
 }
 
+// nativeVersion is one historical version of an item. Version numbers are
+// append-only and never reused — even across a tombstone, since the
+// tombstoned item retains its Versions. CT is the age-encrypted envelope,
+// same as the item's active blob.
+type nativeVersion struct {
+	V       int    `json:"v"`
+	CT      string `json:"ct"`
+	Created int64  `json:"created"`
+}
+
 type nativeItem struct {
+	// CT is the ACTIVE ciphertext — kept as the live read path so every
+	// existing consumer is unaffected. Versions records the full history.
 	CT      string `json:"ct"`
 	Created int64  `json:"created"`
 	Updated int64  `json:"updated"`
@@ -67,6 +79,13 @@ type nativeItem struct {
 	// External=false → Owned=true, the correct default while only omaseal
 	// writes the native store.
 	External bool `json:"external,omitempty"`
+	// Versions is the append-only history; an item predating versioning
+	// (no Versions) reads as v1 and seeds v1 on its next write.
+	Versions []nativeVersion `json:"versions,omitempty"`
+	// Tomb marks a deleted item: Get returns not_found, List omits, but
+	// history is retained so version numbers are never reused and the
+	// delete is itself a versioned event.
+	Tomb bool `json:"tomb,omitempty"`
 }
 
 // nativeEnvelope binds the plaintext to its name — a ciphertext moved under
@@ -184,7 +203,21 @@ func (s *nativeStore) set(service, account, secret string, owned, ifAbsent bool)
 		if !ok {
 			it.Created = s.now().Unix()
 		}
-		it.CT = base64.StdEncoding.EncodeToString(buf.Bytes())
+		ct := base64.StdEncoding.EncodeToString(buf.Bytes())
+		// Version history: a legacy item (no Versions) seeds v1 from its
+		// current blob so the prior value is preserved; then append vN+1.
+		// Numbers are minted from the last version — never reused, even
+		// across a tombstone.
+		if it.CT != "" && len(it.Versions) == 0 {
+			it.Versions = []nativeVersion{{V: 1, CT: it.CT, Created: it.Updated}}
+		}
+		v := 1
+		if len(it.Versions) > 0 {
+			v = it.Versions[len(it.Versions)-1].V + 1
+		}
+		it.Versions = append(it.Versions, nativeVersion{V: v, CT: ct, Created: s.now().Unix()})
+		it.CT = ct
+		it.Tomb = false // a set resurrects a tombstoned item, history intact
 		it.Updated = s.now().Unix()
 		it.External = !owned
 		d.Items[key] = it
@@ -208,7 +241,7 @@ func (s *nativeStore) Get(service, account string) (string, error) {
 		return "", err
 	}
 	it, ok := d.Items[nativeKey(service, account)]
-	if !ok {
+	if !ok || it.Tomb {
 		return "", newError("not_found", "omaseal set", keyring.ErrNotFound)
 	}
 	if err := s.ensureIdentity(); err != nil {
@@ -247,9 +280,12 @@ func (s *nativeStore) Delete(service, account string) error {
 	key := nativeKey(service, account)
 	var found bool
 	err := s.update(func(d *nativeDoc) {
-		if _, ok := d.Items[key]; ok {
+		it, ok := d.Items[key]
+		if ok && !it.Tomb {
 			found = true
-			delete(d.Items, key)
+			it.Tomb = true
+			it.Updated = s.now().Unix()
+			d.Items[key] = it
 		}
 	})
 	if err != nil {
@@ -274,6 +310,9 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(d.Items))
 	for k, it := range d.Items {
+		if it.Tomb {
+			continue
+		}
 		rawSvc, rawAcct, ok := strings.Cut(k, "/")
 		if !ok || rawSvc == "" || rawAcct == "" {
 			continue
@@ -289,9 +328,108 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 			CreatedAt: time.Unix(it.Created, 0).UTC(),
 			UpdatedAt: time.Unix(it.Updated, 0).UTC(),
 			Owned:     !it.External,
+			Version:   itemVersion(it),
 		})
 	}
 	return items, nil
+}
+
+// itemVersion is the active version number — an unversioned legacy item
+// reads as v1.
+func itemVersion(it nativeItem) int {
+	if len(it.Versions) == 0 {
+		return 1
+	}
+	return it.Versions[len(it.Versions)-1].V
+}
+
+// nativeVersionInfo is one entry in `omaseal history` — metadata only,
+// never the value.
+type nativeVersionInfo struct {
+	V       int
+	Created int64
+	Active  bool
+}
+
+// Versions lists an item's history newest-first — names and timestamps
+// only, so no unlock is required (same exposure class as List).
+func (s *nativeStore) Versions(service, account string) ([]nativeVersionInfo, bool, error) {
+	if err := s.ensureInit(); err != nil {
+		return nil, false, err
+	}
+	d, err := s.read()
+	if err != nil {
+		return nil, false, err
+	}
+	it, ok := d.Items[nativeKey(service, account)]
+	if !ok {
+		return nil, false, newError("not_found", "omaseal list", keyring.ErrNotFound)
+	}
+	vers := it.Versions
+	if len(vers) == 0 && it.CT != "" {
+		vers = []nativeVersion{{V: 1, Created: it.Updated}}
+	}
+	out := make([]nativeVersionInfo, 0, len(vers))
+	for i := len(vers) - 1; i >= 0; i-- {
+		out = append(out, nativeVersionInfo{
+			V:       vers[i].V,
+			Created: vers[i].Created,
+			Active:  !it.Tomb && i == len(vers)-1,
+		})
+	}
+	return out, it.Tomb, nil
+}
+
+// GetVersion decrypts a specific version — same identity/tamper path as Get.
+func (s *nativeStore) GetVersion(service, account string, v int) (string, error) {
+	if err := s.ensureInit(); err != nil {
+		return "", err
+	}
+	d, err := s.read()
+	if err != nil {
+		return "", err
+	}
+	it, ok := d.Items[nativeKey(service, account)]
+	if !ok {
+		return "", newError("not_found", "omaseal list", keyring.ErrNotFound)
+	}
+	var ct string
+	for _, ver := range it.Versions {
+		if ver.V == v {
+			ct = ver.CT
+			break
+		}
+	}
+	if ct == "" {
+		if v == 1 && len(it.Versions) == 0 && it.CT != "" {
+			ct = it.CT // legacy v1
+		} else {
+			return "", newError("not_found", fmt.Sprintf("no version %d", v), keyring.ErrNotFound)
+		}
+	}
+	if err := s.ensureIdentity(); err != nil {
+		return "", err
+	}
+	raw, err := base64.StdEncoding.DecodeString(ct)
+	if err != nil {
+		return "", keyringError(err)
+	}
+	src, err := age.Decrypt(bytes.NewReader(raw), s.identity.Load())
+	if err != nil {
+		return "", keyringError(fmt.Errorf("decrypt: %w", err))
+	}
+	plain, err := io.ReadAll(src)
+	if err != nil {
+		return "", keyringError(err)
+	}
+	var env nativeEnvelope
+	if err := json.Unmarshal(plain, &env); err != nil {
+		return "", keyringError(err)
+	}
+	if env.Svc != service || env.Acct != account {
+		return "", newError("tamper", "store integrity check failed — see omaseal doctor", errNativeTamper)
+	}
+	return env.Value, nil
 }
 
 // --- Unlock / session identity ---------------------------------------------

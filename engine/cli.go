@@ -78,8 +78,15 @@ var cliSpecs = []cmdSpec{
 		short:   "Print a stored secret",
 		long:    "Print a stored secret, raw, to stdout (never decorated, safe to pipe).\n\n--reveal asks for user presence first; --resolve also consults 1Password/Bitwarden and caches the result.",
 		example: "  omaseal get openrouter default\n  omaseal get omaseal://openrouter/default\n  omaseal get --reveal openrouter default",
-		flags:   []string{"reveal|require a user-presence confirmation first", "resolve|look in keyring, 1Password, Bitwarden or prompt, and cache"},
+		flags:   []string{"reveal|require a user-presence confirmation first", "resolve|look in keyring, 1Password, Bitwarden or prompt, and cache", "version=|print version N instead of the active value"},
 		rewrite: rewriteGet},
+	{path: "history", use: "<service> <account>", group: groupSecrets,
+		short:   "Show a secret's version history",
+		long:    "Show version numbers and timestamps — never values. `get --version N` prints a specific version's value.",
+		example: "  omaseal history openrouter default",
+		rewrite: func(args []string) ([]string, error) {
+			return append([]string{"history"}, args...), nil
+		}},
 	{path: "ls", use: "[service]", group: groupSecrets, aliases: []string{"list"},
 		short:   "List stored secrets",
 		example: "  omaseal ls\n  omaseal ls --sort=used\n  omaseal ls omaseal://browseros/\n  omaseal ls --json",
@@ -238,15 +245,42 @@ func takeFlag(args []string, name string) ([]string, bool) {
 func rewriteGet(args []string) ([]string, error) {
 	rest, reveal := takeFlag(args, "--reveal")
 	rest, resolve := takeFlag(rest, "--resolve")
+	rest, ver := takeFlagValue(rest, "--version")
 	switch {
 	case reveal && resolve:
 		return nil, fmt.Errorf("--reveal and --resolve are mutually exclusive")
+	case ver != "":
+		return append([]string{"getver", ver}, rest...), nil
 	case reveal:
 		return append([]string{"reveal"}, rest...), nil
 	case resolve:
 		return append([]string{"resolve"}, rest...), nil
 	}
 	return append([]string{"get"}, rest...), nil
+}
+
+// takeFlagValue removes a `--name N` or `--name=N` flag and returns its value.
+func takeFlagValue(args []string, name string) ([]string, string) {
+	out := make([]string, 0, len(args))
+	val := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if a == name && i+1 < len(args) {
+			val = args[i+1]
+			i++
+			continue
+		}
+		if rest, ok := strings.CutPrefix(a, name+"="); ok {
+			val = rest
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, val
 }
 
 // rewriteMCPInstall folds install-all and install-detected into install.
