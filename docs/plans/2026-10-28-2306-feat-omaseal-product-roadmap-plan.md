@@ -21,7 +21,7 @@ execution: code
 
 ### Summary
 
-OmaSeal already functions as the author's daily keyring — 836 secrets, live Secret Service provider, 7 wired agents, encrypted-at-rest store, rotation flags, revamped CLI. The product gap is everything between that and a stranger trusting it: the provider daemon can die silently, the test suite cannot validate itself on a dogfooded machine, same-UID policy is advisory by design, three agents are unwired, BrowserOS resolution is unverified, and nobody can install it publicly. This plan sequences the remaining work into wedges that each ship independently.
+OmaSeal already functions as the author's daily keyring — 836 secrets, live Secret Service provider, 7 wired agents, encrypted-at-rest store, rotation flags, revamped CLI. The product gap is everything between that and a stranger trusting it: the provider daemon can die silently, an unlocked vault does not relock on suspend or session-lock, the test suite cannot validate itself on a dogfooded machine, same-UID policy is advisory by design, three agents are unwired, BrowserOS resolution is unverified, and nobody can install it publicly. This plan sequences the remaining work into wedges that each ship independently.
 
 ### Problem Frame
 
@@ -32,6 +32,7 @@ The architecture decision is already made: the Setec design-read (`docs/decision
 **Reliability**
 
 - R1. The Secret Service provider daemon recovers from silent exit: `Restart=` policy covers bus-activated and systemd-spawned providers alike, and `provider status` reports last-exit provenance so a dead provider is never mistaken for a live one.
+- R1b. The vault locks on system suspend and session lock — an unlocked collection does not survive a lid-close or `loginctl lock-session` into the resumed session. The provider subscribes to logind `PrepareForSleep` (and the session `Lock` signal where reachable) and relocks via the existing `lockDaemonLocked` path; TTL expiry and `agent lock` behavior are unchanged.
 - R2. `go test ./...` passes on a machine where omaseal owns `org.freedesktop.secrets` — keyring-compat tests either route through the provider correctly or skip with a clear self-provider signal (issue #62).
 
 **Security**
@@ -62,6 +63,7 @@ The architecture decision is already made: the Setec design-read (`docs/decision
 ### Success Criteria
 
 - `omaseal provider status` on a dogfooded machine shows omaseal owning the bus after reboots and daemon kills, with recovery logged.
+- After a suspend/resume cycle (or `loginctl lock-session`), the `login` collection reports `Locked=true` — an unlocked vault never rides across a sleep boundary.
 - `go test ./...` green on omarchy-max (currently 6 env-failures, #62).
 - A hostile same-UID process without the session passphrase cannot read a DENY-marked secret after U4 lands — pentest scenario, not a claim.
 - `yay -S omaseal-bin` (or marketplace equivalent) installs a working omaseal on a fresh Omarchy machine.
@@ -109,7 +111,7 @@ The architecture decision is already made: the Setec design-read (`docs/decision
 ```mermaid
 flowchart TB
   subgraph wedges
-    U1[U1 Provider reliability]
+    U1[U1 Provider reliability + suspend lock]
     U2[U2 Self-hosted tests]
     U3[U3 Versioned secrets + SecretChanged]
     U4[U4 Different-UID helper spike]
@@ -141,7 +143,7 @@ U4 (helper daemon, red) is the security-critical wedge and the effective gate fo
 
 | U-ID | Title | Files touched | Depends on |
 |------|-------|---------------|------------|
-| U1 | Provider liveness + watchdog | `engine/svcverb.go`, `engine/svcfiles.go`, `engine/svcbus.go`, packaging units | — |
+| U1 | Provider liveness, watchdog + suspend lock | `engine/svcverb.go`, `engine/svcfiles.go`, `engine/svcbus.go`, `engine/svclock.go` (new), packaging units | — |
 | U2 | Self-provider-aware test suite | `engine/keyring_test.go`, `engine/run_test.go`, test harness | — |
 | U3 | Versioned secrets + SecretChanged | `engine/nativestore.go`, `engine/svcitems.go`, `engine/cli.go` | — |
 | U4 | Different-UID helper daemon (spike → MVP) | new `engine/helper/`, `engine/nativestore.go`, `engine/svcverb.go` | U1, U3 |
@@ -149,24 +151,28 @@ U4 (helper daemon, red) is the security-critical wedge and the effective gate fo
 | U6 | Two-way 1Password sync | `engine/opimport.go`, `engine/opsync*.go` (new), `engine/cli.go` | — |
 | U7 | Public distribution | `packaging/aur/`, `install.sh`, README.md, marketplace manifest | U5, U6 (soft); U4 gates the “trustworthy” claim, not the listing (see Open Questions) |
 
-### U1. Provider liveness + watchdog
+### U1. Provider liveness, watchdog + suspend lock
 
-**Goal:** a dead provider is detected, restarted, and logged — never silently absent. Covers R1.
+**Goal:** a dead provider is detected, restarted, and logged — never silently absent; and an unlocked vault relocks on suspend/session-lock rather than staying open across sleep boundaries. Covers R1, R1b.
 **Dependencies:** none.
 **Files:**
 - `engine/svcverb.go` — exit-provenance: record last-death cause for `provider status`
 - `engine/svcfiles.go` — unit template: `Restart=on-failure` today; evaluate `always`/`WatchdogSec=`/`Type=notify`
 - `engine/svcbus.go` — clean shutdown paths already exist; verify no panic path exits without provenance
+- `engine/svclock.go` (new) — logind `PrepareForSleep` subscription → `lockDaemonLocked`; session `Lock` signal where reachable
 - `packaging/` — systemd unit parity in PKGBUILDs
 
-**Approach:** the provider already exits on `lostName`; the gap is any other death path (crash, kill) leaves nothing watching. `Restart=on-failure` in the shipped unit covers systemd-spawned instances only — bus-activated instances need the activation file to retry, or a keeper process (model on `omaseal-lock-watch`). Decide during implementation: watchdog inside serve (self-ping on a timer) vs. external keeper; prefer the smallest mechanism that survives both spawn paths.
-**Patterns to follow:** `omaseal-lock-watch` as the external-keeper precedent; `chain.go` flock pattern if provenance lands in a state file.
+**Approach:** two independent reliability surfaces. (a) Liveness: the provider already exits on `lostName`; the gap is any other death path (crash, kill) leaves nothing watching. `Restart=on-failure` in the shipped unit covers systemd-spawned instances only — bus-activated instances need the activation file to retry, or a keeper process (model on `omaseal-lock-watch`). Decide during implementation: watchdog inside serve (self-ping on a timer) vs. external keeper; prefer the smallest mechanism that survives both spawn paths. (b) Lock correctness: the daemon already relocks on TTL expiry, `agent lock`, and unlock-epoch-marker removal (`checkPromptIdentity`), but nothing observes `org.freedesktop.login1.Manager.PrepareForSleep` or session lock — the missing subscription is a `svclock.go` goroutine calling the existing `lockDaemonLocked`, not new lock machinery. The suspend race matters: relock must complete before the sleep actually happens (logind gives a bounded window when an inhibitor is held — decide whether to take one, matching how `systemd-logind` delays suspend for consumers that need it).
+**Patterns to follow:** `omaseal-lock-watch` as the external-keeper precedent; `checkPromptIdentity`/`lockDaemonLocked` (`engine/svcprompt.go`) as the relock path to reuse, not reimplement; `chain.go` flock pattern if provenance lands in a state file.
 **Test scenarios:**
 - Kill -9 a running provider: next `provider status` reports the death and provenance (not "healthy")
 - systemd unit restart: provider re-claims the bus name and answers `secret-tool` within seconds
 - Bus-activated spawn path: activation still works after the change (activation file unchanged or updated coherently)
 - `provider status` distinguishes "running", "dead with provenance", "never ran"
-**Verification:** simulate provider death on omarchy-max; omaseal must re-own the bus without manual intervention; no regression on `pentest` suite.
+- Simulate `PrepareForSleep` (or real suspend/resume on omarchy-max): collection `Locked` flips to true before or at resume; unlock-epoch marker removed
+- `loginctl lock-session` relocks where the session Lock signal is reachable; if it is not reliably reachable, document why and gate on suspend only
+- TTL expiry and `agent lock` relock paths unchanged (regression)
+**Verification:** simulate provider death on omarchy-max; omaseal must re-own the bus without manual intervention; suspend/resume cycle leaves the vault locked; no regression on `pentest` suite.
 
 ### U2. Self-provider-aware test suite
 
