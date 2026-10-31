@@ -17,9 +17,17 @@ import (
 //
 //	dbus-1 services file — bus-activation entry; `SystemdService=` hands
 //	  startups to the user unit under systemd, `Exec=` is the fallback for
-//	  non-systemd sessions.
+//	  non-systemd sessions. Under the fallback the unit never runs, so a
+//	  dead daemon recovers lazily: the activation file respawns on the
+//	  next client call.
 //	systemd user unit — Type=dbus pins readiness to the name claim;
 //	  LimitCORE=0 keeps vault material out of crash dumps.
+//	  Restart=on-failure covers every abnormal exit including the
+//	  lostName path (exit 1). Evaluated alternatives: Type=notify +
+//	  WatchdogSec would need an sd_notify dependency to guard "alive but
+//	  catatonic" — a case already handled, since a wedged daemon drops
+//	  the name or the connection, either of which exits it. Restart=
+//	  always adds nothing over on-failure: no clean exit is legitimate.
 //
 // The activation file lives under ~/.local/share/dbus-1/services so it
 // shadows — not replaces — the system-wide gnome-keyring entry.
@@ -116,7 +124,12 @@ func svcActivationIsOurs() bool {
 
 // svcOwnerIsOurs reports whether the name's current owner is an omaseal
 // binary — resolved via pid → /proc/<pid>/exe against os.Executable, so a
-// foreign process claiming the name never counts.
+// foreign process claiming the name never counts. The provider sets
+// PR_SET_DUMPABLE=0 at exec, which makes /proc/<pid> root-owned and the
+// exe readlink fail — /proc/<pid>/comm stays readable and falls back as
+// the weaker identity check (comm is PR_SET_NAME-forgeable; acceptable
+// for owner attribution since a same-UID process can kill the daemon
+// regardless).
 func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string, pid uint32) {
 	var unique string
 	if err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique); err != nil {
@@ -128,8 +141,24 @@ func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string, pid uint32) {
 	}
 	self, _ := os.Executable()
 	target, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", p))
-	ours = target != "" && self != "" && target == self
-	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, p, filepath.Base(target)), p
+	name := filepath.Base(target)
+	switch {
+	case target != "" && self != "" && target == self:
+		ours = true
+	case target == "" && self != "" && svcProcComm(p) == filepath.Base(self):
+		ours = true
+	}
+	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, p, name), p
+}
+
+// svcProcComm reads /proc/<pid>/comm — readable even on non-dumpable
+// processes where the exe link is root-owned.
+func svcProcComm(pid uint32) string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // svcFileIsOurs reports whether an existing file at path is omaseal-authored
