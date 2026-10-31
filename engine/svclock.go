@@ -117,6 +117,11 @@ func svcSleepInhibit(ctx context.Context, sys *dbus.Conn) int {
 // to do but log; the session-bus serve continues.
 func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit int) {
 	for sig := range ch {
+		// Only logind may send these — same sender pin watchNames uses,
+		// since the shared system conn can carry other matches' signals.
+		if sig.Sender != svcLogindName {
+			continue
+		}
 		switch sig.Name {
 		case svcLogindMgr + ".PrepareForSleep":
 			if len(sig.Body) != 1 {

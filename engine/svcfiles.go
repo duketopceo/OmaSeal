@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -77,7 +78,11 @@ func svcUnitPath() string {
 // svcSystemctl is the systemctl seam — tests stub it so enable/disable
 // never execs the real user's service manager.
 var svcSystemctl = func(args ...string) ([]byte, error) {
-	cmd := exec.Command("systemctl", args...)
+	// A wedged user manager must not hang status/disable forever — bound
+	// every call like the logind calls in svclock.go.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "systemctl", args...)
 	return cmd.CombinedOutput()
 }
 
@@ -145,7 +150,8 @@ func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string, pid uint32) {
 	switch {
 	case target != "" && self != "" && target == self:
 		ours = true
-	case target == "" && self != "" && svcProcComm(p) == filepath.Base(self):
+	case target == "" && self != "" && svcProcComm(p) == svcCommTrunc(filepath.Base(self)) &&
+		svcProcArgv0(p) == filepath.Base(self):
 		ours = true
 	}
 	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, p, name), p
@@ -166,6 +172,27 @@ func svcProcComm(pid uint32) string {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// svcCommTrunc mirrors the kernel's TASK_COMM_LEN-1 truncation so a long
+// binary name compares correctly against comm.
+func svcCommTrunc(s string) string {
+	if len(s) > 15 {
+		return s[:15]
+	}
+	return s
+}
+
+// svcProcArgv0 reads argv[0]'s basename — a second forgeable-but-orthogonal
+// identity signal: comm AND argv0 must both match before a non-dumpable
+// owner counts as ours (single-signal spoofing is easy, both is less so).
+func svcProcArgv0(pid uint32) string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	arg0, _, _ := strings.Cut(string(raw), "\x00")
+	return filepath.Base(arg0)
 }
 
 // svcFileIsOurs reports whether an existing file at path is omaseal-authored

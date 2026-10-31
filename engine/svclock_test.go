@@ -86,8 +86,9 @@ func TestSvcSuspendSignalRelocks(t *testing.T) {
 		close(done)
 	}()
 	ch <- &dbus.Signal{
-		Name: svcLogindMgr + ".PrepareForSleep",
-		Body: []any{true},
+		Sender: svcLogindName,
+		Name:   svcLogindMgr + ".PrepareForSleep",
+		Body:   []any{true},
 	}
 	close(ch)
 	select {
@@ -98,6 +99,45 @@ func TestSvcSuspendSignalRelocks(t *testing.T) {
 
 	if d.store.identity.Load() != nil || d.promptIdentity {
 		t.Fatal("PrepareForSleep did not lock the vault")
+	}
+}
+
+// TestSvcSuspendLoopSenderAndMember covers dispatch: a signal from a
+// non-logind sender is ignored even when the name matches, and a real
+// Session.Lock from logind relocks.
+func TestSvcSuspendLoopSenderAndMember(t *testing.T) {
+	bus := newSvcTestBus(t)
+	d := newSvcTestDaemon(t, bus)
+	armTestUnlock(t, d)
+
+	sys := bus.connect(t)
+	ch := make(chan *dbus.Signal, 8)
+	done := make(chan struct{})
+	go func() {
+		d.suspendLoop(sys, ch, -1)
+		close(done)
+	}()
+
+	// Forged sender, real signal name — must be ignored. Give the loop a
+	// beat to consume it before asserting the vault is still armed.
+	ch <- &dbus.Signal{Sender: ":1.666", Name: svcLogindMgr + ".PrepareForSleep", Body: []any{true}}
+	time.Sleep(150 * time.Millisecond)
+	if d.store.identity.Load() == nil || !d.promptIdentity {
+		t.Fatal("forged-sender signal relocked the vault")
+	}
+	// Real logind Session.Lock — must relock.
+	ch <- &dbus.Signal{Sender: svcLogindName, Name: svcLogindSess + ".Lock"}
+	// Malformed PrepareForSleep body — must not panic.
+	ch <- &dbus.Signal{Sender: svcLogindName, Name: svcLogindMgr + ".PrepareForSleep", Body: []any{}}
+	close(ch)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("suspendLoop did not exit on channel close")
+	}
+	if d.store.identity.Load() != nil || d.promptIdentity {
+		t.Fatal("Session.Lock did not relock the vault")
 	}
 }
 

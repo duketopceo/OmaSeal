@@ -211,7 +211,7 @@ func svcUnitState() map[string]string {
 			props[k] = v
 		}
 	}
-	if props["LoadState"] == "not-found" {
+	if len(props) == 0 || props["LoadState"] == "not-found" {
 		return nil
 	}
 	return props
