@@ -107,6 +107,11 @@ func providerServe() error {
 		return err
 	}
 
+	// Arm the suspend/session-lock watch after the claim: it rides a second
+	// (system bus) connection and is advisory — a missing logind disables
+	// the watch, never the daemon.
+	d.watchLogind()
+
 	WriteLog("provider: serving %s on the session bus", svcBusName)
 	<-d.lostName
 	return fmt.Errorf("lost %s", svcBusName)
@@ -144,6 +149,8 @@ func providerStatus(args []string) error {
 	_, unitErr := os.Stat(svcUnitPath())
 	enabled := actErr == nil || unitErr == nil
 
+	unit := svcUnitState()
+
 	if asJSON {
 		out := map[string]any{
 			"name":    svcBusName,
@@ -157,6 +164,9 @@ func providerStatus(args []string) error {
 		if enabled {
 			out["activation"] = svcActivationPath()
 			out["unit"] = svcUnitPath()
+		}
+		if unit != nil {
+			out["unit_state"] = unit
 		}
 		enc := json.NewEncoder(os.Stdout)
 		return enc.Encode(out)
@@ -177,7 +187,61 @@ func providerStatus(args []string) error {
 	} else {
 		fmt.Println("not enabled — `omaseal provider enable` installs activation")
 	}
+	svcPrintUnitState(unit, owned)
 	return nil
+}
+
+// svcUnitState asks systemd how the provider unit is doing — the supervisor
+// is the provenance recorder for deaths the daemon cannot report itself
+// (kill -9, panic). Fields come from `systemctl --user show`; nil when no
+// systemd is reachable or the unit is not loaded.
+func svcUnitState() map[string]string {
+	out, err := svcSystemctl("--user", "show", "omaseal-provider.service",
+		"-p", "ActiveState", "-p", "SubState", "-p", "Result",
+		"-p", "NRestarts", "-p", "ExecMainStatus", "-p", "LoadState")
+	if err != nil {
+		return nil
+	}
+	props := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			props[k] = v
+		}
+	}
+	if props["LoadState"] == "not-found" {
+		return nil
+	}
+	return props
+}
+
+// svcPrintUnitState renders the provenance block: a dead or failed unit is
+// reported as such, never silently absent. Without a supervisor record, an
+// enabled-but-unowned name still recovers lazily — the activation file
+// respawns the daemon on the next client call.
+func svcPrintUnitState(unit map[string]string, owned bool) {
+	if unit == nil {
+		if !owned {
+			fmt.Println("no supervisor record — if the daemon dies, the activation file respawns it on the next client call")
+		}
+		return
+	}
+	state := unit["ActiveState"]
+	sub := unit["SubState"]
+	result := unit["Result"]
+	restarts := unit["NRestarts"]
+	switch {
+	case state == "active":
+		fmt.Printf("unit: %s (%s)", state, sub)
+	case state == "failed" || result != "" && result != "success":
+		fmt.Printf("unit: %s — last exit %s", state, result)
+	default:
+		fmt.Printf("unit: %s (%s) — activates on next client call", state, sub)
+	}
+	if restarts != "" && restarts != "0" {
+		fmt.Printf(", restarts: %s", restarts)
+	}
+	fmt.Println()
 }
 
 // svcWarnIfNoDisplay checks a running provider's environment for display
