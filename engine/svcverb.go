@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -120,7 +121,7 @@ func providerServe() error {
 // storeIdentityPath reports the daemon's native identity file — the
 // existence check that gates serve.
 func storeIdentityPath(s *nativeStore) string {
-	return s.dir + "/" + nativeIdentityFile
+	return filepath.Join(s.dir, nativeIdentityFile)
 }
 
 // providerStatus reports the name owner, enabled state, activation paths,
@@ -175,7 +176,7 @@ func providerStatus(args []string) error {
 	if !owned {
 		fmt.Println(svcBusName, "is unowned — first activation wins")
 	} else {
-		fmt.Printf("%s owned by %s\n", svcBusName, svcOwnerDesc(conn))
+		fmt.Printf("%s owned by %s\n", svcBusName, ownerDesc)
 		if ours {
 			svcWarnIfNoDisplay(conn, unique)
 		}
@@ -256,8 +257,12 @@ func svcWarnIfNoDisplay(conn *dbus.Conn, unique string) {
 	if err != nil {
 		return
 	}
-	env := string(raw)
-	if !strings.Contains(env, "WAYLAND_DISPLAY=") && !strings.Contains(env, "DISPLAY=") {
-		fmt.Println("warning: provider environment has no WAYLAND_DISPLAY/DISPLAY — GUI unlock prompts will fail")
+	// environ is NUL-separated; match exact variable names — a substring
+	// scan would false-positive on any *_DISPLAY= entry.
+	for entry := range strings.SplitSeq(string(raw), "\x00") {
+		if strings.HasPrefix(entry, "WAYLAND_DISPLAY=") || strings.HasPrefix(entry, "DISPLAY=") {
+			return
+		}
 	}
+	fmt.Println("warning: provider environment has no WAYLAND_DISPLAY/DISPLAY — GUI unlock prompts will fail")
 }

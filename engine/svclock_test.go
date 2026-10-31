@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/godbus/dbus/v5"
@@ -68,17 +69,32 @@ func TestSvcWatchLogindNoSystemBus(t *testing.T) {
 	}
 }
 
-// TestSvcSuspendSignalRelocks drives the dispatch path itself — the same
-// code a real PrepareForSleep(true) hits — rather than only the lock body.
+// TestSvcSuspendSignalRelocks drives the dispatch path itself: a
+// PrepareForSleep(true) signal through suspendLoop must relock the vault.
+// The session-bus conn stands in for the system conn — the loop only reads
+// the channel and closes the conn on teardown.
 func TestSvcSuspendSignalRelocks(t *testing.T) {
 	bus := newSvcTestBus(t)
 	d := newSvcTestDaemon(t, bus)
 	armTestUnlock(t, d)
 
-	// Simulate what suspendLoop does on PrepareForSleep(true): relock.
-	// (The signal channel needs a live system bus to exercise end-to-end;
-	// the handler body is the unit under test.)
-	d.relockForSuspend("suspend")
+	sys := bus.connect(t)
+	ch := make(chan *dbus.Signal, 8)
+	done := make(chan struct{})
+	go func() {
+		d.suspendLoop(sys, ch, -1)
+		close(done)
+	}()
+	ch <- &dbus.Signal{
+		Name: svcLogindMgr + ".PrepareForSleep",
+		Body: []any{true},
+	}
+	close(ch)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("suspendLoop did not exit on channel close")
+	}
 
 	if d.store.identity.Load() != nil || d.promptIdentity {
 		t.Fatal("PrepareForSleep did not lock the vault")

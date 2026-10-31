@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/godbus/dbus/v5"
@@ -38,10 +37,12 @@ const (
 	svcLogindSess = "org.freedesktop.login1.Session"
 )
 
-// svcSystemBus dials the system bus — a seam like svcConnectAmbient so tests
-// never touch the real logind.
+// svcSystemBus dials a private system-bus connection — a seam like
+// svcConnectAmbient so tests never touch the real logind. Private like
+// svcConnect: the watch closes its conn on teardown, which must not poison
+// godbus's shared handle for other in-process consumers.
 var svcSystemBus = func() (*dbus.Conn, error) {
-	return dbus.SystemBus()
+	return dbus.SystemBusPrivate()
 }
 
 // watchLogind arms the suspend/session-lock subscription. Called once from
@@ -54,10 +55,11 @@ func (d *svcDaemon) watchLogind() {
 	}
 	obj := sys.Object(svcLogindName, svcLogindPath)
 
-	match := fmt.Sprintf("type='signal',sender='%s',interface='%s',member='PrepareForSleep'",
-		svcLogindName, svcLogindMgr)
-	if call := sys.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, match); call.Err != nil {
-		WriteLog("provider: suspend match failed (%v) — vault will not auto-lock on sleep", call.Err)
+	if err := sys.AddMatchSignal(
+		dbus.WithMatchSender(svcLogindName),
+		dbus.WithMatchInterface(svcLogindMgr),
+		dbus.WithMatchMember("PrepareForSleep")); err != nil {
+		WriteLog("provider: suspend match failed (%v) — vault will not auto-lock on sleep", err)
 		_ = sys.Close()
 		return
 	}
@@ -67,30 +69,32 @@ func (d *svcDaemon) watchLogind() {
 	// can't resolve one — sleep coverage still applies.
 	var sessPath dbus.ObjectPath
 	if err := obj.Call(svcLogindMgr+".GetSessionByPID", 0, uint32(os.Getpid())).Store(&sessPath); err == nil {
-		smatch := fmt.Sprintf("type='signal',sender='%s',interface='%s',member='Lock',path='%s'",
-			svcLogindName, svcLogindSess, sessPath)
-		if call := sys.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, smatch); call.Err != nil {
-			WriteLog("provider: session-lock match failed (%v)", call.Err)
+		if err := sys.AddMatchSignal(
+			dbus.WithMatchSender(svcLogindName),
+			dbus.WithMatchInterface(svcLogindSess),
+			dbus.WithMatchMember("Lock"),
+			dbus.WithMatchObjectPath(sessPath)); err != nil {
+			WriteLog("provider: session-lock match failed (%v)", err)
 		}
 	} else {
 		WriteLog("provider: no logind session for pid %d — session Lock not watched (%v)", os.Getpid(), err)
 	}
 
-	inhibit := d.sleepInhibit(sys)
+	inhibit := svcSleepInhibit(sys)
 	if inhibit < 0 {
 		WriteLog("provider: sleep inhibitor refused — relock races suspend")
 	}
 
 	ch := make(chan *dbus.Signal, 8)
 	sys.Signal(ch)
-	go d.suspendLoop(sys, ch, inhibit, obj)
+	go d.suspendLoop(sys, ch, inhibit)
 	WriteLog("provider: suspend lock watch armed")
 }
 
-// sleepInhibit takes a delay inhibitor on "sleep" so logind holds the
+// svcSleepInhibit takes a delay inhibitor on "sleep" so logind holds the
 // suspend transition until the fd is released (or its bound expires).
 // Returns -1 when logind refuses.
-func (d *svcDaemon) sleepInhibit(sys *dbus.Conn) int {
+func svcSleepInhibit(sys *dbus.Conn) int {
 	var fd dbus.UnixFD
 	err := sys.Object(svcLogindName, svcLogindPath).
 		Call(svcLogindMgr+".Inhibit", 0,
@@ -105,7 +109,7 @@ func (d *svcDaemon) sleepInhibit(sys *dbus.Conn) int {
 // suspendLoop consumes logind signals for the life of the daemon. The
 // signal channel dying means the system-bus connection is gone — nothing
 // to do but log; the session-bus serve continues.
-func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit int, obj dbus.BusObject) {
+func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit int) {
 	for sig := range ch {
 		switch sig.Name {
 		case svcLogindMgr + ".PrepareForSleep":
@@ -121,11 +125,16 @@ func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit in
 				}
 			} else if inhibit < 0 {
 				// Re-arm for the next sleep cycle.
-				inhibit = d.sleepInhibit(sys)
+				inhibit = svcSleepInhibit(sys)
 			}
 		case svcLogindSess + ".Lock":
 			d.relockForSuspend("session lock")
 		}
+	}
+	// A still-armed inhibitor fd would delay every future suspend for the
+	// daemon's remaining life — release it on teardown.
+	if inhibit >= 0 {
+		_ = unix.Close(inhibit)
 	}
 	WriteLog("provider: system bus signal channel closed — suspend lock watch ended")
 	_ = sys.Close()

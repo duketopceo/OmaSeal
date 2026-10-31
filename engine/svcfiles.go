@@ -151,6 +151,13 @@ func svcOwnerIsOurs(conn *dbus.Conn) (ours bool, owner string, pid uint32) {
 	return ours, fmt.Sprintf("%s pid=%d exe=%s", unique, p, name), p
 }
 
+// svcNameTaken reports whether org.freedesktop.secrets has any owner — the
+// cheap poll for "did it die yet" loops that don't need pid/exe resolution.
+func svcNameTaken(conn *dbus.Conn) bool {
+	var unique string
+	return conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique) == nil
+}
+
 // svcProcComm reads /proc/<pid>/comm — readable even on non-dumpable
 // processes where the exe link is root-owned.
 func svcProcComm(pid uint32) string {
@@ -298,7 +305,7 @@ func providerDisable() error {
 			_ = syscall.Kill(int(pid), syscall.SIGTERM)
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
-				if still, _, _ := svcOwnerIsOurs(conn); !still {
+				if !svcNameTaken(conn) {
 					break
 				}
 				time.Sleep(100 * time.Millisecond)
