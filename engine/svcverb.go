@@ -108,10 +108,11 @@ func providerServe() error {
 		return err
 	}
 
-	// Arm the suspend/session-lock watch after the claim: it rides a second
-	// (system bus) connection and is advisory — a missing logind disables
-	// the watch, never the daemon.
-	d.watchLogind()
+	// Arm the suspend/session-lock watch after the claim — async: its
+	// setup makes synchronous system-bus round-trips (dial, AddMatch,
+	// GetSessionByPID, Inhibit) and a hung logind must never wedge the
+	// serve loop or the lostName wait. Failures self-log inside.
+	go d.watchLogind()
 
 	WriteLog("provider: serving %s on the session bus", svcBusName)
 	<-d.lostName

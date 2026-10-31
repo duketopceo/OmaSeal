@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -37,12 +39,12 @@ const (
 	svcLogindSess = "org.freedesktop.login1.Session"
 )
 
-// svcSystemBus dials a private system-bus connection — a seam like
-// svcConnectAmbient so tests never touch the real logind. Private like
-// svcConnect: the watch closes its conn on teardown, which must not poison
-// godbus's shared handle for other in-process consumers.
+// svcSystemBus returns godbus's shared system-bus connection — already
+// authed and Hello'd (a private dial needs auth+Hello the caller must
+// drive itself, and an unauthed conn's calls hang with no reply). Shared
+// means the watch must never Close it; teardown is RemoveSignal only.
 var svcSystemBus = func() (*dbus.Conn, error) {
-	return dbus.SystemBusPrivate()
+	return dbus.SystemBus()
 }
 
 // watchLogind arms the suspend/session-lock subscription. Called once from
@@ -53,14 +55,18 @@ func (d *svcDaemon) watchLogind() {
 		WriteLog("provider: no system bus — suspend lock watch disabled (%v)", err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	obj := sys.Object(svcLogindName, svcLogindPath)
 
-	if err := sys.AddMatchSignal(
+	// Every setup call is bounded: a system-bus Call blocks until reply or
+	// conn death with no timeout of its own, and a hung logind must degrade
+	// to a logged skip — never a stuck goroutine.
+	if err := sys.AddMatchSignalContext(ctx,
 		dbus.WithMatchSender(svcLogindName),
 		dbus.WithMatchInterface(svcLogindMgr),
 		dbus.WithMatchMember("PrepareForSleep")); err != nil {
 		WriteLog("provider: suspend match failed (%v) — vault will not auto-lock on sleep", err)
-		_ = sys.Close()
 		return
 	}
 
@@ -68,8 +74,8 @@ func (d *svcDaemon) watchLogind() {
 	// outside a logind session (dbus-run-session, some autostart paths)
 	// can't resolve one — sleep coverage still applies.
 	var sessPath dbus.ObjectPath
-	if err := obj.Call(svcLogindMgr+".GetSessionByPID", 0, uint32(os.Getpid())).Store(&sessPath); err == nil {
-		if err := sys.AddMatchSignal(
+	if err := obj.CallWithContext(ctx, svcLogindMgr+".GetSessionByPID", 0, uint32(os.Getpid())).Store(&sessPath); err == nil {
+		if err := sys.AddMatchSignalContext(ctx,
 			dbus.WithMatchSender(svcLogindName),
 			dbus.WithMatchInterface(svcLogindSess),
 			dbus.WithMatchMember("Lock"),
@@ -80,7 +86,7 @@ func (d *svcDaemon) watchLogind() {
 		WriteLog("provider: no logind session for pid %d — session Lock not watched (%v)", os.Getpid(), err)
 	}
 
-	inhibit := svcSleepInhibit(sys)
+	inhibit := svcSleepInhibit(ctx, sys)
 	if inhibit < 0 {
 		WriteLog("provider: sleep inhibitor refused — relock races suspend")
 	}
@@ -93,11 +99,11 @@ func (d *svcDaemon) watchLogind() {
 
 // svcSleepInhibit takes a delay inhibitor on "sleep" so logind holds the
 // suspend transition until the fd is released (or its bound expires).
-// Returns -1 when logind refuses.
-func svcSleepInhibit(sys *dbus.Conn) int {
+// Returns -1 when logind refuses or the bounded call expires.
+func svcSleepInhibit(ctx context.Context, sys *dbus.Conn) int {
 	var fd dbus.UnixFD
 	err := sys.Object(svcLogindName, svcLogindPath).
-		Call(svcLogindMgr+".Inhibit", 0,
+		CallWithContext(ctx, svcLogindMgr+".Inhibit", 0,
 			"sleep", "omaseal", "relock the vault before suspend", "delay").
 		Store(&fd)
 	if err != nil {
@@ -124,8 +130,10 @@ func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit in
 					inhibit = -1
 				}
 			} else if inhibit < 0 {
-				// Re-arm for the next sleep cycle.
-				inhibit = svcSleepInhibit(sys)
+				// Re-arm for the next sleep cycle — bounded like setup.
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				inhibit = svcSleepInhibit(ctx, sys)
+				cancel()
 			}
 		case svcLogindSess + ".Lock":
 			d.relockForSuspend("session lock")
@@ -137,7 +145,9 @@ func (d *svcDaemon) suspendLoop(sys *dbus.Conn, ch chan *dbus.Signal, inhibit in
 		_ = unix.Close(inhibit)
 	}
 	WriteLog("provider: system bus signal channel closed — suspend lock watch ended")
-	_ = sys.Close()
+	// Shared conn: signal removal only, never Close — other in-process
+	// consumers keep the handle.
+	sys.RemoveSignal(ch)
 }
 
 // relockForSuspend drops the vault through the shared lock path. logind
