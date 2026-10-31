@@ -17,3 +17,11 @@ The Omarchy shell plugin (`Panel.qml` plus sibling components) that fronts the s
 ## Secret Service
 
 The `org.freedesktop.secrets` D-Bus API that desktop apps and agents call for credential storage. Only one daemon can own the bus name at a time; on this system that owner is what actually answers every libsecret consumer, so which provider holds the name decides which store is live.
+
+## Rotation flag
+
+A mark on a stored secret saying the credential needs rotation — e.g. the value leaked into a log or transcript. Metadata only: reads keep working, but every read surface warns until a new value is stored (`set` clears it) or the flag is removed with `unflag`.
+
+## Different-UID helper daemon
+
+The planned enforcement principal: a daemon running as a different user ID that owns the store identity and brokers secret access, making manifest policy real for every lane rather than advisory. The provider daemon becomes a thin Secret Service adapter in front of it. Named in `docs/decisions/setec-design-notes.md` and the product roadmap plan.
