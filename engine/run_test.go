@@ -113,6 +113,7 @@ func TestInjectSecretsBadRef(t *testing.T) {
 }
 
 func TestInjectSecretsMissing(t *testing.T) {
+	skipIfSelfProviderLocked(t)
 	var b envBindings
 	if err := b.Set("GH=omaseal-missing-test/unit-never"); err != nil {
 		t.Fatalf("Set: %v", err)
