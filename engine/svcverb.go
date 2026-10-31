@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -107,6 +108,12 @@ func providerServe() error {
 		return err
 	}
 
+	// Arm the suspend/session-lock watch after the claim — async: its
+	// setup makes synchronous system-bus round-trips (dial, AddMatch,
+	// GetSessionByPID, Inhibit) and a hung logind must never wedge the
+	// serve loop or the lostName wait. Failures self-log inside.
+	go d.watchLogind()
+
 	WriteLog("provider: serving %s on the session bus", svcBusName)
 	<-d.lostName
 	return fmt.Errorf("lost %s", svcBusName)
@@ -115,7 +122,7 @@ func providerServe() error {
 // storeIdentityPath reports the daemon's native identity file — the
 // existence check that gates serve.
 func storeIdentityPath(s *nativeStore) string {
-	return s.dir + "/" + nativeIdentityFile
+	return filepath.Join(s.dir, nativeIdentityFile)
 }
 
 // providerStatus reports the name owner, enabled state, activation paths,
@@ -144,6 +151,8 @@ func providerStatus(args []string) error {
 	_, unitErr := os.Stat(svcUnitPath())
 	enabled := actErr == nil || unitErr == nil
 
+	unit := svcUnitState()
+
 	if asJSON {
 		out := map[string]any{
 			"name":    svcBusName,
@@ -158,6 +167,9 @@ func providerStatus(args []string) error {
 			out["activation"] = svcActivationPath()
 			out["unit"] = svcUnitPath()
 		}
+		if unit != nil {
+			out["unit_state"] = unit
+		}
 		enc := json.NewEncoder(os.Stdout)
 		return enc.Encode(out)
 	}
@@ -165,7 +177,7 @@ func providerStatus(args []string) error {
 	if !owned {
 		fmt.Println(svcBusName, "is unowned — first activation wins")
 	} else {
-		fmt.Printf("%s owned by %s\n", svcBusName, svcOwnerDesc(conn))
+		fmt.Printf("%s owned by %s\n", svcBusName, ownerDesc)
 		if ours {
 			svcWarnIfNoDisplay(conn, unique)
 		}
@@ -177,7 +189,61 @@ func providerStatus(args []string) error {
 	} else {
 		fmt.Println("not enabled — `omaseal provider enable` installs activation")
 	}
+	svcPrintUnitState(unit, owned)
 	return nil
+}
+
+// svcUnitState asks systemd how the provider unit is doing — the supervisor
+// is the provenance recorder for deaths the daemon cannot report itself
+// (kill -9, panic). Fields come from `systemctl --user show`; nil when no
+// systemd is reachable or the unit is not loaded.
+func svcUnitState() map[string]string {
+	out, err := svcSystemctl("--user", "show", "omaseal-provider.service",
+		"-p", "ActiveState", "-p", "SubState", "-p", "Result",
+		"-p", "NRestarts", "-p", "ExecMainStatus", "-p", "LoadState")
+	if err != nil {
+		return nil
+	}
+	props := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			props[k] = v
+		}
+	}
+	if len(props) == 0 || props["LoadState"] == "not-found" {
+		return nil
+	}
+	return props
+}
+
+// svcPrintUnitState renders the provenance block: a dead or failed unit is
+// reported as such, never silently absent. Without a supervisor record, an
+// enabled-but-unowned name still recovers lazily — the activation file
+// respawns the daemon on the next client call.
+func svcPrintUnitState(unit map[string]string, owned bool) {
+	if unit == nil {
+		if !owned {
+			fmt.Println("no supervisor record — if the daemon dies, the activation file respawns it on the next client call")
+		}
+		return
+	}
+	state := unit["ActiveState"]
+	sub := unit["SubState"]
+	result := unit["Result"]
+	restarts := unit["NRestarts"]
+	switch {
+	case state == "active":
+		fmt.Printf("unit: %s (%s)", state, sub)
+	case state == "failed" || result != "" && result != "success":
+		fmt.Printf("unit: %s — last exit %s", state, result)
+	default:
+		fmt.Printf("unit: %s (%s) — activates on next client call", state, sub)
+	}
+	if restarts != "" && restarts != "0" {
+		fmt.Printf(", restarts: %s", restarts)
+	}
+	fmt.Println()
 }
 
 // svcWarnIfNoDisplay checks a running provider's environment for display
@@ -192,8 +258,12 @@ func svcWarnIfNoDisplay(conn *dbus.Conn, unique string) {
 	if err != nil {
 		return
 	}
-	env := string(raw)
-	if !strings.Contains(env, "WAYLAND_DISPLAY=") && !strings.Contains(env, "DISPLAY=") {
-		fmt.Println("warning: provider environment has no WAYLAND_DISPLAY/DISPLAY — GUI unlock prompts will fail")
+	// environ is NUL-separated; match exact variable names — a substring
+	// scan would false-positive on any *_DISPLAY= entry.
+	for entry := range strings.SplitSeq(string(raw), "\x00") {
+		if strings.HasPrefix(entry, "WAYLAND_DISPLAY=") || strings.HasPrefix(entry, "DISPLAY=") {
+			return
+		}
 	}
+	fmt.Println("warning: provider environment has no WAYLAND_DISPLAY/DISPLAY — GUI unlock prompts will fail")
 }

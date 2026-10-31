@@ -3,11 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 )
 
 // stubProviderSideEffects keeps enable/disable off the real systemctl and
@@ -110,6 +113,69 @@ func TestSvcOwnerIsOursForeignAndUnowned(t *testing.T) {
 	}
 	if owner != "" {
 		t.Fatalf("unowned name gave owner %q", owner)
+	}
+}
+
+// TestSvcOwnerIsOursNonDumpable exercises the comm fallback: the provider
+// sets PR_SET_DUMPABLE=0 at exec, which makes /proc/<pid> root-owned so the
+// exe readlink fails even for the owner. A helper process (same binary)
+// reproduces exactly that state, claims the name, and svcOwnerIsOurs must
+// still resolve it as ours.
+func TestSvcOwnerIsOursNonDumpable(t *testing.T) {
+	if os.Getenv("SVC_TEST_HELPER") != "" {
+		// Helper mode: mark self non-dumpable (root-owned /proc, exactly
+		// like the running provider), claim the name, hold until killed.
+		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+			os.Exit(2)
+		}
+		conn, err := svcConnect(os.Getenv("SVC_TEST_BUS"))
+		if err != nil {
+			os.Exit(3)
+		}
+		if err := svcClaimName(conn); err != nil {
+			os.Exit(4)
+		}
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	}
+
+	bus := newSvcTestBus(t)
+	conn := bus.connect(t)
+	cmd := exec.Command(os.Args[0], "-test.run", "TestSvcOwnerIsOursNonDumpable")
+	cmd.Env = append(os.Environ(),
+		"SVC_TEST_HELPER=1", "SVC_TEST_BUS="+bus.addr)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("helper spawn: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	// Wait for the helper to own the name.
+	var ownerPid uint32
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var unique string
+		if err := conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, svcBusName).Store(&unique); err == nil && unique != conn.Names()[0] {
+			p, err := svcPeerPID(conn, unique)
+			if err == nil {
+				ownerPid = p
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if ownerPid == 0 {
+		t.Fatal("helper never claimed the name")
+	}
+
+	// The helper is non-dumpable — its exe link must be unreadable here
+	// (root-run environments may not honor this; skip rather than fail).
+	if _, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", ownerPid)); err == nil {
+		t.Skip("environment permits exe readlink on non-dumpable processes")
+	}
+
+	ours, owner, _ := svcOwnerIsOurs(conn)
+	if !ours {
+		t.Fatalf("non-dumpable owner must resolve as ours via comm fallback: %s", owner)
 	}
 }
 
