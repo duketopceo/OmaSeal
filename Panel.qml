@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -34,10 +35,10 @@ Panel {
   property alias totalAccesses: secrets.totalAccesses
   property alias topSecretLabel: secrets.topSecretLabel
 
-  readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
+  readonly property color fg: root.bar ? root.bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
-  readonly property color urgent: Color.urgent !== undefined ? Color.urgent : Color.accent
-  readonly property color accent: Color.accent
+  readonly property color urgent: Commons.Color.urgent !== undefined ? Commons.Color.urgent : Commons.Color.accent
+  readonly property color accent: Commons.Color.accent
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   readonly property var barIdentity: root.hostWidget || root
 
