@@ -33,6 +33,7 @@ Column {
     visible: agentSection.status !== null && agentSection.status.agentMode !== ""
 
     Text {
+      textFormat: Text.PlainText
       Layout.fillWidth: true
       elide: Text.ElideRight
       text: "󰌆 AGENTS " + agentSection.status.agentMode.toUpperCase() +
