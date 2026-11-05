@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -34,10 +35,10 @@ Panel {
   property alias totalAccesses: secrets.totalAccesses
   property alias topSecretLabel: secrets.topSecretLabel
 
-  readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
+  readonly property color fg: root.bar ? root.bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.5)
-  readonly property color urgent: Color.urgent !== undefined ? Color.urgent : Color.accent
-  readonly property color accent: Color.accent
+  readonly property color urgent: Commons.Color.urgent !== undefined ? Commons.Color.urgent : Commons.Color.accent
+  readonly property color accent: Commons.Color.accent
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   readonly property var barIdentity: root.hostWidget || root
 
@@ -144,6 +145,7 @@ Panel {
             spacing: Style.space(8)
 
             Text {
+              textFormat: Text.PlainText
               text: model.time
               color: root.dim
               font.family: root.fontFamily
@@ -151,6 +153,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: model.source
               color: root.accent
               font.family: root.fontFamily
@@ -159,6 +162,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: model.message
             color: root.fg
@@ -264,6 +268,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: root.allSecrets.length
             color: root.dim
             font.family: root.fontFamily
@@ -305,6 +310,7 @@ Panel {
 
         // Expanded stats strip: totals at a glance.
         Text {
+          textFormat: Text.PlainText
           visible: root.expanded
           Layout.fillWidth: true
           text: root.allSecrets.length + " SECRETS · " + root.totalAccesses + " ACCESSES · TOP: " + root.topSecretLabel
@@ -367,6 +373,7 @@ Panel {
                       anchors.rightMargin: Style.space(8)
 
                       Text {
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true
                         text: modelData.label
                         color: root.fg
@@ -375,6 +382,7 @@ Panel {
                         elide: Text.ElideRight
                       }
                       Text {
+                        textFormat: Text.PlainText
                         text: modelData.count
                         color: root.dim
                         font.family: root.fontFamily
@@ -476,6 +484,7 @@ Panel {
 
         // Status Notice Banner
         Text {
+          textFormat: Text.PlainText
           id: noticeText
           visible: root.notice !== ""
           Layout.fillWidth: true
