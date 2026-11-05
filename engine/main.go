@@ -127,6 +127,10 @@ func runLegacy(argv []string) {
 		handleAskSave()
 	case "get":
 		handleGet()
+	case "getver":
+		handleGetVersion()
+	case "history":
+		handleHistory()
 	case "reveal":
 		handleReveal()
 	case "del", "delete":
@@ -240,6 +244,63 @@ func handleGet() {
 	}
 	WriteLog("get %s/%s", service, account)
 	warnIfFlagged(service, account)
+	fmt.Print(secret)
+}
+
+// handleHistory prints an item's version history — metadata only, no
+// values: `omaseal history <service> <account>`.
+func handleHistory() {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		usage()
+		os.Exit(1)
+	}
+	vers, tomb, err := newNativeStore().Versions(service, account)
+	logOpResult("history", service+"/"+account, time.Now(), err)
+	if err != nil {
+		printError("reading history: ", err)
+		os.Exit(1)
+	}
+	if tomb {
+		fmt.Println("(deleted — history retained)")
+	}
+	for _, v := range vers {
+		marker := "  "
+		if v.Active {
+			marker = "* "
+		}
+		fmt.Printf("%sv%d  %s\n", marker, v.V, time.Unix(v.Created, 0).UTC().Format(time.RFC3339))
+	}
+}
+
+// handleGetVersion prints a specific version's value — raw to stdout like
+// `get`: `omaseal get --version N <service> <account>` (legacy: getver N).
+func handleGetVersion() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "error: want <N> <service> <account>")
+		usage()
+		os.Exit(1)
+	}
+	n, err := strconv.Atoi(os.Args[2])
+	if err != nil || n < 1 {
+		fmt.Fprintln(os.Stderr, "error: version must be a positive integer")
+		os.Exit(1)
+	}
+	service, account, err := argCredentialsLoose(os.Args[3:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		usage()
+		os.Exit(1)
+	}
+	start := time.Now()
+	secret, err := newNativeStore().GetVersion(service, account, n)
+	logOpResult("getver", service+"/"+account, start, err)
+	if err != nil {
+		printError("retrieving version: ", err)
+		os.Exit(1)
+	}
+	WriteLog("getver %s/%s v%d", service, account, n)
 	fmt.Print(secret)
 }
 
