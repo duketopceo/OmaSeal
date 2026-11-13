@@ -1,0 +1,14 @@
+# OmaSeal laptop-to-replica sync. Triggered by omaseal-sync.path and
+# by the hourly omaseal-sync.timer backstop. Install into
+# ~/.config/systemd/user/ and see contrib/sync/README.md.
+[Unit]
+Description=OmaSeal native store replica sync
+Documentation=https://github.com/duketopceo/OmaSeal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omaseal-sync
+# Do not hang a user session if Tailscale SSH is down; the timer retries.
+TimeoutStartSec=60
