@@ -36,6 +36,9 @@ const maxConsecGetFailures = 8
 // write failure for one item is recorded and never aborts the batch (R4).
 // dryRun counts what would happen without reading or writing a single value.
 func migrateItems(src itemSource, dst *nativeStore, dryRun bool) (*migrateSummary, error) {
+	if err := dst.refuseReplicaWrite(); err != nil {
+		return nil, err
+	}
 	// Init first: on TTY this runs the passphrase flow before any source
 	// work; non-TTY on an uninitialized store fails closed with the hint
 	// (R6) — and an initialized store answers List without unlock anyway.

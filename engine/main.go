@@ -189,6 +189,8 @@ func runLegacy(argv []string) {
 		handleAgent()
 	case "jev":
 		handleJev()
+	case "recipients":
+		handleRecipients()
 	case "help", "-h", "--help":
 		usage()
 	default:

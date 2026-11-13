@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+# omaseal-sync — push the native store.json to a read-only replica over SSH.
+# Laptop side only. Never copies identity files, the lock, or recipients.json.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: omaseal-sync [--dry-run] [--help]
+
+Copy this machine's OmaSeal native store.json to a replica host over SSH
+(Tailscale by default). The copy is atomic: scp to a temp name, verify
+sha256 on the remote, then mv. Identity files are never copied.
+
+Environment:
+  OMASEAL_STORE          Override the local store.json path
+  OMASEAL_REPLICA_HOST   Required. SSH host of the replica (for example replica-host)
+  OMASEAL_REPLICA_PATH   Remote store.json path. If unset, the remote is
+                         asked to resolve $XDG_STATE_HOME/omaseal/native/store.json
+                         the same way the engine does
+  OMASEAL_SSH            ssh binary (default: ssh)
+  OMASEAL_SCP            scp binary (default: scp)
+
+The store must look multi-recipient: every item's ct, after base64 decode,
+must be an age v1 header with at least two recipient stanzas. That check
+does not decrypt. An empty store cannot be checked; the script warns and
+continues. See README.md.
+USAGE
+}
+
+DRY_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "omaseal-sync: unknown argument: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+# Same resolution as svcXDGDir("XDG_STATE_HOME", ".local", "state") plus
+# omaseal/native/store.json in engine/nativestore.go and engine/svcfiles.go.
+native_store_path() {
+  local base
+  if [ -n "${XDG_STATE_HOME:-}" ]; then
+    base="$XDG_STATE_HOME"
+  elif [ -n "${HOME:-}" ]; then
+    base="$HOME/.local/state"
+  else
+    echo "omaseal-sync: cannot resolve store path: HOME and XDG_STATE_HOME are unset" >&2
+    return 1
+  fi
+  printf '%s\n' "$base/omaseal/native/store.json"
+}
+
+# Expanded on the remote host, not locally.
+# shellcheck disable=SC2016
+remote_store_formula='${XDG_STATE_HOME:-$HOME/.local/state}/omaseal/native/store.json'
+
+die() {
+  echo "omaseal-sync: $*" >&2
+  exit 1
+}
+
+# Return 0 if every item is multi-recipient, 1 if not, 2 if undetectable
+# (empty store or no items). Prints a one-line reason to stdout.
+check_multi_recipient() {
+  local store="$1"
+  python3 - "$store" <<'PY'
+import base64, json, sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+except json.JSONDecodeError as e:
+    print(f"store.json is not valid JSON: {e}")
+    sys.exit(1)
+except OSError as e:
+    print(f"cannot read store.json: {e}")
+    sys.exit(1)
+
+if not isinstance(doc, dict) or "items" not in doc:
+    print("store.json is missing a top-level items object")
+    sys.exit(1)
+items = doc["items"]
+if items is None:
+    items = {}
+if not isinstance(items, dict):
+    print("store.json items is not an object")
+    sys.exit(1)
+if not items:
+    print("store has no items; multi-recipient cannot be detected")
+    sys.exit(2)
+
+def stanza_count(ct: str) -> int:
+    if not isinstance(ct, str) or not ct.strip():
+        raise ValueError("item has an empty ct")
+    try:
+        raw = base64.b64decode(ct, validate=False)
+    except Exception as e:
+        raise ValueError(f"ct is not base64: {e}") from e
+    # Header is ASCII up to the first "---" line; body may be binary.
+    try:
+        text = raw.decode("utf-8")
+        head = text
+    except UnicodeDecodeError:
+        # Split off the binary body at the first --- line.
+        nl = raw.find(b"\n---")
+        if nl < 0:
+            raise ValueError("ct is not an age v1 ciphertext (no header)")
+        head = raw[:nl].decode("ascii", errors="replace")
+    else:
+        if "\n---" in text:
+            head = text.split("\n---", 1)[0]
+    if "age-encryption.org/v1" not in head.splitlines()[0:2] and not head.startswith("age-encryption.org/v1"):
+        # still count stanzas if present; otherwise reject
+        if "-> " not in head:
+            raise ValueError("ct is not an age v1 ciphertext")
+    n = 0
+    for line in head.splitlines():
+        if line.startswith("-> "):
+            n += 1
+    return n
+
+short = 0
+for key, item in items.items():
+    if not isinstance(item, dict):
+        print(f"item {key!r} is not an object")
+        sys.exit(1)
+    try:
+        n = stanza_count(item.get("ct", ""))
+    except ValueError as e:
+        print(f"item {key!r}: {e}")
+        sys.exit(1)
+    if n < 2:
+        short += 1
+        print(f"item {key!r} has {n} age recipient stanza(s); need at least 2")
+        sys.exit(1)
+
+print(f"{len(items)} item(s) each have at least two age recipient stanzas")
+sys.exit(0)
+PY
+}
+
+quote_remote() {
+  # Safe single-quoted string for a remote sh -c.
+  local s=$1
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+SSH_BIN="${OMASEAL_SSH:-ssh}"
+SCP_BIN="${OMASEAL_SCP:-scp}"
+HOST="${OMASEAL_REPLICA_HOST:-}"
+if [ -z "$HOST" ]; then
+  die "OMASEAL_REPLICA_HOST is unset. Set it to the replica's SSH host (for example replica-host). There is no default."
+fi
+
+STORE="${OMASEAL_STORE:-}"
+if [ -z "$STORE" ]; then
+  STORE="$(native_store_path)"
+fi
+
+if [ ! -f "$STORE" ]; then
+  die "local store not found: $STORE"
+fi
+if [ ! -r "$STORE" ]; then
+  die "local store is not readable: $STORE"
+fi
+
+# Refuse to operate on anything that is not named store.json, so a bad
+# override cannot point this tool at identity.age.
+base="$(basename -- "$STORE")"
+if [ "$base" != "store.json" ]; then
+  die "refusing to copy '$base'; only store.json may be synced"
+fi
+
+set +e
+check_msg="$(check_multi_recipient "$STORE")"
+check_rc=$?
+set -e
+case "$check_rc" in
+  0)
+    echo "omaseal-sync: $check_msg"
+    ;;
+  2)
+    echo "omaseal-sync: warning: $check_msg" >&2
+    ;;
+  *)
+    die "store is not multi-recipient: $check_msg"
+    ;;
+esac
+
+local_hash="$(
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$STORE" | awk '{print $1}'
+  else
+    shasum -a 256 -- "$STORE" | awk '{print $1}'
+  fi
+)"
+if [ -z "$local_hash" ] || [ "${#local_hash}" -ne 64 ]; then
+  die "failed to hash local store"
+fi
+
+ssh_base() {
+  # BatchMode: unattended systemd must not hang on a password prompt.
+  "$SSH_BIN" -o BatchMode=yes -o ConnectTimeout=15 "$@"
+}
+
+scp_base() {
+  "$SCP_BIN" -o BatchMode=yes -o ConnectTimeout=15 "$@"
+}
+
+REMOTE_PATH="${OMASEAL_REPLICA_PATH:-}"
+if [ -z "$REMOTE_PATH" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    REMOTE_PATH="(default on $HOST: $remote_store_formula)"
+  else
+    REMOTE_PATH="$(ssh_base -- "$HOST" "printf '%s\\n' \"$remote_store_formula\"")" \
+      || die "failed to resolve remote store path on $HOST"
+    if [ -z "$REMOTE_PATH" ]; then
+      die "remote store path on $HOST was empty"
+    fi
+    remote_base="$(basename -- "$REMOTE_PATH")"
+    if [ "$remote_base" != "store.json" ]; then
+      die "refusing remote path '$REMOTE_PATH'; it must be a store.json"
+    fi
+  fi
+else
+  remote_base="$(basename -- "$REMOTE_PATH")"
+  if [ "$remote_base" != "store.json" ]; then
+    die "refusing remote path '$REMOTE_PATH'; it must be a store.json"
+  fi
+fi
+
+echo "omaseal-sync: local  $STORE"
+echo "omaseal-sync: sha256 $local_hash"
+echo "omaseal-sync: remote $HOST:$REMOTE_PATH"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "omaseal-sync: dry-run; no files copied"
+  exit 0
+fi
+
+remote_dir="$(dirname -- "$REMOTE_PATH")"
+tmp_name="store.json.omaseal-sync.$$.tmp"
+REMOTE_TMP="$remote_dir/$tmp_name"
+q_tmp="$(quote_remote "$REMOTE_TMP")"
+q_dest="$(quote_remote "$REMOTE_PATH")"
+q_dir="$(quote_remote "$remote_dir")"
+
+# Make the destination directory if needed; never create identity files.
+ssh_base -- "$HOST" "mkdir -p $q_dir && test -d $q_dir" \
+  || die "failed to ensure remote directory $remote_dir on $HOST"
+
+cleanup_tmp() {
+  ssh_base -- "$HOST" "rm -f $q_tmp" >/dev/null 2>&1 || true
+}
+trap cleanup_tmp EXIT
+
+# scp the store only. Identity files in the same directory are not arguments.
+scp_base -- "$STORE" "$HOST:$REMOTE_TMP" \
+  || die "scp to $HOST:$REMOTE_TMP failed"
+
+remote_hash="$(
+  ssh_base -- "$HOST" "f=$q_tmp; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- \"\$f\"; else shasum -a 256 -- \"\$f\"; fi" \
+    | awk '{print $1}'
+)" || die "failed to hash remote temp file"
+
+if [ "$remote_hash" != "$local_hash" ]; then
+  die "checksum mismatch: local $local_hash vs remote temp $remote_hash (left $REMOTE_PATH unchanged)"
+fi
+
+# Atomic replace on the remote, then lock down mode. Identity files are
+# not touched. A failed mv leaves the previous store.json in place.
+ssh_base -- "$HOST" "mv -f $q_tmp $q_dest && chmod 600 $q_dest && test -f $q_dest" \
+  || die "remote install of $REMOTE_PATH failed; previous file left in place if it existed"
+
+trap - EXIT
+
+echo "omaseal-sync: installed $HOST:$REMOTE_PATH ($local_hash)"

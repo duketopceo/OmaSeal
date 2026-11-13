@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"golang.org/x/sys/unix"
 )
 
 // The provider daemon: OmaSeal serving org.freedesktop.secrets on the user
@@ -201,10 +200,4 @@ func (d *svcDaemon) reapSender(name string) {
 	for _, path := range orphans {
 		d.finishPrompt(path, true, nil, context.Canceled)
 	}
-}
-
-// dropDumpable masks core dumps at exec — belt to the unit's LimitCORE=0
-// suspenders so a daemon crash never writes vault material to disk.
-func dropDumpable() {
-	_ = unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0)
 }

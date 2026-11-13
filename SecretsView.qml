@@ -37,6 +37,7 @@ ColumnLayout {
     }
 
     Text {
+      textFormat: Text.PlainText
       Layout.fillWidth: true
       horizontalAlignment: Text.AlignRight
       text: "j/k nav · / search · v vault · s sort · ⏎ copy · x del · e " + (view.store.expanded ? "collapse" : "expand")
@@ -67,6 +68,7 @@ ColumnLayout {
 
       // Empty State
       Text {
+        textFormat: Text.PlainText
         visible: view.store.secretsModel.count === 0
         width: parent.width
         text: view.store.allSecrets.length > 0 ? "No matches." : "No secrets yet — press a or + Add to store one, or run: omaseal import 1password"
@@ -124,6 +126,7 @@ ColumnLayout {
               spacing: Style.space(2)
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: service + " / " + account
                 color: view.fg
@@ -134,6 +137,7 @@ ColumnLayout {
               }
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: {
                   var parts = []
@@ -152,6 +156,7 @@ ColumnLayout {
 
             // Usage tally — how often this secret has been read.
             Text {
+              textFormat: Text.PlainText
               visible: hits > 0
               text: "×" + hits
               color: view.accent
@@ -199,6 +204,7 @@ ColumnLayout {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.centerIn: parent
           text: "… " + view.store.hiddenCount + " more — expand for full list"
           color: view.dim

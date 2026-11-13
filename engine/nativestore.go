@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +35,7 @@ import (
 //	native-session.json — {"key": "AGE-SECRET-…", "expires": unix} 0600
 //
 // The asymmetric property: Set/Delete/List encrypt to the public recipient
+// (and any committed additional machine recipients — nativerecipients.go)
 // and never consult key material, so they work while locked and a failed
 // unlock is a failed read — never a write (the Sept-30 re-key class,
 // eliminated by construction).
@@ -48,6 +48,8 @@ type nativeStore struct {
 	prompt      func(label string) (string, error) // nil → never prompt
 	now         func() time.Time
 	sessionTTL  time.Duration
+	replica     bool             // read-only synced copy — Set/Delete/rotate refuse
+	extra       []namedRecipient // committed additional recipients; Set encrypts to these
 }
 
 var _ Store = (*nativeStore)(nil)
@@ -144,7 +146,14 @@ const (
 // $XDG_STATE_HOME/omaseal/native with the agent runtime dir for sessions.
 func newNativeStore() *nativeStore {
 	base := svcXDGDir("XDG_STATE_HOME", ".local", "state")
-	return newNativeStoreAt(filepath.Join(base, "omaseal", "native"), agentRuntimeDir())
+	s := newNativeStoreAt(filepath.Join(base, "omaseal", "native"), agentRuntimeDir())
+	if cfg, err := loadConfig(); err == nil {
+		s.replica = cfg.Replica
+	}
+	if replicaFromEnv() {
+		s.replica = true
+	}
+	return s
 }
 
 // newNativeStoreAt is the testable constructor — dirs and prompt injected.
@@ -180,30 +189,30 @@ func (s *nativeStore) set(service, account, secret string, owned, ifAbsent bool)
 	if err := s.ensureInit(); err != nil {
 		return err
 	}
-	env, _ := json.Marshal(nativeEnvelope{Svc: service, Acct: account, Value: secret})
-	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, s.pub)
-	if err != nil {
-		return keyringError(err)
-	}
-	if _, err := w.Write(env); err != nil {
-		return keyringError(err)
-	}
-	if err := w.Close(); err != nil {
-		return keyringError(err)
+	if err := s.refuseReplicaWrite(); err != nil {
+		return err
 	}
 	key := nativeKey(service, account)
 	var existed bool
-	err = s.update(func(d *nativeDoc) {
+	err := s.updateErr(func(d *nativeDoc) error {
 		if _, ok := d.Items[key]; ok && ifAbsent {
 			existed = true
-			return
+			return nil
+		}
+		// Reload the committed recipient set inside the lock so a
+		// concurrent rotation is not missed (Set would otherwise
+		// encrypt to a stale set and overwrite a just-rotated item).
+		if err := s.loadExtra(); err != nil {
+			return err
+		}
+		ct, err := s.encryptEnvelope(nativeEnvelope{Svc: service, Acct: account, Value: secret})
+		if err != nil {
+			return err
 		}
 		it, ok := d.Items[key]
 		if !ok {
 			it.Created = s.now().Unix()
 		}
-		ct := base64.StdEncoding.EncodeToString(buf.Bytes())
 		// Version history: a legacy item (no Versions) seeds v1 from its
 		// current blob so the prior value is preserved; then append vN+1.
 		// Numbers are minted from the last version — never reused, even
@@ -221,6 +230,7 @@ func (s *nativeStore) set(service, account, secret string, owned, ifAbsent bool)
 		it.Updated = s.now().Unix()
 		it.External = !owned
 		d.Items[key] = it
+		return nil
 	})
 	if existed {
 		return errItemExists
@@ -247,26 +257,7 @@ func (s *nativeStore) Get(service, account string) (string, error) {
 	if err := s.ensureIdentity(); err != nil {
 		return "", err
 	}
-	raw, err := base64.StdEncoding.DecodeString(it.CT)
-	if err != nil {
-		return "", keyringError(err)
-	}
-	src, err := age.Decrypt(bytes.NewReader(raw), s.identity.Load())
-	if err != nil {
-		return "", keyringError(fmt.Errorf("decrypt: %w", err))
-	}
-	plain, err := io.ReadAll(src)
-	if err != nil {
-		return "", keyringError(err)
-	}
-	var env nativeEnvelope
-	if err := json.Unmarshal(plain, &env); err != nil {
-		return "", keyringError(err)
-	}
-	if env.Svc != service || env.Acct != account {
-		return "", newError("tamper", "store integrity check failed — see omaseal doctor", errNativeTamper)
-	}
-	return env.Value, nil
+	return s.decryptEnvelope(service, account, it)
 }
 
 // Delete removes the item under the write lock — works while locked.
@@ -275,6 +266,9 @@ func (s *nativeStore) Delete(service, account string) error {
 		return errors.New("service and account must not be empty")
 	}
 	if err := s.ensureInit(); err != nil {
+		return err
+	}
+	if err := s.refuseReplicaWrite(); err != nil {
 		return err
 	}
 	key := nativeKey(service, account)
@@ -410,26 +404,7 @@ func (s *nativeStore) GetVersion(service, account string, v int) (string, error)
 	if err := s.ensureIdentity(); err != nil {
 		return "", err
 	}
-	raw, err := base64.StdEncoding.DecodeString(ct)
-	if err != nil {
-		return "", keyringError(err)
-	}
-	src, err := age.Decrypt(bytes.NewReader(raw), s.identity.Load())
-	if err != nil {
-		return "", keyringError(fmt.Errorf("decrypt: %w", err))
-	}
-	plain, err := io.ReadAll(src)
-	if err != nil {
-		return "", keyringError(err)
-	}
-	var env nativeEnvelope
-	if err := json.Unmarshal(plain, &env); err != nil {
-		return "", keyringError(err)
-	}
-	if env.Svc != service || env.Acct != account {
-		return "", newError("tamper", "store integrity check failed — see omaseal doctor", errNativeTamper)
-	}
-	return env.Value, nil
+	return s.decryptEnvelope(service, account, nativeItem{CT: ct})
 }
 
 // --- Unlock / session identity ---------------------------------------------
@@ -646,7 +621,7 @@ func (s *nativeStore) ensureInit() error {
 		// rewrite the pub file from it, rather than wedging the store.
 		return s.healPub()
 	}
-	return nil
+	return s.loadExtra()
 }
 
 // healPub recovers a torn init: unlock the identity, then derive and write
@@ -660,7 +635,7 @@ func (s *nativeStore) healPub() error {
 		return keyringError(err)
 	}
 	s.pub = s.identity.Load().Recipient()
-	return nil
+	return s.loadExtra()
 }
 
 // initFresh creates a new identity — the ONLY path that writes a passphrase-
@@ -705,7 +680,7 @@ func (s *nativeStore) initFresh() error {
 		if perr := s.loadPub(); perr != nil {
 			return s.healPub()
 		}
-		return nil
+		return s.loadExtra()
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return keyringError(err)
@@ -756,6 +731,15 @@ func (s *nativeStore) loadPub() error {
 // update serializes read-modify-write of store.json under flock — the
 // audit-chain lesson: re-read inside the lock, never before.
 func (s *nativeStore) update(fn func(*nativeDoc)) error {
+	return s.updateErr(func(d *nativeDoc) error {
+		fn(d)
+		return nil
+	})
+}
+
+// updateErr is update with a fallible callback: a non-nil return leaves
+// store.json untouched (the rotation abort path).
+func (s *nativeStore) updateErr(fn func(*nativeDoc) error) error {
 	lp := filepath.Join(s.dir, nativeLockFile)
 	lf, err := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -771,7 +755,9 @@ func (s *nativeStore) update(fn func(*nativeDoc)) error {
 	if err != nil {
 		return err
 	}
-	fn(&d)
+	if err := fn(&d); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(d)
 	if err != nil {
 		return keyringError(err)

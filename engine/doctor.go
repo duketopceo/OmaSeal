@@ -185,6 +185,22 @@ func checkBackend() checkResult {
 			message: "native — not initialized (run `omaseal migrate` or `omaseal get` in a terminal)"}
 	}
 	msg := "native — age-encrypted store"
+	if cfg.Replica || replicaFromEnv() {
+		msg += ", replica (read-only)"
+	}
+	if err := ns.loadExtra(); err != nil {
+		msg += ", recipients unreadable"
+	} else {
+		if n := len(ns.committedRecipients()); n > 0 {
+			msg += fmt.Sprintf(", %d extra recipient", n)
+			if n != 1 {
+				msg += "s"
+			}
+		}
+		if err := warnRecipientDivergence(ns.committedRecipients()); err != nil {
+			msg += ", config/snapshot recipients differ"
+		}
+	}
 	raw, err := os.ReadFile(filepath.Join(ns.runtimeDir, nativeSessJSONFile))
 	if err != nil {
 		msg += ", locked"

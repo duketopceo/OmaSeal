@@ -113,6 +113,12 @@ func TestCommandTreeTranslatesToLegacyArgv(t *testing.T) {
 		{"provider status --json", "provider status --json"},
 		{"provider enable", "provider enable"},
 		{"provider disable", "provider disable"},
+		{"recipients list", "recipients list"},
+		{"recipients list --json", "recipients list --json"},
+		{"recipients add age1abc --name macmini", "recipients add age1abc --name macmini"},
+		{"recipients rm macmini", "recipients rm macmini"},
+		{"recipients remove macmini", "recipients rm macmini"},
+		{"recipients local", "recipients local"},
 
 		// plumbing that other plugins call
 		{`ipc get {"service":"a","account":"b"}`, `ipc get {"service":"a","account":"b"}`},
