@@ -25,6 +25,7 @@ import (
 // Layout under $XDG_STATE_HOME/omaseal/native/:
 //
 //	identity.age  — X25519 private key, scrypt-passphrase-wrapped
+//	                (or the login Keychain, when backend is keychain)
 //	identity.pub  — cleartext public recipient (not secret)
 //	store.json    — {"items": {"svc/acct": {ct, created, updated}}}
 //	store.lock    — flock target serializing writers
@@ -50,6 +51,7 @@ type nativeStore struct {
 	sessionTTL  time.Duration
 	replica     bool             // read-only synced copy — Set/Delete/rotate refuse
 	extra       []namedRecipient // committed additional recipients; Set encrypts to these
+	ids         identityHolder   // at-rest wrapped identity; file or Keychain
 }
 
 var _ Store = (*nativeStore)(nil)
@@ -128,11 +130,17 @@ const (
 func newNativeStore() *nativeStore {
 	base := svcXDGDir("XDG_STATE_HOME", ".local", "state")
 	s := newNativeStoreAt(filepath.Join(base, "omaseal", "native"), agentRuntimeDir())
-	if cfg, err := loadConfig(); err == nil {
+	cfg, err := loadConfig()
+	if err == nil {
 		s.replica = cfg.Replica
 	}
 	if replicaFromEnv() {
 		s.replica = true
+	}
+	// Keychain holds the identity only when explicitly opted in and
+	// this is not a replica — replica always uses identity.age (R3).
+	if !s.replica && err == nil && cfg.Backend == "keychain" && keychainBackendSupported() {
+		s.ids = newKeychainHolder(systemKeyring(), s.dir)
 	}
 	return s
 }
@@ -145,6 +153,7 @@ func newNativeStoreAt(dir, runtimeDir string) *nativeStore {
 		prompt:     nativePassphrasePromptTTY,
 		now:        func() time.Time { return time.Now().UTC() },
 		sessionTTL: defaultNativeTTL,
+		ids:        fileIdentityHolder{dir: dir},
 	}
 }
 
@@ -321,7 +330,7 @@ func (s *nativeStore) unwrapIdentity(passphrase string) error {
 // themselves only after their veto checks pass.
 func (s *nativeStore) unwrapIdentityPass(passphrase string) (*age.X25519Identity, error) {
 	if s.identityEnc == nil {
-		blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
+		blob, err := s.readIdentity()
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, newError("store_uninitialized", "omaseal get (or migrate) in a terminal first", err)
 		}
@@ -488,8 +497,7 @@ func (s *nativeStore) ensureInit() error {
 	if s.pub != nil {
 		return nil
 	}
-	idPath := filepath.Join(s.dir, nativeIdentityFile)
-	blob, err := os.ReadFile(idPath)
+	blob, err := s.readIdentity()
 	if errors.Is(err, os.ErrNotExist) {
 		return s.initFresh()
 	}
@@ -498,7 +506,7 @@ func (s *nativeStore) ensureInit() error {
 	}
 	s.identityEnc = blob
 	if err := s.loadPub(); err != nil {
-		// identity.age exists but identity.pub is missing/corrupt — a
+		// identity exists but identity.pub is missing/corrupt — a
 		// torn init. Self-heal: unwrap the identity (prompt on TTY) and
 		// rewrite the pub file from it, rather than wedging the store.
 		return s.healPub()
@@ -530,7 +538,7 @@ func (s *nativeStore) initFresh() error {
 	if s.prompt == nil {
 		return newError("store_uninitialized",
 			"run `omaseal get` once in a terminal to initialize the native store",
-			errors.New("no identity at "+filepath.Join(s.dir, nativeIdentityFile)))
+			errors.New("no identity at "+s.identityHint()))
 	}
 	// First-init prompts stay TTY-only — fail before touching the
 	// filesystem so a non-TTY first-touch leaves no stray dir+lock.
@@ -556,7 +564,7 @@ func (s *nativeStore) initFresh() error {
 	// Re-check inside the lock — a racing process may have completed init
 	// while we waited; adopt its identity, never overwrite. A torn pair
 	// (identity present, pub missing/corrupt) heals through unlock.
-	blob, err := os.ReadFile(filepath.Join(s.dir, nativeIdentityFile))
+	blob, err := s.readIdentity()
 	if err == nil {
 		s.identityEnc = blob
 		if perr := s.loadPub(); perr != nil {
@@ -584,7 +592,7 @@ func (s *nativeStore) initFresh() error {
 	if err != nil {
 		return keyringError(err)
 	}
-	if err := atomicWriteFile(filepath.Join(s.dir, nativeIdentityFile), wrapped, 0600); err != nil {
+	if err := s.writeIdentity(wrapped); err != nil {
 		return keyringError(err)
 	}
 	if err := atomicWriteFile(filepath.Join(s.dir, nativePubFile),
@@ -665,6 +673,31 @@ func (s *nativeStore) read() (nativeDoc, error) {
 		d.Items = map[string]nativeItem{}
 	}
 	return d, nil
+}
+
+// readIdentity / writeIdentity go through the configured holder so a
+// Keychain-backed store never has to mention identity.age at the call
+// site. A nil holder is treated as the file default.
+func (s *nativeStore) holder() identityHolder {
+	if s.ids == nil {
+		s.ids = fileIdentityHolder{dir: s.dir}
+	}
+	return s.ids
+}
+
+func (s *nativeStore) readIdentity() ([]byte, error) {
+	return s.holder().Read()
+}
+
+func (s *nativeStore) writeIdentity(blob []byte) error {
+	return s.holder().Write(blob)
+}
+
+func (s *nativeStore) identityHint() string {
+	if identityKindOf(s) == identityKindKeychain {
+		return "login Keychain (" + keychainIdentityService + "/" + keychainIdentityAccount + ")"
+	}
+	return filepath.Join(s.dir, nativeIdentityFile)
 }
 
 func wrapNativeIdentity(id *age.X25519Identity, passphrase string) ([]byte, error) {

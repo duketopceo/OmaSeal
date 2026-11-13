@@ -130,8 +130,14 @@ go build -o omaseal .
 install -m 755 omaseal ~/.local/bin/omaseal
 ```
 
-The native store (`{"backend": "native"}`) is the backend that supports
-multi-recipient encryption and replica mode.
+The native store (`{"backend": "native"}`) is the default on macOS and
+is the backend that supports multi-recipient encryption and replica
+mode. An opt-in `{"backend": "keychain"}` keeps items in that same
+`store.json` and holds only the passphrase-wrapped age identity in the
+login Keychain. Keychain is never the default. A replica
+(`"replica": true` or `OMASEAL_REPLICA=1`) always uses the native file
+store and ignores a Keychain config — the replica syncs `store.json`,
+and the replica's identity stays in `identity.age`.
 
 ### Menu bar app
 
