@@ -1,13 +1,13 @@
-# OmaSeal Mac mini replica sync
+# OmaSeal replica sync
 
 One-way copy of the native store from the laptop (the only writer) to a
-read-only Mac mini replica over Tailscale SSH. Pair this with the
+read-only replica Mac over Tailscale SSH. Pair this with the
 multi-recipient and replica mode work in pull request #72, and with the
 requirements and plan in pull request #74.
 
 Sync copies only `store.json`. It never copies `identity.age`,
 `identity.pub`, `store.lock`, `recipients.json`, or session files.
-Copying a laptop identity onto the mini would collapse the two keys
+Copying a laptop identity onto the replica would collapse the two keys
 into one.
 
 ## How the path is resolved
@@ -21,14 +21,14 @@ The engine roots the native store at `$XDG_STATE_HOME/omaseal/native`
 
 ## One-time key exchange
 
-The mini must be able to decrypt a copied `store.json`. That requires
+The replica must be able to decrypt a copied `store.json`. That requires
 the laptop to encrypt every item to both keys before the first sync.
 
-1. On the Mac mini, use a native backend in replica mode
+1. On the replica Mac, use a native backend in replica mode
    (`"replica": true` in the OmaSeal config, or `OMASEAL_REPLICA=1`).
    First TTY use (`omaseal get` or `omaseal recipients local`) creates
    this machine's `identity.age` / `identity.pub`.
-2. On the mini, print the public key:
+2. On the replica Mac, print the public key:
 
    ```sh
    omaseal recipients local
@@ -38,11 +38,11 @@ the laptop to encrypt every item to both keys before the first sync.
    every item; `allow_ungated` does not bypass it):
 
    ```sh
-   omaseal recipients add age1... --name macmini
+   omaseal recipients add age1example... --name replica
    ```
 
 4. Confirm `omaseal recipients list` on the laptop shows both the
-   laptop key and `macmini`. Then enable the units below.
+   laptop key and `replica`. Then enable the units below.
 
 `omaseal-sync` refuses to copy a store whose items do not look
 multi-recipient. It base64-decodes each `ct` and counts age recipient
@@ -65,18 +65,19 @@ replica is left unchanged.
       ~/.config/systemd/user/
    ```
 
-2. SSH to the mini must already work in batch mode over Tailscale
-   (no password prompt):
+2. SSH to the replica must already work in batch mode over Tailscale
+   (no password prompt). Set `OMASEAL_REPLICA_HOST` to that host — there
+   is no default — in a systemd user drop-in, or in
+   `~/.config/environment.d/`:
 
    ```sh
-   ssh -o BatchMode=yes mac-mini true
+   export OMASEAL_REPLICA_HOST=replica-host
+   ssh -o BatchMode=yes "$OMASEAL_REPLICA_HOST" true
    ```
 
-   If the Tailscale name is not `mac-mini`, set `OMASEAL_REPLICA_HOST`
-   in the service file or in `~/.config/environment.d/`. The default
-   remote path is the engine path on that host; override with
-   `OMASEAL_REPLICA_PATH` only if the mini's state dir is elsewhere.
-   The path must still be a file named `store.json`.
+   The default remote path is the engine path on that host; override
+   with `OMASEAL_REPLICA_PATH` only if the replica's state dir is
+   elsewhere. The path must still be a file named `store.json`.
 
 3. If this machine's `XDG_STATE_HOME` is not `$HOME/.local/state`,
    edit the paths in `omaseal-sync.path` before enabling.
@@ -96,7 +97,7 @@ replica is left unchanged.
    omaseal-sync
    ```
 
-## Mac mini setup (status check)
+## Replica Mac setup (status check)
 
 The launchd agent does not copy the store. It only parses the replica
 `store.json` and writes `$XDG_STATE_HOME/omaseal/replica-status.json`
@@ -117,7 +118,7 @@ The launchd agent does not copy the store. It only parses the replica
    `checked_at`, `checksum`, and `item_count`. It never writes
    `store.json` or identity files.
 
-3. On the mini, OmaSeal itself must stay in replica mode so a `Set` or
+3. On the replica Mac, OmaSeal itself must stay in replica mode so a `Set` or
    migrate is refused.
 
 ## Rollback
@@ -130,7 +131,7 @@ systemctl --user disable --now omaseal-sync.path omaseal-sync.timer
 # from ~/.local/bin
 ```
 
-On the mini:
+On the replica Mac:
 
 ```sh
 launchctl unload ~/Library/LaunchAgents/com.duketopceo.omaseal-replica.plist
@@ -138,15 +139,15 @@ rm -f ~/Library/LaunchAgents/com.duketopceo.omaseal-replica.plist
 # optional: remove /usr/local/bin/omaseal-replica-check
 ```
 
-Stopping sync does not delete the mini's store or its identity. To
-drop the mini as a recipient on the laptop (presence-gated, re-encrypts
+Stopping sync does not delete the replica's store or its identity. To
+drop the replica as a recipient on the laptop (presence-gated, re-encrypts
 every item):
 
 ```sh
-omaseal recipients rm macmini
+omaseal recipients rm replica
 ```
 
-To discard the replica copy only, delete `store.json` on the mini.
+To discard the replica copy only, delete `store.json` on the replica Mac.
 Leave `identity.age` and `identity.pub` alone.
 
 ## Environment
@@ -154,7 +155,7 @@ Leave `identity.age` and `identity.pub` alone.
 | Variable | Role |
 | --- | --- |
 | `OMASEAL_STORE` | Local `store.json` path |
-| `OMASEAL_REPLICA_HOST` | SSH host (default `mac-mini`) |
+| `OMASEAL_REPLICA_HOST` | Required SSH host of the replica (for example `replica-host`) |
 | `OMASEAL_REPLICA_PATH` | Remote `store.json` path |
 | `OMASEAL_REPLICA_STATUS` | Status sidecar path for the checker |
 | `OMASEAL_SSH` / `OMASEAL_SCP` | Override `ssh` / `scp` (used by tests) |

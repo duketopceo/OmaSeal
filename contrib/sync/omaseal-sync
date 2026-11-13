@@ -13,7 +13,7 @@ sha256 on the remote, then mv. Identity files are never copied.
 
 Environment:
   OMASEAL_STORE          Override the local store.json path
-  OMASEAL_REPLICA_HOST   Replica SSH host (default: mac-mini)
+  OMASEAL_REPLICA_HOST   Required. SSH host of the replica (for example replica-host)
   OMASEAL_REPLICA_PATH   Remote store.json path. If unset, the remote is
                          asked to resolve $XDG_STATE_HOME/omaseal/native/store.json
                          the same way the engine does
@@ -156,7 +156,10 @@ quote_remote() {
 
 SSH_BIN="${OMASEAL_SSH:-ssh}"
 SCP_BIN="${OMASEAL_SCP:-scp}"
-HOST="${OMASEAL_REPLICA_HOST:-mac-mini}"
+HOST="${OMASEAL_REPLICA_HOST:-}"
+if [ -z "$HOST" ]; then
+  die "OMASEAL_REPLICA_HOST is unset. Set it to the replica's SSH host (for example replica-host). There is no default."
+fi
 
 STORE="${OMASEAL_STORE:-}"
 if [ -z "$STORE" ]; then

@@ -125,7 +125,7 @@ chmod +x "$BIN/ssh" "$BIN/scp"
 export PATH="$BIN:$PATH"
 export OMASEAL_SSH="$BIN/ssh"
 export OMASEAL_SCP="$BIN/scp"
-export OMASEAL_REPLICA_HOST="mac-mini"
+export OMASEAL_REPLICA_HOST="replica-host"
 export OMASEAL_REPLICA_PATH="$DST/store.json"
 
 # Build a store.json whose ct values are base64(raw age v1) with N stanzas.
@@ -178,11 +178,21 @@ printf '{}\n' > "$SRC/recipients.json"
 # A previous replica store, to prove a failed transfer leaves it in place.
 printf '{"items":{"old/one":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST/store.json"
 # Identity files already on the replica must also stay untouched.
-printf 'MINI-IDENTITY\n' > "$DST/identity.age"
+printf 'REPLICA-IDENTITY\n' > "$DST/identity.age"
 printf 'age1mini\n' > "$DST/identity.pub"
 mini_id_hash="$(hash_of "$DST/identity.age")"
 
 export OMASEAL_STORE="$SRC/store.json"
+
+# 0. OMASEAL_REPLICA_HOST is required — there is no default host
+set +e
+host_out="$(
+  env -u OMASEAL_REPLICA_HOST "$SYNC" --dry-run 2>&1
+)"
+host_rc=$?
+set -e
+assert_eq "unset OMASEAL_REPLICA_HOST exits 1" "$host_rc" "1"
+assert "unset OMASEAL_REPLICA_HOST names the variable"   grep -q "OMASEAL_REPLICA_HOST" <<<"$host_out"
 
 # 1. dry-run does not change the destination or copy identities
 before_dst="$(hash_of "$DST/store.json")"
@@ -196,7 +206,7 @@ assert "dry-run mentions dry-run" grep -q "dry-run" <<<"$dry_out"
 assert "dry-run did not create a temp leftover" \
   no_temp_leftover "$DST"
 assert "dry-run did not copy identity.age" \
-  bash -c 'grep -q MINI-IDENTITY "'"$DST"'/identity.age"'
+  bash -c 'grep -q REPLICA-IDENTITY "'"$DST"'/identity.age"'
 
 # 2. atomic swap: dest becomes the source, no temp leftover, identities stay
 set +e

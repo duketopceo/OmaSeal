@@ -1,5 +1,5 @@
 ---
-title: "macOS menu bar client and Mac mini read-only replica"
+title: "macOS menu bar client and a read-only replica Mac"
 created_at: 2026-11-12
 type: feat
 topic: macos-client-and-mini-replica
@@ -8,16 +8,16 @@ product_contract_source: ce-brainstorm
 execution: code
 ---
 
-# Requirements — macOS menu bar client and Mac mini read-only replica
+# Requirements — macOS menu bar client and a read-only replica Mac
 
 ## Goal Capsule
 
-- **Objective:** Luke has a second OmaSeal instance on the Mac mini that stays
-  in sync with the laptop, so agents on the mini can still read secrets when
+- **Objective:** Luke has a second OmaSeal instance on the replica Mac that stays
+  in sync with the laptop, so agents on the replica can still read secrets when
   the laptop is offline. A SwiftUI menu bar app on the Mac is the human
   front end for search, reveal, and copy.
 - **Product authority:** Luke, 2026-11-12 — a second instance running and
-  syncing on the Mac mini; encrypted connection and store, over SSH or
+  syncing on the replica Mac; encrypted connection and store, over SSH or
   Tailscale; agents keep a copy when he is on the move and the laptop is
   offline.
 - **Engine boundary:** this work does not change `engine/**`. Multi-recipient
@@ -30,9 +30,9 @@ execution: code
 
 The native store lives on the laptop. When that machine is offline, nothing
 else can read those secrets. A raw copy of `store.json` is useless to the
-Mac mini unless every ciphertext is also encrypted to the mini's own age
-key, and a two-way copy would let a compromised mini write back. Luke wants
-the mini to keep a current, decryptable, read-only copy over an encrypted
+replica Mac unless every ciphertext is also encrypted to the replica's own age
+key, and a two-way copy would let a compromised replica write back. Luke wants
+the replica to keep a current, decryptable, read-only copy over an encrypted
 link, plus a Mac menu bar client that can search and reveal those secrets
 without linking the Go engine.
 
@@ -40,38 +40,38 @@ without linking the Go engine.
 
 **Replica and encryption set**
 
-- R1. The laptop is the only writer. The Mac mini runs OmaSeal as a
+- R1. The laptop is the only writer. The replica Mac runs OmaSeal as a
   read-only replica (`replica: true` or `OMASEAL_REPLICA=1` from #72). The
-  mini can `Get`, `List`, unlock, and create its own identity; it cannot
+  replica can `Get`, `List`, unlock, and create its own identity; it cannot
   `Set`, delete, import, migrate, or rotate recipients.
-- R2. Each secret is age-encrypted to both the laptop key and the mini key.
-  The mini prints its public key with `omaseal recipients local`. Luke adds
+- R2. Each secret is age-encrypted to both the laptop key and the replica key.
+  The replica prints its public key with `omaseal recipients local`. Luke adds
   it on the laptop with `omaseal recipients add <age1…> --name <name>`
   (presence-gated rotation, as #72 already specifies).
 - R3. Sync copies only the native store document
   (`$XDG_STATE_HOME/omaseal/native/store.json`, or the path the engine
   already uses on that OS). It never copies `identity.age`, `identity.pub`,
   `store.lock`, tmpfs session files, or the committed recipients snapshot.
-  Copying a laptop identity onto the mini would collapse the two keys into
+  Copying a laptop identity onto the replica would collapse the two keys into
   one.
 - R4. The copy travels over Tailscale SSH. The file is encrypted at rest
   (age) and the link is encrypted in transit. The install is atomic and
   checksum-verified: a failed or partial transfer leaves the previous
   `store.json` in place.
-- R5. An optional allowlist can limit which service/account items the mini
+- R5. An optional allowlist can limit which service/account items the replica
   holds. Default is a full copy of `store.json`. The allowlist is a
-  sync-side filter of the document the mini receives; it is not an engine
-  change and it does not remove the mini key from the laptop's encryption
+  sync-side filter of the document the replica receives; it is not an engine
+  change and it does not remove the replica key from the laptop's encryption
   set.
 
 **Sync machinery**
 
 - R6. Laptop-side units live under `contrib/`: an `omaseal-sync` script plus
   a systemd path unit (fires when `store.json` changes) and a low-frequency
-  timer for catch-up. The Mac mini has a launchd job, also under `contrib/`,
+  timer for catch-up. The replica Mac has a launchd job, also under `contrib/`,
   that verifies an incoming copy, atomically installs it, and records sync
   status. Neither job overwrites identity files.
-- R7. Two-way sync (writes originating on the mini, conflict resolution) is
+- R7. Two-way sync (writes originating on the replica, conflict resolution) is
   out of this work. The replica stays one-way by construction.
 
 **Menu bar app**
@@ -96,16 +96,16 @@ without linking the Go engine.
 - R13. The app ships with unit tests. A GitHub-hosted macOS runner workflow
   runs those tests on `pull_request`. The workflow must not use a
   self-hosted runner, and it must not add a new self-hosted runner.
-- R14. The menu bar app and a runnable `omaseal` on the mini depend on #70
+- R14. The menu bar app and a runnable `omaseal` on the replica depend on #70
   landing. Replica mode and multi-recipient encryption depend on #72
   landing. This requirements document does not merge those PRs.
 
 ### Success criteria
 
-- After a laptop `Set` or a recipient rotation, the mini's `store.json`
-  matches the pushed checksum, and `omaseal get` on the mini returns the
-  value using only the mini's identity.
-- Identity files on the mini are unchanged by a sync, including when a
+- After a laptop `Set` or a recipient rotation, the replica's `store.json`
+  matches the pushed checksum, and `omaseal get` on the replica returns the
+  value using only the replica's identity.
+- Identity files on the replica are unchanged by a sync, including when a
   transfer is interrupted.
 - The menu bar lists service/account names, refuses to reveal without
   Touch ID, copies with auto-clear, and shows a last-sync time from a
@@ -120,7 +120,7 @@ without linking the Go engine.
 - Running the menu bar app as a writer on a Mac that is not a replica.
 - Keychain backend, launchd service for the engine itself, and any
   `engine/**` change (owned with #70 / #72).
-- Cluster copies beyond the Mac mini.
+- Cluster copies beyond the replica Mac.
 - Syncing manifest, flags, or agent policy; those stay machine-local.
 
 **Outside this work**
@@ -135,10 +135,10 @@ without linking the Go engine.
   useful: multi-recipient `Set`, `omaseal recipients local` / `add`, and
   `replica` mode.
 - #70 lands before the macOS CLI and the menu bar app can be exercised
-  on the mini.
-- The laptop can reach the mini over Tailscale SSH as the user who owns
-  the mini's OmaSeal state directory.
-- Luke performs the one-time recipient exchange (mini `recipients local`,
+  on the replica.
+- The laptop can reach the replica over Tailscale SSH as the user who owns
+  the replica's OmaSeal state directory.
+- Luke performs the one-time recipient exchange (replica `recipients local`,
   laptop `recipients add`) at a presence-gated prompt. This work does not
   invent a new key-distribution channel.
 - The official encryption-set and replica behavior is as specified in

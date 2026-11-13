@@ -31,7 +31,7 @@ copy-pasting API keys into dotfiles. Store once. Use everywhere.
 - **1Password / Bitwarden fallback** — import and resolve when the local
   keyring does not have a secret yet.
 - **macOS menu bar** — search, Touch ID reveal, and copy, with an optional
-  read-only Mac mini replica of the native store.
+  read-only replica of the native store on a second Mac.
 
 ## Why
 
@@ -111,7 +111,7 @@ omarchy-restart-shell
 ## macOS
 
 The engine builds on macOS. A SwiftUI menu bar app can list, search, reveal
-(behind Touch ID), and copy secrets. A Mac mini can hold a read-only copy
+(behind Touch ID), and copy secrets. A replica Mac can hold a read-only copy
 of the native store, kept in sync from the laptop over Tailscale.
 
 Requirements and plan:
@@ -127,7 +127,7 @@ Menu bar build notes are in [`macos/README.md`](macos/README.md).
 cd engine
 go build -o omaseal .
 # install somewhere on PATH, for example:
-install -m 755 omaseal /opt/homebrew/bin/omaseal
+install -m 755 omaseal ~/.local/bin/omaseal
 ```
 
 The native store (`{"backend": "native"}`) is the backend that supports
@@ -146,13 +146,13 @@ The app shells out to `omaseal` on `PATH` (including `/opt/homebrew/bin`
 and `/usr/local/bin`). Reveal and Copy require Touch ID, or the device
 password. Copied values clear from the clipboard after 30 seconds.
 
-### Mac mini read-only copy
+### Replica Mac read-only copy
 
-The laptop stays the only writer. The mini decrypts a copied `store.json`
+The laptop stays the only writer. The replica decrypts a copied `store.json`
 with its own age key and refuses writes (`replica: true` or
 `OMASEAL_REPLICA=1`).
 
-1. On the mini, install the engine as above, then print its public key:
+1. On the replica Mac, install the engine as above, then print its public key:
 
    ```sh
    omaseal recipients local
@@ -162,13 +162,15 @@ with its own age key and refuses writes (`replica: true` or
    item):
 
    ```sh
-   omaseal recipients add <age1…> --name macmini
+   omaseal recipients add age1example... --name replica
    ```
 
-3. Turn on the laptop push and the mini launchd check, following
-   [`contrib/sync/README.md`](contrib/sync/README.md). Sync copies only
-   `store.json`. It never copies `identity.age`, `identity.pub`,
-   `store.lock`, or `recipients.json`.
+3. Turn on the laptop push and the replica launchd check, following
+   [`contrib/sync/README.md`](contrib/sync/README.md). Set
+   `OMASEAL_REPLICA_HOST` to the replica's SSH host (for example
+   `replica-host`); there is no default. Sync copies only `store.json`.
+   It never copies `identity.age`, `identity.pub`, `store.lock`, or
+   `recipients.json`.
 
 ## Onboarding
 
@@ -382,7 +384,7 @@ and `omaseal://` reference grammar every consumer should follow.
   moves automatically, but `omaseal migrate` bulk-copies the whole login
   collection idempotently and never modifies the source keyring.
   Additional machines can decrypt a copy of the store: `omaseal recipients
-  add <age1…> --name macmini` (presence-gated; re-encrypts every secret to
+  add age1example... --name replica` (presence-gated; re-encrypts every secret to
   the local identity plus the new key). `omaseal recipients local` prints
   this machine's public key. A `"replica": true` config (or
   `OMASEAL_REPLICA=1`) makes the instance read-only — `set`/`del`/`import`
