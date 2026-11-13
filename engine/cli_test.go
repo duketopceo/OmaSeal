@@ -199,14 +199,14 @@ func TestPreRevampNamesAreHidden(t *testing.T) {
 	}
 	// Roughly eight groups of everyday commands, not twenty-odd verbs.
 	// Rotation flags (flag/unflag) added two verbs after the revamp.
-	// Encrypted backup (backup) added one verb — the survival feature.
+	// Encrypted backup (backup) and multi-machine recipients each added one.
 	var top int
 	for _, c := range root.Commands() {
 		if !c.Hidden && c.GroupID != "" {
 			top++
 		}
 	}
-	if top > 19 {
+	if top > 20 {
 		t.Errorf("%d visible top-level commands; the revamp promised a smaller surface", top)
 	}
 }
