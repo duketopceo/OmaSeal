@@ -254,8 +254,8 @@ Item {
 
   function unlockAgent(passphrase) {
     if (unlockProc.running) return
-    var native = jobs.agentBackend === "native"
-    if (native) {
+    var useNative = jobs.agentBackend === "native"
+    if (useNative) {
       if (!passphrase) {
         jobs.noticeSet("Enter the OmaSeal passphrase to unlock")
         if (jobs.agentView) jobs.agentView.focusPass()
@@ -265,7 +265,7 @@ Item {
     } else {
       jobs.unlockPassphrase = ""
     }
-    unlockProc.command = ["omaseal", "agent", "unlock"].concat(native ? ["--passphrase-stdin"] : [])
+    unlockProc.command = ["omaseal", "agent", "unlock"].concat(useNative ? ["--passphrase-stdin"] : [])
     unlockProc.stdinEnabled = true // a finished run latches it false
     unlockProc.running = true
   }

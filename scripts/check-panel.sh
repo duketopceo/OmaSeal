@@ -68,7 +68,10 @@ if [ -n "$qmllint" ]; then
     # Not a `qmllint | grep -q` pipeline: under pipefail, grep -q's early exit
     # SIGPIPEs qmllint and the pipeline can return nonzero — silently passing.
     lint_out=$("$qmllint" "$f" 2>&1 || true)
-    grep -q '\[syntax\]' <<< "$lint_out" && fail "qmllint syntax error in $f"
+    if grep -q '\[syntax\]' <<< "$lint_out"; then
+      grep -F '[syntax]' <<< "$lint_out" >&2 || true
+      fail "qmllint syntax error in $f ($("$qmllint" --version 2>&1 | head -1))"
+    fi
   done
 else
   fail "qmllint is required for the panel syntax check (qt6-declarative tools)"
