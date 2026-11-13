@@ -317,6 +317,14 @@ and `omaseal://` reference grammar every consumer should follow.
   keeps its own items under `$XDG_STATE_HOME/omaseal/native/` — nothing
   moves automatically, but `omaseal migrate` bulk-copies the whole login
   collection idempotently and never modifies the source keyring.
+  Additional machines can decrypt a copy of the store: `omaseal recipients
+  add <age1…> --name macmini` (presence-gated; re-encrypts every secret to
+  the local identity plus the new key). `omaseal recipients local` prints
+  this machine's public key. A `"replica": true` config (or
+  `OMASEAL_REPLICA=1`) makes the instance read-only — `set`/`del`/`import`
+  /`migrate` refuse with `code=replica_readonly`, while `get` and `list`
+  still work. Sync only `$XDG_STATE_HOME/omaseal/native/store.json`; never
+  the machine-local `identity.age` / `identity.pub`.
 - `omaseal sudo` feeds your sudo password to `sudo -S` — strictly a local
   CLI verb (never an MCP/IPC surface). Every attempt requires the strict
   presence gate plus a rate limit (single-pending lock, 5 attempts per
