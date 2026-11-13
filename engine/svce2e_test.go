@@ -176,15 +176,18 @@ func TestSvcE2ESecretToolRoundTrip(t *testing.T) {
 
 	env.secretTool(t, "", "clear", "purpose", "e2e", "acct", "demo")
 
-	// After delete, the store row must be swept on next reconcile — drive
-	// one with a search, then re-read.
-	env.secretTool(t, "", "search", "--all", "purpose", "e2e")
+	// After delete (U3 tombstone), the synthetic row stays in store.json
+	// for history but List omits it — reconcile sweeps the index on search.
+	found = env.secretTool(t, "", "search", "--all", "purpose", "e2e")
+	if strings.Contains(found, "label = e2e item") {
+		t.Fatalf("tombstoned item still searchable: %q", found)
+	}
 	raw, err = os.ReadFile(filepath.Join(storeDir, nativeStoreFile))
 	if err != nil {
 		t.Fatalf("store.json after clear: %v", err)
 	}
-	if strings.Contains(string(raw), "dbus/") {
-		t.Fatalf("cleared item still in native store: %s", raw)
+	if !strings.Contains(string(raw), "dbus/") || !strings.Contains(string(raw), `"tomb":true`) {
+		t.Fatalf("cleared dbus item must be tombstoned in native store, got: %s", raw)
 	}
 }
 

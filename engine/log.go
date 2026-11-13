@@ -22,6 +22,20 @@ var (
 	logInitErr  error
 )
 
+// resetLogForTest drops the log singleton so tests can redirect XDG_STATE_HOME.
+// Production code never calls this.
+func resetLogForTest(t interface{ Helper() }) {
+	t.Helper()
+	if logFile != nil {
+		_ = logFile.Close()
+	}
+	logInitOnce = sync.Once{}
+	logFile = nil
+	logFilePath = ""
+	logWriter = nil
+	logInitErr = nil
+}
+
 // LogPath returns the resolved path to the omaseal log file, creating the
 // parent directory if needed. It is safe to call before the log file is opened.
 func LogPath() string {
