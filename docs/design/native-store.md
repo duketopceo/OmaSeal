@@ -230,3 +230,49 @@ Asahi has no userspace path; `age`'s plugin architecture keeps
 swap vars → `backend:` config key → native backend implementing the
 proven file format → migration path (Secret Service → native, the
 inverse of `keyring migrate` that already exists).
+
+## Multi-recipient and read-only replica (2026-11-12)
+
+Plan: `docs/plans/2026-11-12-001-feat-native-multi-recipient-replica-plan.md`.
+
+A second machine (a Mac mini that stays up when the laptop is offline)
+cannot decrypt a copy of `store.json` if every value is encrypted only to
+the laptop's identity. age already supports N X25519 recipients per
+ciphertext; this unit turns that on.
+
+- **Encryption set.** `Set` and rotation encrypt to `identity.pub` plus
+  every entry in the committed snapshot
+  `$XDG_STATE_HOME/omaseal/native/recipients.json`. The user-facing list
+  lives in `config.json` (`recipients: [{name, pubkey}]`) and is written
+  to match after a gated add or remove. A config-only edit is **not**
+  honored — that is the integrity property: unsanctioned widening of the
+  encryption set requires writing the committed snapshot, which the
+  official path only does after the presence gate and a full re-encrypt.
+  Honest same-uid limit: a process that can write both the snapshot and
+  `store.json` can still plant a key; that is the confinement track's
+  documented bound. The official path is gated and hash-chain audit-logged
+  (`op=recipients-add` / `op=recipients-remove`).
+- **Rotation.** `omaseal recipients add <age1…> --name <name>` and
+  `recipients rm` decrypt every item (needs the identity) and re-encrypt
+  to the new set, under the store flock. A decrypt failure aborts with
+  both files unchanged. The passphrase-wrapped `identity.age` is never
+  touched (I6 still holds). The local identity cannot be removed.
+  The gate is `requirePresenceStrict` — `allow_ungated` does not bypass
+  it, because adding a recipient is a weakening change.
+- **Replica.** `"replica": true` in `config.json`, or env
+  `OMASEAL_REPLICA=1` (`true`/`yes`/`on`). Either is sufficient. `Set`,
+  `Delete`, `migrateSet`, `import`, `migrate`, and recipient rotation
+  refuse with `code=replica_readonly`. `Get`, `List`, unlock, and
+  first-run identity init still work — the mini generates its own
+  `identity.age`.
+- **Sync contract.** Copy only `store.json` (laptop → mini). Do not copy
+  `identity.age`, `identity.pub`, `store.lock`, or the tmpfs session
+  files. The mini prints its public key with `omaseal recipients local`;
+  the laptop adds it and rotates. The mini unlocks with its own
+  passphrase.
+
+I1 (Set while locked) still holds: additional recipients are public
+keys. I2–I5 are unchanged. I6 is unchanged for passphrase rotation;
+recipient add/remove is a different operation that *does* re-encrypt
+values, by design.
+

@@ -25,3 +25,21 @@ A mark on a stored secret saying the credential needs rotation — e.g. the valu
 ## Different-UID helper daemon
 
 The planned enforcement principal: a daemon running as a different user ID that owns the store identity and brokers secret access, making manifest policy real for every lane rather than advisory. The provider daemon becomes a thin Secret Service adapter in front of it. Named in `docs/decisions/setec-design-notes.md` and the product roadmap plan.
+
+## Store recipient
+
+An additional age X25519 public key that every native-store secret is
+encrypted to, alongside this machine's local identity. Added and removed
+with `omaseal recipients`, which re-encrypts the vault behind the strict
+user-presence gate. The other machine holds the matching private key,
+wrapped in its own `identity.age` — the primary never holds it.
+
+## Read-only replica
+
+A native-store instance that serves `get`/`list` from a synced copy of
+`store.json` and refuses every write (`set`, `del`, `import`, `migrate`,
+recipient rotation) with `code=replica_readonly`. Enabled by
+`"replica": true` in `config.json` or the `OMASEAL_REPLICA` environment
+variable. Used on a second machine (a Mac mini) so agents can read
+secrets while the primary is offline.
+

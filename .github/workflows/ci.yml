@@ -69,6 +69,25 @@ jobs:
           make test
         shell: dbus-run-session -- bash --noprofile --norc -eo pipefail {0}
 
+  build-macos:
+    # Mac client groundwork: the engine must keep compiling on macOS.
+    # Tests stay Linux-only until the Keychain backend lands.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - name: Build and vet (darwin arm64 + amd64)
+        working-directory: engine
+        run: |
+          go vet ./...
+          CGO_ENABLED=0 GOARCH=arm64 go build -o /dev/null .
+          CGO_ENABLED=0 GOARCH=amd64 go build -o /dev/null .
+
   build:
     runs-on: ubuntu-latest
     needs: [test, test-arm64]

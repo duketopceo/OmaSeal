@@ -1,0 +1,14 @@
+# Hourly backstop if a PathChanged event is missed (for example while
+# the laptop is offline or the path unit is stopped).
+[Unit]
+Description=Hourly backstop for OmaSeal replica sync
+Documentation=https://github.com/duketopceo/OmaSeal
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=5min
+Unit=omaseal-sync.service
+
+[Install]
+WantedBy=timers.target

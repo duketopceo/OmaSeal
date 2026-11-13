@@ -1,0 +1,15 @@
+# Watch the native store directory and store.json so an atomic replace
+# of store.json triggers a replica push. If XDG_STATE_HOME is not
+# ~/.local/state, edit the paths before enabling. See README.md.
+[Unit]
+Description=Watch OmaSeal native store for replica sync
+Documentation=https://github.com/duketopceo/OmaSeal
+
+[Path]
+PathChanged=%h/.local/state/omaseal/native
+PathModified=%h/.local/state/omaseal/native/store.json
+Unit=omaseal-sync.service
+MakeDirectory=false
+
+[Install]
+WantedBy=default.target
