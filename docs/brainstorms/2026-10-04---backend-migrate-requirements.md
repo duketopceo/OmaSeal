@@ -49,11 +49,11 @@ backend cannot be adopted on a machine with a populated SS store.
 
 ## Acceptance examples
 
-- **AE1** — 770-item SS store → migrate → `omaseal list` on native
-  shows 770; `omaseal get sudo lukekimball` (unlocked session) returns
-  the original value; SS store still lists 770.
+- **AE1** — A Secret Service store → migrate → `omaseal list` on native
+  matches the source item count; `omaseal get` of a known item (unlocked
+  session) returns the original value; the Secret Service store is unchanged.
 - **AE2** — Migrate, then re-run immediately → `migrated 0, skipped N`.
 - **AE3** — Migrate invoked with no native identity → exits non-zero,
   prints init hint, writes nothing.
 - **AE4** — One unreadable SS item → summary shows `failed 1` with the
-  item named, other 769 migrated.
+  item named, and the remaining items migrated.

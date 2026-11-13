@@ -13,7 +13,7 @@ execution: code
 # Plan — macOS menu bar client and a read-only replica Mac
 
 Origin: `docs/brainstorms/2026-11-12-macos-client-and-mini-replica-requirements.md`.
-Luke wants a second OmaSeal on the replica Mac that stays in sync with the
+The goal is a second OmaSeal on the replica Mac that stays in sync with the
 laptop over Tailscale, plus a SwiftUI menu bar client. Engine work stays
 in #70 (macOS build) and #72 (multi-recipient + replica). This plan is
 sync and app only. Depth: Standard.
@@ -34,7 +34,7 @@ for search, Touch ID reveal, copy, and replica status.
 - R1. The laptop is the only writer. The replica runs in replica mode from
   #72 (`replica: true` or `OMASEAL_REPLICA=1`).
 - R2. Each secret is encrypted to the laptop key and the replica key. The
-  replica prints its key with `omaseal recipients local`; Luke adds it on
+  replica prints its key with `omaseal recipients local`; it is added on
   the laptop with `omaseal recipients add <age1…> --name <name>`.
 - R3. Sync copies only `store.json` from the engine's native store
   directory. It never copies `identity.age`, `identity.pub`, `store.lock`,
@@ -125,7 +125,7 @@ flowchart TB
   app -->|list / get after Touch ID| cli
 ```
 
-One-time setup, done by Luke and not automated by the script: on the
+One-time setup, done by the operator and not automated by the script: on the
 replica, first TTY use creates `identity.age` / `identity.pub` and
 `omaseal recipients local` prints the `age1…` key; on the laptop,
 `omaseal recipients add` rotates every item. After that, every new
@@ -228,7 +228,7 @@ moves `store.json`.
   - T12. The revealed value is not written to logs, files, or the
     replica status sidecar.
 - **Verification:** Unit tests T9–T12 pass in `swift test`. No test
-  fixture uses a real secret from Luke's store.
+  fixture uses a real secret from a live store.
 
 ### U4. Replica status line
 
@@ -265,7 +265,7 @@ moves `store.json`.
 
 **Outside this work**
 
-- Merging #70, #71, #72, or this docs PR, until Luke says go.
+- Merging #70, #71, #72, or this docs PR, until an explicit merge go-ahead.
 - New self-hosted runners.
 
 ## Risks & Dependencies
@@ -298,7 +298,7 @@ moves `store.json`.
 - The menu bar app lists, searches, reveals behind Touch ID, copies
   with auto-clear, and shows replica status.
 - CI is green on a GitHub-hosted macOS runner.
-- Nothing is merged until Luke says go.
+- Nothing is merged until an explicit merge go-ahead.
 
 ## Sources / Research
 
@@ -311,6 +311,6 @@ moves `store.json`.
   `add`, committed `recipients.json`, `code=replica_readonly`.
 - #70 — `feat/macos-engine-build`: darwin build of the engine/CLI;
   required before the replica can run `omaseal`.
-- Luke, 2026-11-12 — second instance on the replica Mac, encrypted
+- Product authority, 2026-11-12 — second instance on the replica Mac, encrypted
   connection and store, SSH or Tailscale, so agents still have secrets
   when the laptop is offline.

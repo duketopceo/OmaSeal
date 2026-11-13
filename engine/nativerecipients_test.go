@@ -76,7 +76,7 @@ func TestAddRecipientBothIdentitiesDecrypt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addRecipient("macmini", other.Recipient().String()); err != nil {
+	if err := s.addRecipient("replica", other.Recipient().String()); err != nil {
 		t.Fatalf("addRecipient: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestSetAfterAddRecipientUsesBothKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addRecipient("macmini", other.Recipient().String()); err != nil {
+	if err := s.addRecipient("replica", other.Recipient().String()); err != nil {
 		t.Fatalf("addRecipient: %v", err)
 	}
 
@@ -138,14 +138,14 @@ func TestRemoveRecipientDropsSecondIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addRecipient("macmini", other.Recipient().String()); err != nil {
+	if err := s.addRecipient("replica", other.Recipient().String()); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := s.removeRecipient("macmini")
+	removed, err := s.removeRecipient("replica")
 	if err != nil {
 		t.Fatalf("removeRecipient: %v", err)
 	}
-	if removed.Name != "macmini" {
+	if removed.Name != "replica" {
 		t.Fatalf("removed name = %q", removed.Name)
 	}
 	if got, err := s.Get("svc", "acct"); err != nil || got != "secret-value" {
@@ -162,7 +162,7 @@ func TestRemoveRecipientDropsSecondIdentity(t *testing.T) {
 }
 
 // T3b: a second native store whose identity was added as a recipient can
-// Get after receiving a copy of store.json — the Mac mini shape.
+// Get after receiving a copy of store.json — the replica shape.
 func TestSecondStoreGetAfterSync(t *testing.T) {
 	primary, pdir := nativeTestStore(t)
 	initNative(t, primary, "laptop-pass")
@@ -175,7 +175,7 @@ func TestSecondStoreGetAfterSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := primary.addRecipient("macmini", pub); err != nil {
+	if err := primary.addRecipient("replica", pub); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	src := filepath.Join(pdir, nativeStoreFile)
@@ -187,7 +187,7 @@ func TestSecondStoreGetAfterSync(t *testing.T) {
 	if err := os.WriteFile(dst, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Fresh instance, like a new process on the mini after the file lands.
+	// Fresh instance, like a new process on the replica after the file lands.
 	mini2 := newNativeStoreAt(mdir, t.TempDir())
 	mini2.prompt = func(string) (string, error) { return "mini-pass", nil }
 	if got, err := mini2.Get("svc", "acct"); err != nil || got != "shared-secret" {
@@ -219,7 +219,7 @@ func TestAddRecipientAbortsOnCorruptItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.addRecipient("macmini", other.Recipient().String()); err == nil {
+	if err := s.addRecipient("replica", other.Recipient().String()); err == nil {
 		t.Fatal("addRecipient should fail on a corrupt item")
 	}
 	after := nativeDigests(t, dir)
@@ -255,10 +255,10 @@ func TestReplicaRefusesWrites(t *testing.T) {
 		t.Fatalf("migrateSet = %v, want errReplicaReadOnly", err)
 	}
 	other, _ := age.GenerateX25519Identity()
-	if err := s.addRecipient("macmini", other.Recipient().String()); !errors.Is(err, errReplicaReadOnly) {
+	if err := s.addRecipient("replica", other.Recipient().String()); !errors.Is(err, errReplicaReadOnly) {
 		t.Fatalf("addRecipient = %v, want errReplicaReadOnly", err)
 	}
-	if _, err := s.removeRecipient("macmini"); !errors.Is(err, errReplicaReadOnly) {
+	if _, err := s.removeRecipient("replica"); !errors.Is(err, errReplicaReadOnly) {
 		t.Fatalf("removeRecipient = %v, want errReplicaReadOnly", err)
 	}
 

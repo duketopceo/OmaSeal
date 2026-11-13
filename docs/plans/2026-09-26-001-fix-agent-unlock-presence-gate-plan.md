@@ -108,7 +108,7 @@ gate.
 
 ### Acceptance Examples
 
-- **AE1.** omarchy-max, Wayland session, no fprintd: `omaseal agent unlock`
+- **AE1.** the laptop, Wayland session, no fprintd: `omaseal agent unlock`
   spawns a confirm dialog; clicking Allow writes a session, Deny/cancel exits
   nonzero with no session.
 - **AE2.** Same machine, `OMASEAL_GUI_PROMPT=off` (or headless): unlock exits
@@ -271,7 +271,7 @@ U1 (mechanism) → U2 (wiring/surfaces) → U3 (tests+docs). U1 and U2 touch
 - `cd engine && go build ./... && go vet ./...` — clean.
 - `cd engine && go test ./...` — all green, including the new R5 matrix.
 - `python3 -m unittest contrib.test_omaseal_jev_audit` — no regression.
-- Manual on omarchy-max (has display, no fprintd): AE1/AE2 exercised before
+- Manual on the laptop (has display, no fprintd): AE1/AE2 exercised before
   the PR is described as fixing the finding.
 - Docs grep: `rg -n "biometric|fprintd|ungated|presence" README.md
   SUBMISSION.md` — no stale "best-effort" claims remain.

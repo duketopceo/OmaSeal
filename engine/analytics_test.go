@@ -181,7 +181,7 @@ func TestParseOpTelemetry(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "ops.log")
 
-	data := `2026/10/01 13:53:43 op=get target="Cloudflare API Token — Kurultai/duketopceo@gmail.com" dur=12000ms result=timeout code=keyring_timeout
+	data := `2026/10/01 13:53:43 op=get target="Cloudflare API Token — example/user@example.com" dur=12000ms result=timeout code=keyring_timeout
 2026/10/01 13:54:01 op=set target="svc/acct" dur=31ms result=error code=keyring_unavailable
 2026/10/01 13:54:22 op=mcp-omaseal_get target="github/personal" dur=2ms result=error code=manifest_denied
 2026/10/01 13:54:03 get openrouter/management
