@@ -1,5 +1,5 @@
 ---
-title: "feat: macOS menu bar client and Mac mini read-only replica"
+title: "feat: macOS menu bar client and a read-only replica Mac"
 created_at: 2026-11-12
 date: 2026-11-12
 type: feat
@@ -10,10 +10,10 @@ origin: docs/brainstorms/2026-11-12-macos-client-and-mini-replica-requirements.m
 execution: code
 ---
 
-# Plan — macOS menu bar client and Mac mini read-only replica
+# Plan — macOS menu bar client and a read-only replica Mac
 
 Origin: `docs/brainstorms/2026-11-12-macos-client-and-mini-replica-requirements.md`.
-Luke wants a second OmaSeal on the Mac mini that stays in sync with the
+Luke wants a second OmaSeal on the replica Mac that stays in sync with the
 laptop over Tailscale, plus a SwiftUI menu bar client. Engine work stays
 in #70 (macOS build) and #72 (multi-recipient + replica). This plan is
 sync and app only. Depth: Standard.
@@ -21,8 +21,8 @@ sync and app only. Depth: Standard.
 ## Problem Frame
 
 The native store on the laptop is the source of truth. When that machine
-is offline, agents on the Mac mini have nothing to read. #72 makes a
-copied `store.json` decryptable by a second machine key and lets the mini
+is offline, agents on the replica Mac have nothing to read. #72 makes a
+copied `store.json` decryptable by a second machine key and lets the replica
 refuse writes. This plan adds the one-way, checksum-verified copy over
 Tailscale SSH, and a menu bar app that shells out to the `omaseal` CLI
 for search, Touch ID reveal, copy, and replica status.
@@ -31,21 +31,21 @@ for search, Touch ID reveal, copy, and replica status.
 
 **Replica sync**
 
-- R1. The laptop is the only writer. The mini runs in replica mode from
+- R1. The laptop is the only writer. The replica runs in replica mode from
   #72 (`replica: true` or `OMASEAL_REPLICA=1`).
-- R2. Each secret is encrypted to the laptop key and the mini key. The
-  mini prints its key with `omaseal recipients local`; Luke adds it on
+- R2. Each secret is encrypted to the laptop key and the replica key. The
+  replica prints its key with `omaseal recipients local`; Luke adds it on
   the laptop with `omaseal recipients add <age1…> --name <name>`.
 - R3. Sync copies only `store.json` from the engine's native store
   directory. It never copies `identity.age`, `identity.pub`, `store.lock`,
   tmpfs session files, or `recipients.json`.
 - R4. Transport is Tailscale SSH. Install is atomic and checksum-verified.
-  A failed transfer leaves the previous mini `store.json` in place.
+  A failed transfer leaves the previous replica `store.json` in place.
 - R5. An optional allowlist can limit which service/account items are
-  written into the mini's `store.json`. Default is a full copy. This is a
+  written into the replica's `store.json`. Default is a full copy. This is a
   sync-side filter, not an `engine/**` change.
 - R6. `contrib/` ships `omaseal-sync`, a laptop systemd path unit plus a
-  catch-up timer, and a Mac mini launchd plist.
+  catch-up timer, and a replica Mac launchd plist.
 - R7. Two-way sync is deferred.
 
 **Menu bar app**
@@ -69,11 +69,11 @@ for search, Touch ID reveal, copy, and replica status.
 
 ## Key Technical Decisions
 
-- KTD1. Laptop pushes; the mini does not write back. A systemd path unit
+- KTD1. Laptop pushes; the replica does not write back. A systemd path unit
   on the laptop fires `omaseal-sync` when `store.json` changes; a timer
-  catches missed events. The mini launchd job verifies a staged file
-  (checksum), atomically renames it onto the mini `store.json`, and
-  writes a status sidecar. Launchd may also pull when the mini was down
+  catches missed events. The replica launchd job verifies a staged file
+  (checksum), atomically renames it onto the replica `store.json`, and
+  writes a status sidecar. Launchd may also pull when the replica was down
   and the laptop is reachable. Pull and push are serialized across
   snapshot acquisition and install so an older in-flight transfer cannot
   replace a newer replica: reject a snapshot that is older than the
@@ -82,7 +82,7 @@ for search, Touch ID reveal, copy, and replica status.
   stale snapshot. Governs R4, R6.
 - KTD2. The sync protocol is: produce the staging `store.json` (filtered
   when an allowlist is set), compute the SHA-256 of those exact bytes,
-  copy that file to a temp path on the mini, verify the hash of the
+  copy that file to a temp path on the replica, verify the hash of the
   received file, then `rename` over `store.json`. The script aborts if
   the destination path is not the native store document, and it refuses
   to write any identity or lock file. Governs R3, R4, R5.
@@ -97,7 +97,7 @@ for search, Touch ID reveal, copy, and replica status.
   invocations: `omaseal list` (and search over that list) for R9;
   `omaseal get` only after LocalAuthentication succeeds for R10. Governs
   R8–R10.
-- KTD6. Sync status is a non-secret sidecar written by the mini job
+- KTD6. Sync status is a non-secret sidecar written by the replica job
   (timestamp, checksum, ok/failed). The app reads that file for the
   status line. It does not infer status by hashing `store.json` itself
   in v1, so a missed job is visible. Governs R12.
@@ -111,10 +111,10 @@ for search, Touch ID reveal, copy, and replica status.
 flowchart TB
   laptop[Laptop native store]
   sync[omaseal-sync over Tailscale SSH]
-  stage[Mini staged file plus checksum]
-  store[Mini store.json]
+  stage[Replica staged file plus checksum]
+  store[Replica store.json]
   status[Status sidecar]
-  cli[omaseal CLI on mini]
+  cli[omaseal CLI on the replica]
   app[SwiftUI MenuBarExtra]
   laptop -->|store.json only| sync
   sync --> stage
@@ -126,7 +126,7 @@ flowchart TB
 ```
 
 One-time setup, done by Luke and not automated by the script: on the
-mini, first TTY use creates `identity.age` / `identity.pub` and
+replica, first TTY use creates `identity.age` / `identity.pub` and
 `omaseal recipients local` prints the `age1…` key; on the laptop,
 `omaseal recipients add` rotates every item. After that, every new
 `Set` on the laptop is already encrypted to both keys, and sync only
@@ -137,10 +137,10 @@ moves `store.json`.
 ### U1. Sync script, systemd units, and launchd
 
 - **Goal:** One-way, atomic, checksum-verified copy of `store.json` from
-  the laptop to the Mac mini over Tailscale SSH, with an optional
+  the laptop to the replica Mac over Tailscale SSH, with an optional
   allowlist. Covers R1–R7.
 - **Dependencies:** Useful end-to-end only after #72 (and #70 to run the
-  CLI on the mini). The scripts themselves can land first.
+  CLI on the replica). The scripts themselves can land first.
 - **Files:**
   - `contrib/omaseal-sync/omaseal-sync` — laptop push script
   - `contrib/omaseal-sync/omaseal-sync.conf.example` — host, paths,
@@ -149,7 +149,7 @@ moves `store.json`.
   - `contrib/omaseal-sync/omaseal-sync.path`
   - `contrib/omaseal-sync/omaseal-sync.service`
   - `contrib/omaseal-sync/omaseal-sync.timer`
-  - `contrib/omaseal-sync/com.omaseal.sync.plist` — mini launchd job
+  - `contrib/omaseal-sync/com.omaseal.sync.plist` — replica launchd job
   - `contrib/omaseal-sync/README.md` — setup, including the recipient
     exchange and what must never be copied
   - `contrib/omaseal-sync/omaseal-sync_test.sh` — or a small Go/Python
@@ -158,7 +158,7 @@ moves `store.json`.
   write path in `docs/design/native-store.md`. Refuse any destination
   other than `store.json`.
 - **Test scenarios:**
-  - T1. A fixture `store.json` pushed to a temp mini dir appears at the
+  - T1. A fixture `store.json` pushed to a temp replica dir appears at the
     destination with a matching SHA-256; a `.tmp` staging file is gone.
   - T2. A mid-copy failure, or a checksum mismatch, leaves the previous
     destination bytes bit-identical and records a failed status.
@@ -171,7 +171,7 @@ moves `store.json`.
     example config, and do not contain real machine names or keys.
 - **Verification:** The tests above pass on the laptop or CI without
   using a live secret store. A dry-run against fixtures prints no secret
-  values. Manual check on the mini waits for a later implementation PR
+  values. Manual check on the replica waits for a later implementation PR
   and is not required to land this unit's scripts.
 
 ### U2. Menu bar skeleton and CI
@@ -250,7 +250,7 @@ moves `store.json`.
   - T15. A missing sidecar, or a success older than the expected
     interval, renders stale/unknown.
 - **Verification:** T13–T15 pass in `swift test`. A manual glance on
-  the mini after a real sync is a later check, not a gate for the unit
+  the replica after a real sync is a later check, not a gate for the unit
   tests.
 
 ## Scope Boundaries
@@ -260,7 +260,7 @@ moves `store.json`.
 - Two-way sync and conflict resolution.
 - Menu bar as a writer on a non-replica Mac.
 - Keychain backend, engine launchd, and any `engine/**` change.
-- Copies to machines other than the Mac mini.
+- Copies to machines other than the replica Mac.
 - Syncing manifest, flags, or agent policy.
 
 **Outside this work**
@@ -271,15 +271,15 @@ moves `store.json`.
 ## Risks & Dependencies
 
 - #70 must land before a real macOS `omaseal` binary exists. App tests
-  mock the CLI so they are not blocked; a live mini smoke test is.
-- #72 must land before the mini can decrypt a copied `store.json` or
-  refuse writes. Syncing before the mini key is added would copy
-  ciphertexts the mini cannot read; the contrib README will state that
+  mock the CLI so they are not blocked; a live replica smoke test is.
+- #72 must land before the replica can decrypt a copied `store.json` or
+  refuse writes. Syncing before the replica key is added would copy
+  ciphertexts the replica cannot read; the contrib README will state that
   order.
 - Same-uid honesty from `docs/design/native-store.md` still applies:
-  sync is not a new confinement boundary. The gain is the mini staying
+  sync is not a new confinement boundary. The gain is the replica staying
   read-only and holding its own identity.
-- Tailscale SSH must already work between the laptop and the mini.
+- Tailscale SSH must already work between the laptop and the replica.
   This plan does not set up Tailscale.
 
 ## Verification Contract
@@ -310,7 +310,7 @@ moves `store.json`.
 - #72 — `feat/native-multi-recipient`: `omaseal recipients local` /
   `add`, committed `recipients.json`, `code=replica_readonly`.
 - #70 — `feat/macos-engine-build`: darwin build of the engine/CLI;
-  required before the mini can run `omaseal`.
-- Luke, 2026-11-12 — second instance on the Mac mini, encrypted
+  required before the replica can run `omaseal`.
+- Luke, 2026-11-12 — second instance on the replica Mac, encrypted
   connection and store, SSH or Tailscale, so agents still have secrets
   when the laptop is offline.
