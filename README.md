@@ -401,7 +401,7 @@ and `omaseal://` reference grammar every consumer should follow.
   `omaseal get`, `omaseal run`, `omaseal resolve`, and `omaseal ipc` skip the
   policy checks on purpose — the user who can run them already holds the
   keys. Concretely: `omaseal ipc get` carries no session or manifest check,
-  and `omaseal run -e X=sudo/<user> -- env` reads the sudo secret
+  and `omaseal run -e "X=sudo/$USER" -- env` reads the sudo secret
   without the `sudo` verb's presence gate or rate limit. A DENY is a
   boundary for wired agents, not confinement: a same-uid process that
   ignores OmaSeal's interfaces can exec the ungated lanes, write the
