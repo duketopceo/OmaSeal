@@ -197,6 +197,23 @@ var cliSpecs = []cmdSpec{
 	{path: "provider enable", short: "Install the activation file and systemd user unit", legacy: []string{"provider", "enable"}},
 	{path: "provider disable", short: "Stop the daemon and remove activation files", legacy: []string{"provider", "disable"}},
 
+	{path: "recipients", group: groupSetup,
+		short: "Additional machines that can decrypt the native store"},
+	{path: "recipients list", short: "List the local public key and additional recipients",
+		flags:  []string{"json|machine-readable output"},
+		legacy: []string{"recipients", "list"}},
+	{path: "recipients add", use: "<age1-pubkey> --name <name>",
+		short:   "Add a machine recipient and re-encrypt every secret to it",
+		long:    "Add an age X25519 public key as a recipient and re-encrypt every stored secret so that machine can decrypt them.\n\nThis is a weakening change (another key can read every secret) and asks for user presence first. The local identity's passphrase wrap is not changed.",
+		example: "  omaseal recipients add age1q... --name macmini",
+		flags:   []string{"name=|short name for this machine (required)"},
+		legacy:  []string{"recipients", "add"}},
+	{path: "recipients rm", use: "<name|age1-pubkey>", aliases: []string{"remove"},
+		short:  "Remove a recipient and re-encrypt so its key can no longer decrypt",
+		legacy: []string{"recipients", "rm"}},
+	{path: "recipients local", short: "Print this machine's age public key (for the other machine to add)",
+		legacy: []string{"recipients", "local"}},
+
 	// ── Hidden: plumbing and the pre-revamp names, kept for one release ─────
 	{path: "ipc", use: "<method> <json-args>", hidden: true, short: "JSON IPC for other plugins", legacy: []string{"ipc"}},
 	{path: "jev", hidden: true, short: "Optional Jev decision layer", legacy: []string{"jev"}},
