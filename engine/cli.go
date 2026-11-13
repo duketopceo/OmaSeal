@@ -93,8 +93,11 @@ var cliSpecs = []cmdSpec{
 		flags:   []string{"json|machine-readable output", "sort=|used, recent or name"},
 		legacy:  []string{"list"}},
 	{path: "rm", use: "<service> <account>", group: groupSecrets, aliases: []string{"del", "delete"},
-		short:  "Delete a stored secret",
-		legacy: []string{"del"}},
+		short:   "Delete a stored secret",
+		long:    "Hide a stored secret. The value and its history stay in the native store and can still be read with `get --version` until you pass --purge, which destroys all ciphertext and keeps only the last version number so numbers are never reused.",
+		flags:   []string{"purge|destroy all stored ciphertext; history values become unreadable"},
+		legacy:  []string{"del"},
+		rewrite: rewriteRm},
 	{path: "run", use: "-- <command>", group: groupSecrets,
 		short:   "Run a command with secrets injected into its environment",
 		long:    "Run a command with secrets injected into its environment. Nothing touches disk and the value never appears in argv.\n\n  omaseal run -e NAME=<service>/<account> [-e ...] [--resolve] -- <command> [args...]",
@@ -272,11 +275,11 @@ func takeFlag(args []string, name string) ([]string, bool) {
 func rewriteGet(args []string) ([]string, error) {
 	rest, reveal := takeFlag(args, "--reveal")
 	rest, resolve := takeFlag(rest, "--resolve")
-	rest, ver := takeFlagValue(rest, "--version")
+	rest, ver, hasVer := takeFlagValue(rest, "--version")
 	switch {
 	case reveal && resolve:
 		return nil, fmt.Errorf("--reveal and --resolve are mutually exclusive")
-	case ver != "":
+	case hasVer:
 		return append([]string{"getver", ver}, rest...), nil
 	case reveal:
 		return append([]string{"reveal"}, rest...), nil
@@ -286,10 +289,13 @@ func rewriteGet(args []string) ([]string, error) {
 	return append([]string{"get"}, rest...), nil
 }
 
-// takeFlagValue removes a `--name N` or `--name=N` flag and returns its value.
-func takeFlagValue(args []string, name string) ([]string, string) {
+// takeFlagValue removes a `--name N` or `--name=N` flag and returns its
+// value plus whether the flag was present. An empty value ( `--name=` or
+// a bare `--name` at the end) is distinct from an absent flag.
+func takeFlagValue(args []string, name string) ([]string, string, bool) {
 	out := make([]string, 0, len(args))
 	val := ""
+	found := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--" {
@@ -298,16 +304,32 @@ func takeFlagValue(args []string, name string) ([]string, string) {
 		}
 		if a == name && i+1 < len(args) {
 			val = args[i+1]
+			found = true
 			i++
+			continue
+		}
+		if a == name {
+			found = true
 			continue
 		}
 		if rest, ok := strings.CutPrefix(a, name+"="); ok {
 			val = rest
+			found = true
 			continue
 		}
 		out = append(out, a)
 	}
-	return out, val
+	return out, val, found
+}
+
+// rewriteRm folds `--purge` into the destructive `purge` handler. Plain
+// `rm` stays `del` (tombstone, history retained).
+func rewriteRm(args []string) ([]string, error) {
+	rest, purge := takeFlag(args, "--purge")
+	if purge {
+		return append([]string{"purge"}, rest...), nil
+	}
+	return append([]string{"del"}, rest...), nil
 }
 
 // rewriteMCPInstall folds install-all and install-detected into install.

@@ -150,7 +150,9 @@ password. Copied values clear from the clipboard after 30 seconds.
 
 The laptop stays the only writer. The replica decrypts a copied `store.json`
 with its own age key and refuses writes (`replica: true` or
-`OMASEAL_REPLICA=1`).
+`OMASEAL_REPLICA=1`). The replica engine must be at least as new as the
+laptop's: after store format 2 (versioned secrets), an older binary fails
+closed on a copied `store.json` — it will not read or rewrite it.
 
 1. On the replica Mac, install the engine as above, then print its public key:
 

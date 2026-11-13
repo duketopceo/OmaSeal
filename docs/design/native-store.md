@@ -60,6 +60,18 @@ cleartext; each value an age ciphertext bound to its `service/account`
 path (envelope tamper-evidence — a value relocated or swapped under a
 different name fails decrypt).
 
+**On-disk format.** Format 1 is `{"items":{"svc/acct":{ct,created,updated}}}`.
+Format 2 (current write path) is
+`{"format":2,"items":[{"key":"svc/acct","ct":...,"versions":[...],"tomb":...}]}`.
+A new engine still reads format 1 and rewrites as format 2 on the next
+write. An older engine cannot unmarshal format 2: `items` is an array,
+which fails `encoding/json` into the old `map[string]nativeItem` field,
+and the old write path returns without touching the file. That fail-closed
+behavior is required — a format-1 document with extra `versions`/`tomb`
+fields would be rewritten by an old binary, dropping history and reviving
+tombstoned items (their `ct` remains). A replica must run an engine at
+least as new as the writer.
+
 ## Invariants (the contract U2 must prove)
 
 - **I1 — write-while-locked:** `Set` succeeds with no unlocked identity
@@ -269,7 +281,9 @@ ciphertext; this unit turns that on.
   `identity.age`, `identity.pub`, `store.lock`, or the tmpfs session
   files. The mini prints its public key with `omaseal recipients local`;
   the laptop adds it and rotates. The mini unlocks with its own
-  passphrase.
+  passphrase. The replica engine must be able to read the store format
+  the laptop writes; an older binary fails closed on format 2 (it will
+  not serve or rewrite the file).
 
 I1 (Set while locked) still holds: additional recipients are public
 keys. I2–I5 are unchanged. I6 is unchanged for passphrase rotation;

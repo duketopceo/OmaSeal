@@ -251,6 +251,9 @@ func TestReplicaRefusesWrites(t *testing.T) {
 	if err := s.Delete("svc", "acct"); !errors.Is(err, errReplicaReadOnly) {
 		t.Fatalf("Delete = %v, want errReplicaReadOnly", err)
 	}
+	if err := s.Purge("svc", "acct"); !errors.Is(err, errReplicaReadOnly) {
+		t.Fatalf("Purge = %v, want errReplicaReadOnly", err)
+	}
 	if err := s.migrateSet("ext", "k", "v", true); !errors.Is(err, errReplicaReadOnly) {
 		t.Fatalf("migrateSet = %v, want errReplicaReadOnly", err)
 	}

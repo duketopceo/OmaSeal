@@ -44,9 +44,13 @@ func TestCommandTreeTranslatesToLegacyArgv(t *testing.T) {
 		{"reveal openrouter default", "reveal openrouter default"},
 		{"get --resolve openrouter default", "resolve openrouter default"},
 		{"resolve openrouter default", "resolve openrouter default"},
+		{"get --version 2 openrouter default", "getver 2 openrouter default"},
+		{"get --version=2 openrouter default", "getver 2 openrouter default"},
 		{"rm a b", "del a b"},
 		{"del a b", "del a b"},
 		{"delete a b", "del a b"},
+		{"rm --purge a b", "purge a b"},
+		{"del --purge a b", "purge a b"},
 		{"ls", "list"},
 		{"ls --json", "list --json"},
 		{"ls --sort=used openrouter", "list --sort=used openrouter"},
@@ -275,4 +279,57 @@ func TestEverySpecParentIsDeclaredFirst(t *testing.T) {
 		}
 	}
 	walk(root)
+}
+
+func TestRewriteGetEmptyVersionIsStillVersionRequest(t *testing.T) {
+	for _, args := range [][]string{
+		{"get", "--version=", "svc", "acct"},
+		{"get", "--version", "svc", "acct"},
+	} {
+		argv, called, err := captureLegacy(t, args...)
+		if err != nil {
+			t.Errorf("%v: %v", args, err)
+			continue
+		}
+		if !called {
+			t.Errorf("%v: legacy handler not reached", args)
+			continue
+		}
+		// "--version" with a following positional is taken as the value
+		// ("svc"); only "--version=" (empty) or a trailing bare flag is
+		// the empty-value case. The first args form is the empty one.
+		if args[1] == "--version=" {
+			want := []string{"getver", "", "svc", "acct"}
+			if !reflect.DeepEqual(argv, want) {
+				t.Errorf("%v: argv=%q want=%q", args, argv, want)
+			}
+		}
+	}
+	// Bare --version at the end, no value: still a version request.
+	argv, called, err := captureLegacy(t, "get", "svc", "acct", "--version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("legacy handler not reached")
+	}
+	want := []string{"getver", "", "svc", "acct"}
+	if !reflect.DeepEqual(argv, want) {
+		t.Fatalf("trailing --version: argv=%q want=%q", argv, want)
+	}
+}
+
+func TestTakeFlagValueDistinguishesAbsentFromEmpty(t *testing.T) {
+	_, val, found := takeFlagValue([]string{"svc", "acct"}, "--version")
+	if found || val != "" {
+		t.Fatalf("absent: found=%v val=%q", found, val)
+	}
+	_, val, found = takeFlagValue([]string{"--version=", "svc"}, "--version")
+	if !found || val != "" {
+		t.Fatalf("empty equals: found=%v val=%q", found, val)
+	}
+	_, val, found = takeFlagValue([]string{"--version", "3", "svc"}, "--version")
+	if !found || val != "3" {
+		t.Fatalf("spaced: found=%v val=%q", found, val)
+	}
 }

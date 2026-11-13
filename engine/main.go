@@ -135,6 +135,8 @@ func runLegacy(argv []string) {
 		handleReveal()
 	case "del", "delete":
 		handleDel()
+	case "purge":
+		handlePurge()
 	case "flag":
 		handleFlag()
 	case "unflag":
@@ -260,14 +262,23 @@ func handleHistory() {
 		usage()
 		os.Exit(1)
 	}
-	vers, tomb, err := newNativeStore().Versions(service, account)
+	ns, err := requireNativeStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	vers, tomb, err := ns.Versions(service, account)
 	logOpResult("history", service+"/"+account, time.Now(), err)
 	if err != nil {
 		printError("reading history: ", err)
 		os.Exit(1)
 	}
 	if tomb {
-		fmt.Println("(deleted — history retained)")
+		if len(vers) == 0 {
+			fmt.Println("(deleted — history purged)")
+		} else {
+			fmt.Println("(deleted — history retained)")
+		}
 	}
 	for _, v := range vers {
 		marker := "  "
@@ -297,8 +308,13 @@ func handleGetVersion() {
 		usage()
 		os.Exit(1)
 	}
+	ns, err := requireNativeStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
 	start := time.Now()
-	secret, err := newNativeStore().GetVersion(service, account, n)
+	secret, err := ns.GetVersion(service, account, n)
 	logOpResult("getver", service+"/"+account, start, err)
 	if err != nil {
 		printError("retrieving version: ", err)
@@ -391,6 +407,43 @@ func handleDel() {
 	}
 	WriteLog("del %s/%s", service, account)
 	ui.Done("ok", fmt.Sprintf("deleted %s/%s", service, account))
+}
+
+func handlePurge() {
+	service, account, err := argCredentialsLoose(os.Args[2:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		usage()
+		os.Exit(1)
+	}
+	start := time.Now()
+	err = purgeSecret(service, account)
+	logOpResult("purge", service+"/"+account, start, err)
+	if err != nil {
+		printError("purging secret: ", err)
+		os.Exit(1)
+	}
+	WriteLog("purge %s/%s", service, account)
+	ui.Done("ok", fmt.Sprintf("purged %s/%s", service, account))
+}
+
+// requireNativeStore returns the selected native backend, or a clear
+// error when the configured backend does not support versioning.
+func requireNativeStore() (*nativeStore, error) {
+	ns, ok := currentStore.(*nativeStore)
+	if !ok {
+		return nil, fmt.Errorf("version history requires the native backend")
+	}
+	return ns, nil
+}
+
+// purgeSecret destroys ciphertext on the native backend. On backends
+// that already delete destructively (Secret Service), it is Delete.
+func purgeSecret(service, account string) error {
+	if ns, ok := currentStore.(*nativeStore); ok {
+		return ns.Purge(service, account)
+	}
+	return Delete(service, account)
 }
 
 func handleList() {

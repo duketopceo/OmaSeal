@@ -424,5 +424,6 @@ func readItemMetadata(svc *ss.SecretService, path dbus.ObjectPath) (Item, error)
 		CreatedAt: created,
 		UpdatedAt: updated,
 		Owned:     attrs[appAttribute] == appAttributeVal,
+		Version:   1, // backends without version support report v1
 	}, nil
 }
