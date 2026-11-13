@@ -40,6 +40,6 @@ A native-store instance that serves `get`/`list` from a synced copy of
 `store.json` and refuses every write (`set`, `del`, `import`, `migrate`,
 recipient rotation) with `code=replica_readonly`. Enabled by
 `"replica": true` in `config.json` or the `OMASEAL_REPLICA` environment
-variable. Used on a second machine (a Mac mini) so agents can read
+variable. Used on a second machine (an always-on replica) so agents can read
 secrets while the primary is offline.
 

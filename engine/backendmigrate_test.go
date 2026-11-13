@@ -46,12 +46,12 @@ func TestMigrateCopiesAll(t *testing.T) {
 	src := &fakeSource{
 		items: []Item{
 			{Service: "openrouter", Account: "default", Owned: true},
-			{Service: "sudo", Account: "luke", Owned: true},
+			{Service: "sudo", Account: "tester", Owned: true},
 			{Service: "foreign", Account: "key", Owned: false},
 		},
 		vals: map[string]string{
 			"openrouter/default": "sk-or-1",
-			"sudo/luke":          "hunter2",
+			"sudo/tester":          "hunter2",
 			"foreign/key":        "ext-val",
 		},
 	}

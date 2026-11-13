@@ -119,9 +119,9 @@ func TestCommandTreeTranslatesToLegacyArgv(t *testing.T) {
 		{"provider disable", "provider disable"},
 		{"recipients list", "recipients list"},
 		{"recipients list --json", "recipients list --json"},
-		{"recipients add age1abc --name macmini", "recipients add age1abc --name macmini"},
-		{"recipients rm macmini", "recipients rm macmini"},
-		{"recipients remove macmini", "recipients rm macmini"},
+		{"recipients add age1abc --name replica", "recipients add age1abc --name replica"},
+		{"recipients rm replica", "recipients rm replica"},
+		{"recipients remove replica", "recipients rm replica"},
 		{"recipients local", "recipients local"},
 
 		// plumbing that other plugins call

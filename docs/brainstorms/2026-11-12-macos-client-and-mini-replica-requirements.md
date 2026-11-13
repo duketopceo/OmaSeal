@@ -12,13 +12,13 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Luke has a second OmaSeal instance on the replica Mac that stays
+- **Objective:** A second OmaSeal instance on the replica Mac that stays
   in sync with the laptop, so agents on the replica can still read secrets when
   the laptop is offline. A SwiftUI menu bar app on the Mac is the human
   front end for search, reveal, and copy.
-- **Product authority:** Luke, 2026-11-12 — a second instance running and
+- **Product authority:** 2026-11-12 — a second instance running and
   syncing on the replica Mac; encrypted connection and store, over SSH or
-  Tailscale; agents keep a copy when he is on the move and the laptop is
+  Tailscale; agents keep a copy when the operator is on the move and the laptop is
   offline.
 - **Engine boundary:** this work does not change `engine/**`. Multi-recipient
   encryption and read-only replica mode come from #72. The macOS CLI build
@@ -31,8 +31,8 @@ execution: code
 The native store lives on the laptop. When that machine is offline, nothing
 else can read those secrets. A raw copy of `store.json` is useless to the
 replica Mac unless every ciphertext is also encrypted to the replica's own age
-key, and a two-way copy would let a compromised replica write back. Luke wants
-the replica to keep a current, decryptable, read-only copy over an encrypted
+key, and a two-way copy would let a compromised replica write back. The goal is
+for the replica to keep a current, decryptable, read-only copy over an encrypted
 link, plus a Mac menu bar client that can search and reveal those secrets
 without linking the Go engine.
 
@@ -45,7 +45,7 @@ without linking the Go engine.
   replica can `Get`, `List`, unlock, and create its own identity; it cannot
   `Set`, delete, import, migrate, or rotate recipients.
 - R2. Each secret is age-encrypted to both the laptop key and the replica key.
-  The replica prints its public key with `omaseal recipients local`. Luke adds
+  The replica prints its public key with `omaseal recipients local`. It is added
   it on the laptop with `omaseal recipients add <age1…> --name <name>`
   (presence-gated rotation, as #72 already specifies).
 - R3. Sync copies only the native store document
@@ -138,7 +138,7 @@ without linking the Go engine.
   on the replica.
 - The laptop can reach the replica over Tailscale SSH as the user who owns
   the replica's OmaSeal state directory.
-- Luke performs the one-time recipient exchange (replica `recipients local`,
+- The operator performs the one-time recipient exchange (replica `recipients local`,
   laptop `recipients add`) at a presence-gated prompt. This work does not
   invent a new key-distribution channel.
 - The official encryption-set and replica behavior is as specified in

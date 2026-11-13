@@ -19,7 +19,7 @@ import (
 const sudoUsage = "usage: omaseal sudo [-r svc/acct] [--] <cmd> [args]"
 
 // defaultSudoRef names the sudo password item for the invoking user:
-// sudo/$USER (e.g. sudo/lukekimball). -r overrides it.
+// sudo/$USER (for example sudo/<user>). -r overrides it.
 func defaultSudoRef() string {
 	u := os.Getenv("USER")
 	if u == "" {

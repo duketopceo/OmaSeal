@@ -247,7 +247,7 @@ inverse of `keyring migrate` that already exists).
 
 Plan: `docs/plans/2026-11-12-001-feat-native-multi-recipient-replica-plan.md`.
 
-A second machine (a Mac mini that stays up when the laptop is offline)
+A second machine (an always-on replica that stays up when the laptop is offline)
 cannot decrypt a copy of `store.json` if every value is encrypted only to
 the laptop's identity. age already supports N X25519 recipients per
 ciphertext; this unit turns that on.
@@ -275,12 +275,12 @@ ciphertext; this unit turns that on.
   `OMASEAL_REPLICA=1` (`true`/`yes`/`on`). Either is sufficient. `Set`,
   `Delete`, `migrateSet`, `import`, `migrate`, and recipient rotation
   refuse with `code=replica_readonly`. `Get`, `List`, unlock, and
-  first-run identity init still work — the mini generates its own
+  first-run identity init still work — the replica generates its own
   `identity.age`.
-- **Sync contract.** Copy only `store.json` (laptop → mini). Do not copy
+- **Sync contract.** Copy only `store.json` (laptop → replica). Do not copy
   `identity.age`, `identity.pub`, `store.lock`, or the tmpfs session
-  files. The mini prints its public key with `omaseal recipients local`;
-  the laptop adds it and rotates. The mini unlocks with its own
+  files. The replica prints its public key with `omaseal recipients local`;
+  the laptop adds it and rotates. The replica unlocks with its own
   passphrase. The replica engine must be able to read the store format
   the laptop writes; an older binary fails closed on format 2 (it will
   not serve or rewrite the file).

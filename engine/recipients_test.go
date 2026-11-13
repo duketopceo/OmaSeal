@@ -47,7 +47,7 @@ func TestRecipientsAddDeniedWritesNothing(t *testing.T) {
 	s, other := setupRecipientsCLI(t)
 	stubPresence(t, false, nil, errNoGUIPrompter)
 
-	err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String())
+	err := addStoreRecipient(context.Background(), "replica", other.Recipient().String())
 	if !errors.Is(err, errNoPresenceMechanism) {
 		t.Fatalf("add = %v, want errNoPresenceMechanism", err)
 	}
@@ -67,7 +67,7 @@ func TestRecipientsAddDeclinedWritesNothing(t *testing.T) {
 	s, other := setupRecipientsCLI(t)
 	stubPresence(t, false, nil, errPromptCancelled)
 
-	err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String())
+	err := addStoreRecipient(context.Background(), "replica", other.Recipient().String())
 	if !errors.Is(err, errPresenceDenied) {
 		t.Fatalf("add = %v, want errPresenceDenied", err)
 	}
@@ -86,7 +86,7 @@ func TestRecipientsAddUngatedStillRequiresPresence(t *testing.T) {
 	}
 	stubPresence(t, false, nil, errNoGUIPrompter)
 
-	err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String())
+	err := addStoreRecipient(context.Background(), "replica", other.Recipient().String())
 	if !errors.Is(err, errNoPresenceMechanism) {
 		t.Fatalf("ungated add = %v, want errNoPresenceMechanism (strict gate)", err)
 	}
@@ -100,7 +100,7 @@ func TestRecipientsAddAllowRotatesAndPersists(t *testing.T) {
 	s, other := setupRecipientsCLI(t)
 	stubPresence(t, true, nil, errors.New("gui must not run"))
 
-	if err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String()); err != nil {
+	if err := addStoreRecipient(context.Background(), "replica", other.Recipient().String()); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	if !committedExists(s) {
@@ -110,7 +110,7 @@ func TestRecipientsAddAllowRotatesAndPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.committedRecipients()
-	if len(got) != 1 || got[0].Name != "macmini" || got[0].Pubkey != other.Recipient().String() {
+	if len(got) != 1 || got[0].Name != "replica" || got[0].Pubkey != other.Recipient().String() {
 		t.Fatalf("committed = %+v", got)
 	}
 	cfg := configRecipients(t)
@@ -127,11 +127,11 @@ func TestRecipientsAddAllowRotatesAndPersists(t *testing.T) {
 
 	// Remove is also gated.
 	stubPresence(t, true, nil, errors.New("gui must not run"))
-	removed, err := removeStoreRecipient(context.Background(), "macmini")
+	removed, err := removeStoreRecipient(context.Background(), "replica")
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if removed.Name != "macmini" {
+	if removed.Name != "replica" {
 		t.Fatalf("removed %q", removed.Name)
 	}
 	ct = itemCT(t, s, "svc", "acct")
@@ -146,11 +146,11 @@ func TestRecipientsAddAllowRotatesAndPersists(t *testing.T) {
 func TestRecipientsRemoveDeniedWritesNothing(t *testing.T) {
 	s, other := setupRecipientsCLI(t)
 	stubPresence(t, true, nil, errors.New("gui must not run"))
-	if err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String()); err != nil {
+	if err := addStoreRecipient(context.Background(), "replica", other.Recipient().String()); err != nil {
 		t.Fatal(err)
 	}
 	stubPresence(t, false, nil, errNoGUIPrompter)
-	if _, err := removeStoreRecipient(context.Background(), "macmini"); !errors.Is(err, errNoPresenceMechanism) {
+	if _, err := removeStoreRecipient(context.Background(), "replica"); !errors.Is(err, errNoPresenceMechanism) {
 		t.Fatalf("remove = %v, want errNoPresenceMechanism", err)
 	}
 	if err := s.loadExtra(); err != nil {
@@ -166,18 +166,18 @@ func TestRecipientsRemoveDeniedWritesNothing(t *testing.T) {
 }
 
 func TestParseRecipientsAdd(t *testing.T) {
-	name, pub, err := parseRecipientsAdd([]string{"age1abc", "--name", "macmini"})
-	if err != nil || name != "macmini" || pub != "age1abc" {
+	name, pub, err := parseRecipientsAdd([]string{"age1abc", "--name", "replica"})
+	if err != nil || name != "replica" || pub != "age1abc" {
 		t.Fatalf("got name=%q pub=%q err=%v", name, pub, err)
 	}
-	name, pub, err = parseRecipientsAdd([]string{"--name=macmini", "age1abc"})
-	if err != nil || name != "macmini" || pub != "age1abc" {
+	name, pub, err = parseRecipientsAdd([]string{"--name=replica", "age1abc"})
+	if err != nil || name != "replica" || pub != "age1abc" {
 		t.Fatalf("got name=%q pub=%q err=%v", name, pub, err)
 	}
 	if _, _, err := parseRecipientsAdd([]string{"age1abc"}); err == nil {
 		t.Fatal("missing --name should fail")
 	}
-	if _, _, err := parseRecipientsAdd([]string{"--name", "macmini"}); err == nil {
+	if _, _, err := parseRecipientsAdd([]string{"--name", "replica"}); err == nil {
 		t.Fatal("missing pubkey should fail")
 	}
 }
@@ -185,7 +185,7 @@ func TestParseRecipientsAdd(t *testing.T) {
 func TestRecipientsListJSONShape(t *testing.T) {
 	s, other := setupRecipientsCLI(t)
 	stubPresence(t, true, nil, errors.New("gui must not run"))
-	if err := addStoreRecipient(context.Background(), "macmini", other.Recipient().String()); err != nil {
+	if err := addStoreRecipient(context.Background(), "replica", other.Recipient().String()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.loadExtra(); err != nil {
