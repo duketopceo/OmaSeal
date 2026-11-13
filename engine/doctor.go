@@ -76,6 +76,7 @@ func doctorChecks() []checkResult {
 		checkAgentFit,
 		checkLogChain,
 		checkFilePerms,
+		checkBackup,
 	}
 	results := make([]checkResult, len(checks))
 	var wg sync.WaitGroup
@@ -568,6 +569,41 @@ func checkFilePerms() checkResult {
 				" — chmod 600 them; group/other can read your policy and access history"}
 	}
 	return checkResult{name: "file-perms", ok: true, message: "policy/config/log files are 0600"}
+}
+
+// checkBackup is optional — a missing backup recipient warns that a full
+// encrypted copy has never been configured (the cloud-copy gap). A
+// configured recipient is a pass. Staleness is not checked here: export
+// times are in the backup's own manifest, not on disk.
+func checkBackup() checkResult {
+	recs := loadBackupRecipients()
+	cfg, err := loadConfig()
+	if err != nil || cfg.Backend != "native" {
+		return checkResult{name: "backup", ok: true, optional: true,
+			message: "skipped — secretservice backend (migrate to native for encrypted backup)"}
+	}
+	if len(recs) == 0 {
+		return checkResult{name: "backup", ok: true, optional: true,
+			message: "not configured — no offsite backup recipient " +
+				"(run: omaseal backup set-recipient age1...; exports are age-encrypted)"}
+	}
+	p := backupConfigPath()
+	if p == "" {
+		return checkResult{name: "backup", ok: true, optional: true,
+			message: fmt.Sprintf("configured (%d recipient(s) from env)", len(recs))}
+	}
+	// check the saved file reads back cleanly — a corrupt backup.json is a drift warning
+	b, rerr := os.ReadFile(p)
+	if rerr != nil {
+		return checkResult{name: "backup", ok: true, optional: true,
+			message: fmt.Sprintf("configured (%d recipient(s) via env, %s unreadable: %v)", len(recs), p, rerr)}
+	}
+	var cfg2 backupRecipientConfig
+	if jerr := json.Unmarshal(b, &cfg2); jerr != nil {
+		return checkResult{name: "backup", ok: true, optional: true,
+			message: fmt.Sprintf("saved recipient config is corrupt: %v — re-run: omaseal backup set-recipient age1...", jerr)}
+	}
+	return checkResult{name: "backup", ok: true, message: fmt.Sprintf("configured (%d recipient(s)) — export with: omaseal backup export", len(recs))}
 }
 
 // loosePermFiles returns the basenames of existing files with group/other
