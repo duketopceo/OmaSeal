@@ -74,12 +74,18 @@ for search, Touch ID reveal, copy, and replica status.
   catches missed events. The mini launchd job verifies a staged file
   (checksum), atomically renames it onto the mini `store.json`, and
   writes a status sidecar. Launchd may also pull when the mini was down
-  and the laptop is reachable. Governs R4, R6.
-- KTD2. The sync protocol is: SHA-256 of the source document, copy to a
-  temp path on the mini, verify the hash, `rename` over `store.json`.
-  The script aborts if the destination path is not the native store
-  document, and it refuses to write any identity or lock file. Governs
-  R3, R4.
+  and the laptop is reachable. Pull and push are serialized across
+  snapshot acquisition and install so an older in-flight transfer cannot
+  replace a newer replica: reject a snapshot that is older than the
+  installed store (compare source or staging timestamp, or a monotonic
+  generation in the sidecar), and never report success for a rejected
+  stale snapshot. Governs R4, R6.
+- KTD2. The sync protocol is: produce the staging `store.json` (filtered
+  when an allowlist is set), compute the SHA-256 of those exact bytes,
+  copy that file to a temp path on the mini, verify the hash of the
+  received file, then `rename` over `store.json`. The script aborts if
+  the destination path is not the native store document, and it refuses
+  to write any identity or lock file. Governs R3, R4, R5.
 - KTD3. The optional allowlist is applied on the laptop before push, by
   emitting a filtered `store.json` (same envelope schema, fewer items)
   into the staging path. Default is unfiltered. Governs R5.
