@@ -177,6 +177,8 @@ func runLegacy(argv []string) {
 		handleMigrate(os.Args[2:])
 	case "logs":
 		handleLogs()
+	case "backup":
+		handleBackup()
 	case "setup":
 		runSetup()
 	case "agent":

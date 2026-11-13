@@ -196,6 +196,16 @@ var cliSpecs = []cmdSpec{
 		flags: []string{"json|machine-readable output"}, legacy: []string{"provider", "status"}},
 	{path: "provider enable", short: "Install the activation file and systemd user unit", legacy: []string{"provider", "enable"}},
 	{path: "provider disable", short: "Stop the daemon and remove activation files", legacy: []string{"provider", "disable"}},
+	{path: "backup", group: groupSetup, serve: true, loose: true, short: "Encrypted full-copy backup (tar.gz, age-encrypted)",
+		long:    "Encrypted full-copy backup — the cloud-copy gap. `export` writes a single .omaseal-backup (store + identity + policy) encrypted to a saved age recipient; `restore` verifies a SHA-256 manifest and stages files for inspection. Plaintext export is never offered.",
+		example: "  omaseal backup set-recipient age1...\n  omaseal backup export ~/backups/omaseal.omaseal-backup\n  omaseal backup restore ~/backups/omaseal.omaseal-backup --dry-run",
+		legacy:  []string{"backup"}},
+	{path: "backup export", use: "[path]", short: "Write an age-encrypted backup file",
+		flags: []string{"recipient=|age1... recipient (repeatable)", "out=|output path"}, legacy: []string{"backup", "export"}},
+	{path: "backup restore", use: "<backup>", short: "Verify and stage a backup for restore",
+		flags: []string{"dry-run|verify and print the plan only", "force|overwrite --to directory", "identity=|age-secret-... to decrypt", "to=|staging directory"}, legacy: []string{"backup", "restore"}},
+	{path: "backup set-recipient", use: "age1...", short: "Save the backup recipient (plaintext export is never offered)", legacy: []string{"backup", "set-recipient"}},
+	{path: "backup show-recipient", short: "Show the saved backup recipients", legacy: []string{"backup", "show-recipient"}},
 
 	// ── Hidden: plumbing and the pre-revamp names, kept for one release ─────
 	{path: "ipc", use: "<method> <json-args>", hidden: true, short: "JSON IPC for other plugins", legacy: []string{"ipc"}},
