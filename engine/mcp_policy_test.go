@@ -16,9 +16,11 @@ import (
 func mcpFixture(t *testing.T) (cfgDir string, ms *memStore) {
 	t.Helper()
 	cfgDir = t.TempDir()
+	state := t.TempDir()
+	resetLogForTest(t)
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", state)
 	ms = mockKeyring(t)
 	return cfgDir, ms
 }

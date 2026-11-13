@@ -78,16 +78,26 @@ var cliSpecs = []cmdSpec{
 		short:   "Print a stored secret",
 		long:    "Print a stored secret, raw, to stdout (never decorated, safe to pipe).\n\n--reveal asks for user presence first; --resolve also consults 1Password/Bitwarden and caches the result.",
 		example: "  omaseal get openrouter default\n  omaseal get omaseal://openrouter/default\n  omaseal get --reveal openrouter default",
-		flags:   []string{"reveal|require a user-presence confirmation first", "resolve|look in keyring, 1Password, Bitwarden or prompt, and cache"},
+		flags:   []string{"reveal|require a user-presence confirmation first", "resolve|look in keyring, 1Password, Bitwarden or prompt, and cache", "version=|print version N instead of the active value"},
 		rewrite: rewriteGet},
+	{path: "history", use: "<service> <account>", group: groupSecrets,
+		short:   "Show a secret's version history",
+		long:    "Show version numbers and timestamps — never values. `get --version N` prints a specific version's value.",
+		example: "  omaseal history openrouter default",
+		rewrite: func(args []string) ([]string, error) {
+			return append([]string{"history"}, args...), nil
+		}},
 	{path: "ls", use: "[service]", group: groupSecrets, aliases: []string{"list"},
 		short:   "List stored secrets",
 		example: "  omaseal ls\n  omaseal ls --sort=used\n  omaseal ls omaseal://browseros/\n  omaseal ls --json",
 		flags:   []string{"json|machine-readable output", "sort=|used, recent or name"},
 		legacy:  []string{"list"}},
 	{path: "rm", use: "<service> <account>", group: groupSecrets, aliases: []string{"del", "delete"},
-		short:  "Delete a stored secret",
-		legacy: []string{"del"}},
+		short:   "Delete a stored secret",
+		long:    "Hide a stored secret. The value and its history stay in the native store and can still be read with `get --version` until you pass --purge, which destroys all ciphertext and keeps only the last version number so numbers are never reused.",
+		flags:   []string{"purge|destroy all stored ciphertext; history values become unreadable"},
+		legacy:  []string{"del"},
+		rewrite: rewriteRm},
 	{path: "run", use: "-- <command>", group: groupSecrets,
 		short:   "Run a command with secrets injected into its environment",
 		long:    "Run a command with secrets injected into its environment. Nothing touches disk and the value never appears in argv.\n\n  omaseal run -e NAME=<service>/<account> [-e ...] [--resolve] -- <command> [args...]",
@@ -196,6 +206,16 @@ var cliSpecs = []cmdSpec{
 		flags: []string{"json|machine-readable output"}, legacy: []string{"provider", "status"}},
 	{path: "provider enable", short: "Install the activation file and systemd user unit", legacy: []string{"provider", "enable"}},
 	{path: "provider disable", short: "Stop the daemon and remove activation files", legacy: []string{"provider", "disable"}},
+	{path: "backup", group: groupSetup, serve: true, loose: true, short: "Encrypted full-copy backup (tar.gz, age-encrypted)",
+		long:    "Encrypted full-copy backup — the cloud-copy gap. `export` writes a single .omaseal-backup (store + identity + policy) encrypted to a saved age recipient; `restore` verifies a SHA-256 manifest and stages files for inspection. Plaintext export is never offered.",
+		example: "  omaseal backup set-recipient age1...\n  omaseal backup export ~/backups/omaseal.omaseal-backup\n  omaseal backup restore ~/backups/omaseal.omaseal-backup --dry-run",
+		legacy:  []string{"backup"}},
+	{path: "backup export", use: "[path]", short: "Write an age-encrypted backup file",
+		flags: []string{"recipient=|age1... recipient (repeatable)", "out=|output path"}, legacy: []string{"backup", "export"}},
+	{path: "backup restore", use: "<backup>", short: "Verify and stage a backup for restore",
+		flags: []string{"dry-run|verify and print the plan only", "force|overwrite --to directory", "identity=|age-secret-... to decrypt", "to=|staging directory"}, legacy: []string{"backup", "restore"}},
+	{path: "backup set-recipient", use: "age1...", short: "Save the backup recipient (plaintext export is never offered)", legacy: []string{"backup", "set-recipient"}},
+	{path: "backup show-recipient", short: "Show the saved backup recipients", legacy: []string{"backup", "show-recipient"}},
 
 	{path: "recipients", group: groupSetup,
 		short: "Additional machines that can decrypt the native store"},
@@ -255,15 +275,61 @@ func takeFlag(args []string, name string) ([]string, bool) {
 func rewriteGet(args []string) ([]string, error) {
 	rest, reveal := takeFlag(args, "--reveal")
 	rest, resolve := takeFlag(rest, "--resolve")
+	rest, ver, hasVer := takeFlagValue(rest, "--version")
 	switch {
 	case reveal && resolve:
 		return nil, fmt.Errorf("--reveal and --resolve are mutually exclusive")
+	case hasVer:
+		return append([]string{"getver", ver}, rest...), nil
 	case reveal:
 		return append([]string{"reveal"}, rest...), nil
 	case resolve:
 		return append([]string{"resolve"}, rest...), nil
 	}
 	return append([]string{"get"}, rest...), nil
+}
+
+// takeFlagValue removes a `--name N` or `--name=N` flag and returns its
+// value plus whether the flag was present. An empty value ( `--name=` or
+// a bare `--name` at the end) is distinct from an absent flag.
+func takeFlagValue(args []string, name string) ([]string, string, bool) {
+	out := make([]string, 0, len(args))
+	val := ""
+	found := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if a == name && i+1 < len(args) {
+			val = args[i+1]
+			found = true
+			i++
+			continue
+		}
+		if a == name {
+			found = true
+			continue
+		}
+		if rest, ok := strings.CutPrefix(a, name+"="); ok {
+			val = rest
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, val, found
+}
+
+// rewriteRm folds `--purge` into the destructive `purge` handler. Plain
+// `rm` stays `del` (tombstone, history retained).
+func rewriteRm(args []string) ([]string, error) {
+	rest, purge := takeFlag(args, "--purge")
+	if purge {
+		return append([]string{"purge"}, rest...), nil
+	}
+	return append([]string{"del"}, rest...), nil
 }
 
 // rewriteMCPInstall folds install-all and install-detected into install.

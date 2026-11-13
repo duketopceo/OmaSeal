@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -26,7 +27,8 @@ import (
 //
 //	identity.age  — X25519 private key, scrypt-passphrase-wrapped
 //	identity.pub  — cleartext public recipient (not secret)
-//	store.json    — {"items": {"svc/acct": {ct, created, updated}}}
+//	store.json    — format 2: {"format":2,"items":[{"key":"svc/acct",...}]}
+//	                format 1 (still readable): {"items":{"svc/acct":{ct,...}}}
 //	store.lock    — flock target serializing writers
 //
 // Session identity (tmpfs, agentRuntimeDir()):
@@ -54,12 +56,35 @@ type nativeStore struct {
 
 var _ Store = (*nativeStore)(nil)
 
-// nativeDoc is the on-disk store.json shape.
+// nativeDoc is the in-memory store. On disk it is encoded as format 2
+// (an items array) so a pre-versioning binary fails closed — see
+// parseNativeDoc. Format 1 ({"items":{...map...}}) is still readable.
 type nativeDoc struct {
 	Items map[string]nativeItem `json:"items"`
 }
 
+// nativeStoreFormat is the store.json format this binary writes. A top-level
+// "format" field alone is not enough to protect history: a pre-change
+// decoder ignores unknown fields, rewrites the whole document, and drops
+// Versions and Tomb — which can revive a tombstoned item (its CT remains).
+// Format 2 stores items as an array, which encoding/json cannot unmarshal
+// into the old map[string]nativeItem field; the old read() then errors and
+// updateErr returns without writing.
+const nativeStoreFormat = 2
+
+// nativeVersion is one historical version of an item. Version numbers are
+// append-only and never reused — even across a tombstone, since the
+// tombstoned item retains its Versions. CT is the age-encrypted envelope,
+// same as the item's active blob.
+type nativeVersion struct {
+	V       int    `json:"v"`
+	CT      string `json:"ct"`
+	Created int64  `json:"created"`
+}
+
 type nativeItem struct {
+	// CT is the ACTIVE ciphertext — kept as the live read path so every
+	// existing consumer is unaffected. Versions records the full history.
 	CT      string `json:"ct"`
 	Created int64  `json:"created"`
 	Updated int64  `json:"updated"`
@@ -69,6 +94,16 @@ type nativeItem struct {
 	// External=false → Owned=true, the correct default while only omaseal
 	// writes the native store.
 	External bool `json:"external,omitempty"`
+	// Versions is the append-only history; an item predating versioning
+	// (no Versions) reads as v1 and seeds v1 on its next write.
+	Versions []nativeVersion `json:"versions,omitempty"`
+	// Tomb marks a deleted item: Get returns not_found, List omits, but
+	// history is retained so version numbers are never reused and the
+	// delete is itself a versioned event. rm --purge clears ciphertext
+	// and records the last number in LastV so a later Set continues
+	// from LastV+1.
+	Tomb  bool `json:"tomb,omitempty"`
+	LastV int  `json:"last_v,omitempty"`
 }
 
 // nativeEnvelope binds the plaintext to its name — a ciphertext moved under
@@ -194,7 +229,25 @@ func (s *nativeStore) set(service, account, secret string, owned, ifAbsent bool)
 		if !ok {
 			it.Created = s.now().Unix()
 		}
+		// Version history: a legacy item (no Versions) seeds v1 from its
+		// current blob so the prior value is preserved; then append vN+1.
+		// Numbers are minted from the last version — never reused, even
+		// across a tombstone or a purge (LastV holds the number after
+		// ciphertext is destroyed).
+		if it.CT != "" && len(it.Versions) == 0 {
+			it.Versions = []nativeVersion{{V: 1, CT: it.CT, Created: it.Updated}}
+		}
+		v := 1
+		switch {
+		case len(it.Versions) > 0:
+			v = it.Versions[len(it.Versions)-1].V + 1
+		case it.LastV > 0:
+			v = it.LastV + 1
+		}
+		it.Versions = append(it.Versions, nativeVersion{V: v, CT: ct, Created: s.now().Unix()})
 		it.CT = ct
+		it.Tomb = false // a set resurrects a tombstoned item, history intact
+		it.LastV = 0    // Versions now carries the number
 		it.Updated = s.now().Unix()
 		it.External = !owned
 		d.Items[key] = it
@@ -219,7 +272,7 @@ func (s *nativeStore) Get(service, account string) (string, error) {
 		return "", err
 	}
 	it, ok := d.Items[nativeKey(service, account)]
-	if !ok {
+	if !ok || it.Tomb {
 		return "", newError("not_found", "omaseal set", keyring.ErrNotFound)
 	}
 	if err := s.ensureIdentity(); err != nil {
@@ -242,10 +295,52 @@ func (s *nativeStore) Delete(service, account string) error {
 	key := nativeKey(service, account)
 	var found bool
 	err := s.update(func(d *nativeDoc) {
-		if _, ok := d.Items[key]; ok {
+		it, ok := d.Items[key]
+		if ok && !it.Tomb {
 			found = true
-			delete(d.Items, key)
+			it.Tomb = true
+			it.Updated = s.now().Unix()
+			d.Items[key] = it
 		}
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return newError("not_found", "omaseal list", keyring.ErrNotFound)
+	}
+	return nil
+}
+
+// Purge destroys every ciphertext for an item (active CT and all
+// Versions) and keeps only the last version number so a later Set
+// continues from LastV+1 and never reuses a number. The item stays
+// tombstoned. This is the destructive path; Delete only hides.
+func (s *nativeStore) Purge(service, account string) error {
+	if service == "" || account == "" {
+		return errors.New("service and account must not be empty")
+	}
+	if err := s.ensureInit(); err != nil {
+		return err
+	}
+	if err := s.refuseReplicaWrite(); err != nil {
+		return err
+	}
+	key := nativeKey(service, account)
+	var found bool
+	err := s.update(func(d *nativeDoc) {
+		it, ok := d.Items[key]
+		if !ok || !itemHasCiphertext(it) {
+			return
+		}
+		found = true
+		last := itemVersion(it)
+		it.CT = ""
+		it.Versions = nil
+		it.LastV = last
+		it.Tomb = true
+		it.Updated = s.now().Unix()
+		d.Items[key] = it
 	})
 	if err != nil {
 		return err
@@ -269,6 +364,9 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(d.Items))
 	for k, it := range d.Items {
+		if it.Tomb {
+			continue
+		}
 		rawSvc, rawAcct, ok := strings.Cut(k, "/")
 		if !ok || rawSvc == "" || rawAcct == "" {
 			continue
@@ -284,9 +382,104 @@ func (s *nativeStore) List(service string) ([]Item, error) {
 			CreatedAt: time.Unix(it.Created, 0).UTC(),
 			UpdatedAt: time.Unix(it.Updated, 0).UTC(),
 			Owned:     !it.External,
+			Version:   itemVersion(it),
 		})
 	}
 	return items, nil
+}
+
+// itemVersion is the active version number — an unversioned legacy item
+// reads as v1.
+func itemVersion(it nativeItem) int {
+	if len(it.Versions) > 0 {
+		return it.Versions[len(it.Versions)-1].V
+	}
+	if it.LastV > 0 {
+		return it.LastV
+	}
+	return 1
+}
+
+func itemHasCiphertext(it nativeItem) bool {
+	if it.CT != "" {
+		return true
+	}
+	for _, v := range it.Versions {
+		if v.CT != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// nativeVersionInfo is one entry in `omaseal history` — metadata only,
+// never the value.
+type nativeVersionInfo struct {
+	V       int
+	Created int64
+	Active  bool
+}
+
+// Versions lists an item's history newest-first — names and timestamps
+// only, so no unlock is required (same exposure class as List).
+func (s *nativeStore) Versions(service, account string) ([]nativeVersionInfo, bool, error) {
+	if err := s.ensureInit(); err != nil {
+		return nil, false, err
+	}
+	d, err := s.read()
+	if err != nil {
+		return nil, false, err
+	}
+	it, ok := d.Items[nativeKey(service, account)]
+	if !ok {
+		return nil, false, newError("not_found", "omaseal list", keyring.ErrNotFound)
+	}
+	vers := it.Versions
+	if len(vers) == 0 && it.CT != "" {
+		vers = []nativeVersion{{V: 1, Created: it.Updated}}
+	}
+	out := make([]nativeVersionInfo, 0, len(vers))
+	for i := len(vers) - 1; i >= 0; i-- {
+		out = append(out, nativeVersionInfo{
+			V:       vers[i].V,
+			Created: vers[i].Created,
+			Active:  !it.Tomb && i == len(vers)-1,
+		})
+	}
+	return out, it.Tomb, nil
+}
+
+// GetVersion decrypts a specific version — same identity/tamper path as Get.
+func (s *nativeStore) GetVersion(service, account string, v int) (string, error) {
+	if err := s.ensureInit(); err != nil {
+		return "", err
+	}
+	d, err := s.read()
+	if err != nil {
+		return "", err
+	}
+	it, ok := d.Items[nativeKey(service, account)]
+	if !ok {
+		return "", newError("not_found", "omaseal list", keyring.ErrNotFound)
+	}
+	var ct string
+	for _, ver := range it.Versions {
+		if ver.V == v {
+			ct = ver.CT
+			break
+		}
+	}
+	if ct == "" {
+		if v == 1 && len(it.Versions) == 0 && it.CT != "" {
+			ct = it.CT // legacy v1
+		} else {
+			return "", newError("not_found", fmt.Sprintf("no version %d", v), keyring.ErrNotFound)
+		}
+	}
+	if err := s.ensureIdentity(); err != nil {
+		return "", err
+	}
+	return s.decryptEnvelope(service, account, nativeItem{CT: ct})
 }
 
 // --- Unlock / session identity ---------------------------------------------
@@ -640,7 +833,7 @@ func (s *nativeStore) updateErr(fn func(*nativeDoc) error) error {
 	if err := fn(&d); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(d)
+	raw, err := marshalNativeDoc(d)
 	if err != nil {
 		return keyringError(err)
 	}
@@ -656,10 +849,105 @@ func (s *nativeStore) read() (nativeDoc, error) {
 	if err != nil {
 		return d, keyringError(err)
 	}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &d); err != nil {
+	if len(raw) == 0 {
+		return d, nil
+	}
+	d, err = parseNativeDoc(raw)
+	if err != nil {
+		return nativeDoc{Items: map[string]nativeItem{}}, err
+	}
+	return d, nil
+}
+
+// nativeRecord is one format-2 item: the map key is inlined so "items"
+// can be a JSON array (incompatible with the pre-change map field).
+type nativeRecord struct {
+	Key      string          `json:"key"`
+	CT       string          `json:"ct"`
+	Created  int64           `json:"created"`
+	Updated  int64           `json:"updated"`
+	External bool            `json:"external,omitempty"`
+	Versions []nativeVersion `json:"versions,omitempty"`
+	Tomb     bool            `json:"tomb,omitempty"`
+	LastV    int             `json:"last_v,omitempty"`
+}
+
+type nativeDocV2 struct {
+	Format int            `json:"format"`
+	Items  []nativeRecord `json:"items"`
+}
+
+func itemToRecord(key string, it nativeItem) nativeRecord {
+	return nativeRecord{
+		Key:      key,
+		CT:       it.CT,
+		Created:  it.Created,
+		Updated:  it.Updated,
+		External: it.External,
+		Versions: it.Versions,
+		Tomb:     it.Tomb,
+		LastV:    it.LastV,
+	}
+}
+
+func (r nativeRecord) item() nativeItem {
+	return nativeItem{
+		CT:       r.CT,
+		Created:  r.Created,
+		Updated:  r.Updated,
+		External: r.External,
+		Versions: r.Versions,
+		Tomb:     r.Tomb,
+		LastV:    r.LastV,
+	}
+}
+
+func marshalNativeDoc(d nativeDoc) ([]byte, error) {
+	keys := make([]string, 0, len(d.Items))
+	for k := range d.Items {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	recs := make([]nativeRecord, 0, len(keys))
+	for _, k := range keys {
+		recs = append(recs, itemToRecord(k, d.Items[k]))
+	}
+	return json.Marshal(nativeDocV2{Format: nativeStoreFormat, Items: recs})
+}
+
+func parseNativeDoc(raw []byte) (nativeDoc, error) {
+	d := nativeDoc{Items: map[string]nativeItem{}}
+	var probe struct {
+		Format int             `json:"format"`
+		Items  json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return d, keyringError(err)
+	}
+	if probe.Format > nativeStoreFormat {
+		return d, newError("unsupported_store_format", "upgrade omaseal",
+			fmt.Errorf("store.json format %d is newer than this engine (supports up to %d)", probe.Format, nativeStoreFormat))
+	}
+	items := bytes.TrimSpace(probe.Items)
+	if len(items) == 0 || string(items) == "null" {
+		return d, nil
+	}
+	if items[0] == '[' {
+		var recs []nativeRecord
+		if err := json.Unmarshal(items, &recs); err != nil {
 			return d, keyringError(err)
 		}
+		for _, r := range recs {
+			if r.Key == "" {
+				continue
+			}
+			d.Items[r.Key] = r.item()
+		}
+		return d, nil
+	}
+	// Format 1: {"items":{key: item, ...}}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return nativeDoc{Items: map[string]nativeItem{}}, keyringError(err)
 	}
 	if d.Items == nil {
 		d.Items = map[string]nativeItem{}
