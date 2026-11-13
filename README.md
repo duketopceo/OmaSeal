@@ -30,6 +30,8 @@ copy-pasting API keys into dotfiles. Store once. Use everywhere.
 - **MCP server** — so Claude, Codex, Cursor, and other agents can use it.
 - **1Password / Bitwarden fallback** — import and resolve when the local
   keyring does not have a secret yet.
+- **macOS menu bar** — search, Touch ID reveal, and copy, with an optional
+  read-only Mac mini replica of the native store.
 
 ## Why
 
@@ -105,6 +107,68 @@ install -Dm755 omaseal ~/.local/bin/omaseal
 cp -r . ~/.config/omarchy/plugins/io.github.duketopceo.omaseal
 omarchy-restart-shell
 ```
+
+## macOS
+
+The engine builds on macOS. A SwiftUI menu bar app can list, search, reveal
+(behind Touch ID), and copy secrets. A Mac mini can hold a read-only copy
+of the native store, kept in sync from the laptop over Tailscale.
+
+Requirements and plan:
+[`docs/brainstorms/2026-11-12-macos-client-and-mini-replica-requirements.md`](docs/brainstorms/2026-11-12-macos-client-and-mini-replica-requirements.md)
+and
+[`docs/plans/2026-11-12-feat-macos-menubar-and-mini-replica-plan.md`](docs/plans/2026-11-12-feat-macos-menubar-and-mini-replica-plan.md).
+Sync setup is in [`contrib/sync/README.md`](contrib/sync/README.md).
+Menu bar build notes are in [`macos/README.md`](macos/README.md).
+
+### Engine
+
+```sh
+cd engine
+go build -o omaseal .
+# install somewhere on PATH, for example:
+install -m 755 omaseal /opt/homebrew/bin/omaseal
+```
+
+The native store (`{"backend": "native"}`) is the backend that supports
+multi-recipient encryption and replica mode.
+
+### Menu bar app
+
+```sh
+cd macos
+swift test
+make app          # produces dist/OmaSealBar.app
+open dist/OmaSealBar.app
+```
+
+The app shells out to `omaseal` on `PATH` (including `/opt/homebrew/bin`
+and `/usr/local/bin`). Reveal and Copy require Touch ID, or the device
+password. Copied values clear from the clipboard after 30 seconds.
+
+### Mac mini read-only copy
+
+The laptop stays the only writer. The mini decrypts a copied `store.json`
+with its own age key and refuses writes (`replica: true` or
+`OMASEAL_REPLICA=1`).
+
+1. On the mini, install the engine as above, then print its public key:
+
+   ```sh
+   omaseal recipients local
+   ```
+
+2. On the laptop, add that key (presence-gated; this re-encrypts every
+   item):
+
+   ```sh
+   omaseal recipients add <age1…> --name macmini
+   ```
+
+3. Turn on the laptop push and the mini launchd check, following
+   [`contrib/sync/README.md`](contrib/sync/README.md). Sync copies only
+   `store.json`. It never copies `identity.age`, `identity.pub`,
+   `store.lock`, or `recipients.json`.
 
 ## Onboarding
 
