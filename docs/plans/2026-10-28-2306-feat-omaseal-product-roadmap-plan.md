@@ -64,7 +64,7 @@ The architecture decision is already made: the Setec design-read (`docs/decision
 
 - `omaseal provider status` on a dogfooded machine shows omaseal owning the bus after reboots and daemon kills, with recovery logged.
 - After a suspend/resume cycle (or `loginctl lock-session`), the `login` collection reports `Locked=true` — an unlocked vault never rides across a sleep boundary.
-- `go test ./...` green on omarchy-max (currently 6 env-failures, #62).
+- `go test ./...` green on the laptop (currently 6 env-failures, #62).
 - A hostile same-UID process without the session passphrase cannot read a DENY-marked secret after U4 lands — pentest scenario, not a claim.
 - `yay -S omaseal-bin` (or marketplace equivalent) installs a working omaseal on a fresh Omarchy machine.
 - No secret-loss or exposure event across the program, evidenced by artifacts: pre-sync/migration encrypted backups exist and restore-tested, helper-boundary pentest results published per wedge, sync dry-run logs carry no values.
@@ -102,7 +102,7 @@ The architecture decision is already made: the Setec design-read (`docs/decision
 - KTD1. **Helper daemon brokers, provider adapts.** The different-UID helper owns the store identity and policy; the existing provider daemon becomes a thin Secret Service adapter in front of it rather than a competing enforcement point (`session-settled: user-directed — chosen over same-uid policy hardening: setec read showed confinement needs a separate principal`). Governs U4.
 - KTD2. **Wedges ship independently.** Each unit lands as its own branch/PR/ce-plan; no mega-PR spanning wedges. Roadmap order is risk-ordered, not a dependency chain except where noted.
 - KTD3. **Versioning ships standalone before the helper.** Independent value: rotation flags already treat “stored a new value” as a lifecycle event — versions make rotation history and audit first-class; the helper will likely want them too, but they justify themselves.
-- KTD4. **Provider reliability is a supervision-coverage problem, not a redesign.** `provider serve` exits non-zero on lost-name and the unit’s `Restart=on-failure` re-execs; on systemd sessions the D-Bus activation file’s `SystemdService=` already delegates bus-activated spawns to the unit, so the uncovered surface is the non-systemd `Exec=` fallback plus exit provenance. A keeper/watchdog (precedent: the local `omaseal-lock-watch` script on omarchy-max — not a repo file) must also decide the re-fight policy: restarting into a name a foreign owner holds is a loop, not a recovery.
+- KTD4. **Provider reliability is a supervision-coverage problem, not a redesign.** `provider serve` exits non-zero on lost-name and the unit’s `Restart=on-failure` re-execs; on systemd sessions the D-Bus activation file’s `SystemdService=` already delegates bus-activated spawns to the unit, so the uncovered surface is the non-systemd `Exec=` fallback plus exit provenance. A keeper/watchdog (precedent: the local `omaseal-lock-watch` script on the laptop — not a repo file) must also decide the re-fight policy: restarting into a name a foreign owner holds is a loop, not a recovery.
 - KTD5. **Marketplace first; AUR is blocker-gated, not wedge-gated.** The Omarchy marketplace listing needs no external account; AUR stays gated on upstream registration (issue #12). Neither blocks the other.
 - KTD6. **Test self-hosting via provider-aware skip/short-circuit.** The keyring-compat tests should detect "I am the provider" and either exercise the client path end-to-end through the live provider or skip loudly — chosen over pinning tests to gnome-keyring (which would regress as omaseal spreads) and over a controlled gnome-keyring test environment (dbus-run-session/container — heavier fixture for weaker signal on the real dogfood path).
 
@@ -169,10 +169,10 @@ U4 (helper daemon, red) is the security-critical wedge and the effective gate fo
 - systemd unit restart: provider re-claims the bus name and answers `secret-tool` within seconds
 - Bus-activated spawn path: activation still works after the change (activation file unchanged or updated coherently)
 - `provider status` distinguishes "running", "dead with provenance", "never ran"
-- Simulate `PrepareForSleep` (or real suspend/resume on omarchy-max): collection `Locked` flips to true before or at resume; unlock-epoch marker removed
+- Simulate `PrepareForSleep` (or real suspend/resume on the laptop): collection `Locked` flips to true before or at resume; unlock-epoch marker removed
 - `loginctl lock-session` relocks where the session Lock signal is reachable; if it is not reliably reachable, document why and gate on suspend only
 - TTL expiry and `agent lock` relock paths unchanged (regression)
-**Verification:** simulate provider death on omarchy-max; omaseal must re-own the bus without manual intervention; suspend/resume cycle leaves the vault locked; no regression on `pentest` suite.
+**Verification:** simulate provider death on the laptop; omaseal must re-own the bus without manual intervention; suspend/resume cycle leaves the vault locked; no regression on `pentest` suite.
 
 ### U2. Self-provider-aware test suite
 
@@ -185,7 +185,7 @@ U4 (helper daemon, red) is the security-critical wedge and the effective gate fo
 
 **Approach:** KTD6 — detect omaseal-owned bus at test start. Two acceptable shapes per test: (a) exercise the client path against the live omaseal provider where semantics match (preferred where it proves real behavior), (b) `t.Skip("self-provider")` where the test asserts gnome-keyring-specific semantics (e.g. `login` collection unlock behavior). Never silently pass.
 **Test scenarios:**
-- Full suite green on omarchy-max under omaseal-owned bus
+- Full suite green on the laptop under omaseal-owned bus
 - Full suite still green in CI under gnome-keyring (no regression — the skip path must not fire there)
 - A provider round-trip through the self-owned bus is asserted where semantics allow
 **Verification:** `go test ./...` green locally AND in CI; the skip/detect helper is exercised in both environments.
@@ -292,7 +292,7 @@ U4 (helper daemon, red) is the security-critical wedge and the effective gate fo
 
 | Gate | Command | Applies to |
 |------|---------|------------|
-| Unit tests | `cd engine && go test ./...` | every unit; must be green on omarchy-max AND CI after U2 |
+| Unit tests | `cd engine && go test ./...` | every unit; must be green on the laptop AND CI after U2 |
 | Pentest | `cd engine && go run ./pentest` | U1, U4 (15/15 baseline; U4 adds adversarial cases) |
 | Build matrix | `make build` (amd64+arm64) | every unit — arm64 parity is a hard constraint |
 | Panel guard | `scripts/check-panel.sh` | any unit touching `shell/` QML |

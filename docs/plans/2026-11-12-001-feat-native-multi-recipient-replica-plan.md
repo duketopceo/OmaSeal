@@ -1,11 +1,11 @@
 # Plan — Multi-recipient native store and read-only replica
 
-Origin: Luke's Mac-mini request (a second OmaSeal instance that stays in
-sync with the laptop over Tailscale so agents can read secrets while the
-laptop is offline). Engine scope only: encrypt each secret to the laptop
-identity *and* additional machine recipients, plus a read-only mode for a
-synced replica. The Tailscale sync and the macOS menu-bar app are a
-separate bot's work. Depth: Standard.
+Origin: a second OmaSeal instance that stays in sync with the laptop
+over Tailscale so agents can read secrets while the laptop is offline.
+Engine scope only: encrypt each secret to the laptop identity *and*
+additional machine recipients, plus a read-only mode for a synced
+replica. The Tailscale sync and the macOS menu-bar app are a separate
+unit of work. Depth: Standard.
 
 ## Problem Frame
 
@@ -13,7 +13,7 @@ The native store (`engine/nativestore.go`, `docs/design/native-store.md`)
 encrypts every value to a single X25519 recipient — the machine's
 passphrase-wrapped identity. A second machine cannot decrypt a copy of
 `store.json` unless it holds that same identity (and passphrase), which
-defeats "the Mac mini has its own key." age already supports N recipients
+defeats "the replica Mac has its own key." age already supports N recipients
 per ciphertext; this unit turns that on, with a gated rotation path and a
 replica flag that refuses writes.
 
@@ -29,7 +29,7 @@ replica flag that refuses writes.
   `local`. Additional recipients are stored in `config.json` and in a
   committed snapshot in the native store directory. `list` shows the local
   public key plus extras; `local` prints only the local `age1…` key (for
-  the mini to share with the laptop).
+  the replica to share with the laptop).
 - R3. Adding or removing a recipient re-encrypts every item (rotation)
   under the store flock. A decrypt failure aborts with the store
   bit-identical to before. The primary identity cannot be removed.
@@ -49,7 +49,7 @@ replica flag that refuses writes.
   `OMASEAL_REPLICA=1` (`true`/`yes`/`on`). Either is sufficient. `Set`,
   `Delete`, `migrateSet`, `import`, and `migrate` refuse with a named
   error (`code=replica_readonly`, `errReplicaReadOnly`). `Get`, `List`,
-  unlock, and first-run identity init still work — the mini must be able
+  unlock, and first-run identity init still work — the replica must be able
   to create its own `identity.age`. Recipient rotation is also refused
   on a replica (the primary owns the recipient set).
 - R7. Tests: multi-recipient encrypt/decrypt with a second identity;
@@ -82,10 +82,10 @@ replica flag that refuses writes.
   or plugin recipients in this unit (hardware identities stay a future
   age-plugin-se track).
 - **KTD-6: sync copies `store.json` only.** Out of engine scope, but
-  recorded so the sync work has a contract: the Mac mini generates its
+  recorded so the sync work has a contract: the replica Mac generates its
   own identity (first TTY `omaseal get`, or `recipients local` after
   init), shares `identity.pub`, and is added on the laptop. Sync must
-  not overwrite the mini's `identity.age` / `identity.pub`. See
+  not overwrite the replica's `identity.age` / `identity.pub`. See
   "Handoff to the sync side" below.
 
 ## Implementation units
@@ -157,26 +157,26 @@ replica flag that refuses writes.
 
 ## Handoff to the sync side (not this PR)
 
-- The Mac mini runs OmaSeal with `backend: native` and `replica: true`
+- The replica Mac runs OmaSeal with `backend: native` and `replica: true`
   (or `OMASEAL_REPLICA=1`). First TTY use creates its own
   `identity.age` / `identity.pub`. `omaseal recipients local` prints
   the `age1…` key to add on the laptop:
-  `omaseal recipients add <age1…> --name macmini`.
+  `omaseal recipients add age1example... --name replica`.
 - Sync **only** `$XDG_STATE_HOME/omaseal/native/store.json` (the
-  ciphertexts), laptop → mini, after a rotation or any `Set`. Do **not**
+  ciphertexts), laptop → replica, after a rotation or any `Set`. Do **not**
   copy `identity.age`, `identity.pub`, `store.lock`, or the tmpfs
   session files — those are machine-local. Copying the laptop's
-  identity onto the mini would collapse the two keys into one.
-- The mini unlocks with its own passphrase (`agent unlock`), then
+  identity onto the replica would collapse the two keys into one.
+- The replica unlocks with its own passphrase (`agent unlock`), then
   `Get`s. It cannot `Set`/`del`/`import`/`migrate`.
 - Manifest, flags, and agent policy are out of this unit; the sync
-  bot decides whether those travel with `store.json`.
-- Two-way sync (writes on the mini) is a follow-up; this unit's
+  follow-up decides whether those travel with `store.json`.
+- Two-way sync (writes on the replica) is a follow-up; this unit's
   replica is one-way by construction.
 
 ## Out of scope
 
-- Tailscale transport, menu-bar app, launchd/plist on the mini.
+- Tailscale transport, menu-bar app, launchd/plist on the replica.
 - Two-way sync, conflict resolution, or a daemon watching `store.json`.
 - age-plugin-se / hardware identities.
 - Changing Secret Service or making native the default.

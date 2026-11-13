@@ -8,7 +8,7 @@ optional."
 The pain is real on this machine: agents need sudo but cannot type the
 password (no Touch ID on Asahi; agent has no TTY of its own), so every sudo
 call bounces back to the user by hand. The password already lives in the
-keyring (`sudo/lukekimball`), but handing it to `sudo` must require the
+keyring (`sudo/$USER`), but handing it to `sudo` must require the
 user's physical presence — an agent must never be able to self-authorize a
 root escalation feed.
 
@@ -28,7 +28,7 @@ Design constraints from the pentest-hardening work (R1/R4):
 ## Requirements
 
 - R1: `omaseal sudo [-- secret/svc acct | -r svc/acct] -- <cmd> [args]` —
-  default ref `sudo/$USER` (e.g. `sudo/lukekimball` here). `--` optional;
+  default ref `sudo/$USER` (for example `sudo/<user>`). `--` optional;
   first non-flag token starts the command, mirroring `omaseal run` syntax.
 - R2: Strict presence gate BEFORE the secret read. Fingerprint → GUI
   confirm → refuse. No `allow_ungated` honor (root password feed is a
