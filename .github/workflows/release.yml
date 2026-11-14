@@ -143,7 +143,8 @@ jobs:
             fi
             # Fresh checkout: anything dirty is bump.sh output. Stage all of
             # it so the scope check can see out-of-scope writes too.
-            files="install.sh packaging/aur/.SRCINFO packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin packaging/aur/omaseal-bin.SRCINFO"
+            # README.md is in scope: bump.sh rewrites the VER= pin example.
+            files="README.md install.sh packaging/aur/.SRCINFO packaging/aur/PKGBUILD packaging/aur/PKGBUILD-bin packaging/aur/omaseal-bin.SRCINFO"
             git add -A
             changed=$(git diff --cached --name-only | sort)
             expected=$(printf "%s\n" $files | sort)
@@ -156,5 +157,5 @@ jobs:
             git push -u origin "bump/${TAG}"
             gh pr create --base main \
               --title "chore(packaging): bump AUR/installer pins to ${TAG}" \
-              --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets before merging."
+              --body "Automated post-release pin bump for ${TAG}. Verify the pinned hashes against the release assets (and README VER=) before merging."
           '

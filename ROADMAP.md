@@ -8,18 +8,18 @@ Design direction: [DESIGN.md](DESIGN.md). Written directly rather than via `ce-p
 |---|---|---|---|---|---|
 | U1 AUR `omaseal-bin` (issue #12) | Now | blocked on registration | easy once open | AUR registration portal closed; human browser step | none; keep `install.sh` with pinned checksum |
 | U2 Replace emoji social card, refresh README header | Now | done in this PR (brand proposal) | easy | owner signs off the mark | keep `docs/assets/social.png` |
-| U3 Install docs versus releases: checked, `v0.4.0` release exists and is Latest, so the pin is correct | Now | verified, no action | easy | none | none |
+| U3 Install docs versus releases: `install.sh` pin must match a published tag; after `v0.5.0` cut, merge the automated `bump-packaging` PR (and README pin literals) before treating `./install.sh` as Latest | Now | open until pin-bump merges and README pin literals are updated | easy | none | keep installing the pinned tag deliberately |
 | U4 First-party Omarchy integration (`omarchy-secrets-*`, panel, menu) | Next | open | hard | depends on `omacom/omarchy-mac` maintainers accepting a PR | ship commands + menu only (the existing phased fallback) |
 | U5 BrowserOS resolves secret at request time | Next | deferred | medium | needs an `omarchy-browser` checkout | document the `omaseal run` pattern |
 | U6 Panel component extraction | Later | done (#51) | medium | `Panel.qml` was 1,268 lines; now 466 lines plus sibling files (`PanelJobs.qml`, `PanelModel.qml`, `AddEditForm.qml`, `SecretsView.qml`, `AgentSection.qml`) | none left |
 | U7 Different-uid policy daemon (confinement) | Later | research | hard | needs setuid or polkit brokering; large attack-surface change | state the same-uid limits plainly (already in README/ROADMAP) |
 | U8 Stable v1.0 API | Later | open | medium | needs third-party consumers | freeze `service/account` and IPC only |
 | U9 `agent lock` closes the native store, so a lock-driven revocation strands every unattended credential read | Now | open; workaround shipped outside this repo | medium | needs a decision: separate session revocation from store closure, or re-arm on session unlock | a session re-arm script outside this repo re-arms on screen unlock (8.5 s, non-interactive) |
-| U10 Multi-recipient native store + read-only replica | Now | this PR | medium | age already encrypts to N recipients; rotation is a re-encrypt under the presence gate | none — needed for a replica Mac copy encrypted to both machines |
+| U10 Multi-recipient native store + read-only replica | Now | done (#72, sync #75, menu bar #76) | medium | age already encrypts to N recipients; rotation is a re-encrypt under the presence gate | none — needed for a replica Mac copy encrypted to both machines |
 
 **U9 detail (found 2026-11-02, Kurultai MCP outage).** `omaseal agent lock` closes the native store, not just the agent session. With the session revoked, a credential listed `ALLOW` in the manifest still fails `code=locked`; after `omaseal agent unlock` the same read returns 0. Because `omaseal-lock-watch` fires `agent lock` on every screen lock, any unattended consumer — an agent's stdio MCP bridge, a daemon, a cron job — cannot read credentials after the user walks away, and the failure surfaces as a client timeout rather than a named error. Options, cheapest first: (a) `agent lock --session-only`, leaving the store open and keeping the policy gate as the boundary; (b) report store state separately from session state so callers can distinguish and re-arm; (c) keep the current behaviour and treat re-arming as the caller's job, which is what the workaround above does. Note that `agent lock` is also what the pre-suspend lock calls, so option (a) needs care on the suspend path.
 
-**U10 detail.** The native store encrypts every secret to the laptop identity *and* additional machine recipients (`omaseal recipients add age1example... --name replica`). Adding or removing a recipient re-encrypts the vault under the strict presence gate and is audit-logged. A `"replica": true` config (or `OMASEAL_REPLICA=1`) makes an instance read-only — the replica shape — so agents can `Get` from a synced `store.json` while the laptop is offline. The passphrase-wrapped identity on the primary is unchanged. Plan: `docs/plans/2026-11-12-001-feat-native-multi-recipient-replica-plan.md`. Sync of `store.json` and the menu-bar app are a separate unit.
+**U10 detail.** Shipped: the native store encrypts every secret to the laptop identity *and* additional machine recipients (`omaseal recipients add age1example... --name replica`). Adding or removing a recipient re-encrypts the vault under the strict presence gate and is audit-logged. A `"replica": true` config (or `OMASEAL_REPLICA=1`) makes an instance read-only — the replica shape — so agents can `Get` from a synced `store.json` while the laptop is offline. Laptop→Mini sync (#75) and the SwiftUI menu bar (#76) landed with it. Plan: `docs/plans/2026-11-12-001-feat-native-multi-recipient-replica-plan.md`. Open follow-ups outside this unit: macOS Keychain identity holder (#84, Luke-gated) and encrypted backup (#73, draft).
 
 Simplification found: the engine carries two stores (Secret Service and native) plus `keyringmigrate.go` and `backendmigrate.go`; once the native store is the default and migration is done for existing users, the Secret Service path is the delete candidate. Not before U4's outcome is known — and not before migration verifies parity: `migrateItems` today skips a source key the native store already lists without comparing values, so "done" must mean read-and-compared equality for every addressable source item, not just presence.
 
@@ -113,6 +113,24 @@ Simplification found: the engine carries two stores (Secret Service and native) 
   write (`omaseal ask-save`, MCP `omaseal_ask_save`)
 - [x] setec design-read (#52, #54) — notes on what the helper daemon should
   borrow, in `docs/decisions/setec-design-notes.md`
+
+## v0.5.0 — Native store, provider, macOS replica (release cut)
+
+Tag target: `v0.5.0` on `main` after CI green at HEAD (builds + tests amd64/arm64, `build-macos`). Compare: `v0.4.0...v0.5.0`.
+
+Shipped since `v0.4.0` (evidence = merged PRs on main):
+
+- [x] Native age-encrypted backend + migrate / key escaping / session hygiene (#38–#44)
+- [x] Marketplace revalidation against native backend (#45, #46)
+- [x] Secret Service provider daemon + suspend lock watch (#50, #66)
+- [x] Panel extraction, ask-save, rotation flags, cobra CLI (#51, #53, #55, #56)
+- [x] Multi-recipient store + read-only replica + laptop→Mini sync + menu bar (#72, #75, #76)
+- [x] Versioned secrets (append-only history + tombstones) (#67)
+- [x] Docs honesty: personal host/name scrub (#82, #83); macOS/replica README (#77)
+
+**Not in this tag (still open):** U9 session vs store lock (#68); AUR registration (U1); first-party Omarchy (U4); open PRs #84 (Keychain, Luke OK required) and #73 (backup, draft).
+
+**Install pin:** do not hand-edit `install.sh` checksums. After the GitHub Release publishes assets, merge the automated `bump-packaging` PR from `release.yml` (`bump.sh` also rewrites the README `VER=` example). U3 stays open until that PR merges.
 
 ## v0.6.0 — Marketplace stable
 

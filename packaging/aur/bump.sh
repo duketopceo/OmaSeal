@@ -5,8 +5,9 @@
 # release, rewrites pkgver/pkgrel and per-arch sums in both PKGBUILDs,
 # rewrites every pinned v<tag> literal in install.sh (the OMASEAL_VERSION
 # default and the embedded-checksum guard) plus both EXPECTED_SHA256
-# values, then regenerates both .SRCINFO files. Needs makepkg — run on
-# an Arch host or in the release.yml bump-packaging job.
+# values, rewrites the README.md VER= pin example, then regenerates both
+# .SRCINFO files. Needs makepkg — run on an Arch host or in the
+# release.yml bump-packaging job.
 #
 # Trust model: when the release ships sha256sums.txt.asc, the signature
 # is verified against OMASEAL_SIGNING_FINGERPRINT (keyserver overridable
@@ -129,9 +130,12 @@ sed -i \
 # Every v<old-tag> literal in install.sh — the OMASEAL_VERSION default AND
 # the `!= "vX.Y.Z"` embedded-checksum guard, which blanks EXPECTED_SHA256
 # on a mismatch. A missed guard silently disables embedded verification.
+# Also rewrite the manual VER= example in README.md so docs stay honest.
 # \b keeps a strict-prefix tag (v0.2.2 vs v0.2.20) from partial-rewriting.
+README_MD="$REPO_ROOT/README.md"
 OLD_RE="${OLD_TAG//./\\.}"
 sed -i "s/\\b${OLD_RE}\\b/${TAG}/g" "$INSTALL_SH"
+sed -i "s/\\b${OLD_RE}\\b/${TAG}/g" "$README_MD"
 
 # EXPECTED_SHA256 is per-arch inside a case block: x86_64 first, aarch64
 # second. Key on the case labels so order can't silently swap them.
@@ -160,6 +164,9 @@ awk -v x="$SUM_X86" -v a="$SUM_ARM" '
 stale=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$INSTALL_SH" | sort -u)
 [ "$stale" = "$TAG" ] \
   || die "version literal(s) other than ${TAG} remain in install.sh: ${stale}"
+# README pin example must move with install.sh (install-docs honesty).
+grep -qF "VER=${TAG}" "$README_MD" \
+  || die "README.md VER= pin not updated to ${TAG}"
 # Per-arm binding, not file-wide presence: each EXPECTED_SHA256 must sit under
 # its own case label (a label-swap or dead matcher would pass a bare grep).
 grep -A2 -E '^[[:space:]]*x86_64\)' "$INSTALL_SH" | grep -qF "EXPECTED_SHA256=\"${SUM_X86}\"" \
@@ -181,4 +188,5 @@ echo "Bumped ${OLD_TAG} -> ${TAG}:"
 echo "  packaging/aur/PKGBUILD      pkgver=${NEW_VER} + source sum"
 echo "  packaging/aur/PKGBUILD-bin  pkgver=${NEW_VER} + per-arch sums"
 echo "  install.sh                  version literals + EXPECTED_SHA256"
+echo "  README.md                   VER= pin example"
 echo "  .SRCINFO / omaseal-bin.SRCINFO regenerated"
