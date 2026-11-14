@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# omaseal-sync — push the native store.json to a read-only replica over SSH.
-# Laptop side only. Never copies identity files, the lock, or recipients.json.
+# omaseal-sync — push the native store.json to one or more read-only replicas over SSH.
+# Laptop (primary) side only. Never copies identity files, the lock, or recipients.json.
 set -euo pipefail
 
 usage() {
   cat <<'USAGE'
 Usage: omaseal-sync [--dry-run] [--help]
 
-Copy this machine's OmaSeal native store.json to a replica host over SSH
-(Tailscale by default). The copy is atomic: scp to a temp name, verify
-sha256 on the remote, then mv. Identity files are never copied.
+Copy this machine's OmaSeal native store.json to one or more replica hosts
+over SSH (Tailscale by default). The copy is atomic per host: scp to a temp
+name, verify sha256 on the remote, then mv. Identity files are never copied.
 
 Environment:
-  OMASEAL_STORE          Override the local store.json path
-  OMASEAL_REPLICA_HOST   Required. SSH host of the replica (for example replica-host)
-  OMASEAL_REPLICA_PATH   Remote store.json path. If unset, the remote is
-                         asked to resolve $XDG_STATE_HOME/omaseal/native/store.json
-                         the same way the engine does
-  OMASEAL_SSH            ssh binary (default: ssh)
-  OMASEAL_SCP            scp binary (default: scp)
+  OMASEAL_STORE              Override the local store.json path
+  OMASEAL_REPLICA_HOSTS      Comma- or whitespace-separated SSH hosts
+                             (for example "replica-b,replica-c"). Preferred
+                             for three-or-more device sync.
+  OMASEAL_REPLICA_HOST       Single SSH host. Used when HOSTS is unset
+                             (back-compat with the two-device setup).
+  OMASEAL_REPLICA_PATH       Remote store.json path for every host. If unset,
+                             each remote resolves
+                             $XDG_STATE_HOME/omaseal/native/store.json
+                             the same way the engine does
+  OMASEAL_SSH                ssh binary (default: ssh)
+  OMASEAL_SCP                scp binary (default: scp)
 
-The store must look multi-recipient: every item's ct, after base64 decode,
-must be an age v1 header with at least two recipient stanzas. That check
-does not decrypt. An empty store cannot be checked; the script warns and
-continues. See README.md.
+The store must look multi-recipient for the device count: every item's ct,
+after base64 decode, must be an age v1 header with at least (1 + number of
+replica hosts) recipient stanzas (primary identity + each sync target).
+That check does not decrypt. An empty store cannot be checked; the script
+warns and continues. See README.md.
 USAGE
 }
 
@@ -67,14 +73,31 @@ die() {
   exit 1
 }
 
-# Return 0 if every item is multi-recipient, 1 if not, 2 if undetectable
+# Parse replica hosts: HOSTS preferred, else single HOST. Prints one host per line.
+replica_hosts() {
+  local raw=""
+  if [ -n "${OMASEAL_REPLICA_HOSTS:-}" ]; then
+    raw="${OMASEAL_REPLICA_HOSTS}"
+  elif [ -n "${OMASEAL_REPLICA_HOST:-}" ]; then
+    raw="${OMASEAL_REPLICA_HOST}"
+  else
+    return 1
+  fi
+  # Split on commas and whitespace; drop empties.
+  printf '%s\n' "$raw" | tr ', \t' '\n\n\n' | sed '/^$/d'
+}
+
+# Return 0 if every item has at least min_stanzas, 1 if not, 2 if undetectable
 # (empty store or no items). Prints a one-line reason to stdout.
+# Args: store_path min_stanzas
 check_multi_recipient() {
   local store="$1"
-  python3 - "$store" <<'PY'
+  local min="$2"
+  python3 - "$store" "$min" <<'PY'
 import base64, json, sys
 
 path = sys.argv[1]
+min_stanzas = int(sys.argv[2])
 try:
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
@@ -128,7 +151,6 @@ def stanza_count(ct: str) -> int:
             n += 1
     return n
 
-short = 0
 for key, item in items.items():
     if not isinstance(item, dict):
         print(f"item {key!r} is not an object")
@@ -138,12 +160,16 @@ for key, item in items.items():
     except ValueError as e:
         print(f"item {key!r}: {e}")
         sys.exit(1)
-    if n < 2:
-        short += 1
-        print(f"item {key!r} has {n} age recipient stanza(s); need at least 2")
+    if n < min_stanzas:
+        print(
+            f"item {key!r} has {n} age recipient stanza(s); "
+            f"need at least {min_stanzas} (primary + each sync target)"
+        )
         sys.exit(1)
 
-print(f"{len(items)} item(s) each have at least two age recipient stanzas")
+print(
+    f"{len(items)} item(s) each have at least {min_stanzas} age recipient stanza(s)"
+)
 sys.exit(0)
 PY
 }
@@ -156,10 +182,26 @@ quote_remote() {
 
 SSH_BIN="${OMASEAL_SSH:-ssh}"
 SCP_BIN="${OMASEAL_SCP:-scp}"
-HOST="${OMASEAL_REPLICA_HOST:-}"
-if [ -z "$HOST" ]; then
-  die "OMASEAL_REPLICA_HOST is unset. Set it to the replica's SSH host (for example replica-host). There is no default."
+
+mapfile -t HOSTS < <(replica_hosts) || true
+if [ "${#HOSTS[@]}" -eq 0 ]; then
+  die "set OMASEAL_REPLICA_HOSTS (comma-separated) or OMASEAL_REPLICA_HOST to the replica SSH host(s). There is no default."
 fi
+
+# Deduplicate while preserving order (same host twice would double-push).
+declare -A SEEN_HOST=()
+UNIQUE_HOSTS=()
+for h in "${HOSTS[@]}"; do
+  if [ -n "${SEEN_HOST[$h]:-}" ]; then
+    continue
+  fi
+  SEEN_HOST[$h]=1
+  UNIQUE_HOSTS+=("$h")
+done
+HOSTS=("${UNIQUE_HOSTS[@]}")
+HOST_COUNT="${#HOSTS[@]}"
+# Primary identity + one stanza per replica host we push to.
+MIN_STANZAS=$((1 + HOST_COUNT))
 
 STORE="${OMASEAL_STORE:-}"
 if [ -z "$STORE" ]; then
@@ -181,7 +223,7 @@ if [ "$base" != "store.json" ]; then
 fi
 
 set +e
-check_msg="$(check_multi_recipient "$STORE")"
+check_msg="$(check_multi_recipient "$STORE" "$MIN_STANZAS")"
 check_rc=$?
 set -e
 case "$check_rc" in
@@ -192,7 +234,7 @@ case "$check_rc" in
     echo "omaseal-sync: warning: $check_msg" >&2
     ;;
   *)
-    die "store is not multi-recipient: $check_msg"
+    die "store is not multi-recipient for $HOST_COUNT replica host(s) (need ≥$MIN_STANZAS stanzas): $check_msg"
     ;;
 esac
 
@@ -216,71 +258,116 @@ scp_base() {
   "$SCP_BIN" -o BatchMode=yes -o ConnectTimeout=15 "$@"
 }
 
-REMOTE_PATH="${OMASEAL_REPLICA_PATH:-}"
-if [ -z "$REMOTE_PATH" ]; then
-  if [ "$DRY_RUN" -eq 1 ]; then
-    REMOTE_PATH="(default on $HOST: $remote_store_formula)"
-  else
-    REMOTE_PATH="$(ssh_base -- "$HOST" "printf '%s\\n' \"$remote_store_formula\"")" \
-      || die "failed to resolve remote store path on $HOST"
-    if [ -z "$REMOTE_PATH" ]; then
-      die "remote store path on $HOST was empty"
+# Resolve remote store.json path for one host. Prints the path.
+resolve_remote_path() {
+  local host="$1"
+  local remote_path="${OMASEAL_REPLICA_PATH:-}"
+  if [ -z "$remote_path" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf '%s\n' "(default on $host: $remote_store_formula)"
+      return 0
     fi
-    remote_base="$(basename -- "$REMOTE_PATH")"
-    if [ "$remote_base" != "store.json" ]; then
-      die "refusing remote path '$REMOTE_PATH'; it must be a store.json"
+    remote_path="$(ssh_base -- "$host" "printf '%s\\n' \"$remote_store_formula\"")" \
+      || die "failed to resolve remote store path on $host"
+    if [ -z "$remote_path" ]; then
+      die "remote store path on $host was empty"
     fi
   fi
-else
-  remote_base="$(basename -- "$REMOTE_PATH")"
+  local remote_base
+  remote_base="$(basename -- "$remote_path")"
   if [ "$remote_base" != "store.json" ]; then
-    die "refusing remote path '$REMOTE_PATH'; it must be a store.json"
+    die "refusing remote path '$remote_path'; it must be a store.json"
   fi
-fi
+  printf '%s\n' "$remote_path"
+}
+
+# Push store.json to one host. Returns 0 on success.
+push_one() {
+  local host="$1"
+  local remote_path="$2"
+
+  echo "omaseal-sync: remote $host:$remote_path"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+
+  local remote_dir tmp_name REMOTE_TMP q_tmp q_dest q_dir remote_hash
+  remote_dir="$(dirname -- "$remote_path")"
+  tmp_name="store.json.omaseal-sync.$$.tmp"
+  REMOTE_TMP="$remote_dir/$tmp_name"
+  q_tmp="$(quote_remote "$REMOTE_TMP")"
+  q_dest="$(quote_remote "$remote_path")"
+  q_dir="$(quote_remote "$remote_dir")"
+
+  # Make the destination directory if needed; never create identity files.
+  ssh_base -- "$host" "mkdir -p $q_dir && test -d $q_dir" \
+    || { echo "omaseal-sync: failed to ensure remote directory $remote_dir on $host" >&2; return 1; }
+
+  # scp the store only. Identity files in the same directory are not arguments.
+  if ! scp_base -- "$STORE" "$host:$REMOTE_TMP"; then
+    ssh_base -- "$host" "rm -f $q_tmp" >/dev/null 2>&1 || true
+    echo "omaseal-sync: scp to $host:$REMOTE_TMP failed" >&2
+    return 1
+  fi
+
+  remote_hash="$(
+    ssh_base -- "$host" "f=$q_tmp; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- \"\$f\"; else shasum -a 256 -- \"\$f\"; fi" \
+      | awk '{print $1}'
+  )" || {
+    ssh_base -- "$host" "rm -f $q_tmp" >/dev/null 2>&1 || true
+    echo "omaseal-sync: failed to hash remote temp file on $host" >&2
+    return 1
+  }
+
+  if [ "$remote_hash" != "$local_hash" ]; then
+    ssh_base -- "$host" "rm -f $q_tmp" >/dev/null 2>&1 || true
+    echo "omaseal-sync: checksum mismatch on $host: local $local_hash vs remote temp $remote_hash (left $remote_path unchanged)" >&2
+    return 1
+  fi
+
+  # Atomic replace on the remote, then lock down mode. Identity files are
+  # not touched. A failed mv leaves the previous store.json in place.
+  if ! ssh_base -- "$host" "mv -f $q_tmp $q_dest && chmod 600 $q_dest && test -f $q_dest"; then
+    ssh_base -- "$host" "rm -f $q_tmp" >/dev/null 2>&1 || true
+    echo "omaseal-sync: remote install of $remote_path on $host failed; previous file left in place if it existed" >&2
+    return 1
+  fi
+
+  echo "omaseal-sync: installed $host:$remote_path ($local_hash)"
+  return 0
+}
 
 echo "omaseal-sync: local  $STORE"
 echo "omaseal-sync: sha256 $local_hash"
-echo "omaseal-sync: remote $HOST:$REMOTE_PATH"
+echo "omaseal-sync: hosts  $HOST_COUNT (min stanzas $MIN_STANZAS)"
+
+failed=0
+ok=0
+declare -a REMOTE_PATHS=()
+for host in "${HOSTS[@]}"; do
+  path="$(resolve_remote_path "$host")" || exit 1
+  REMOTE_PATHS+=("$path")
+done
+
+i=0
+for host in "${HOSTS[@]}"; do
+  if push_one "$host" "${REMOTE_PATHS[$i]}"; then
+    ok=$((ok + 1))
+  else
+    failed=$((failed + 1))
+  fi
+  i=$((i + 1))
+done
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "omaseal-sync: dry-run; no files copied"
+  echo "omaseal-sync: dry-run; no files copied ($HOST_COUNT host(s))"
   exit 0
 fi
 
-remote_dir="$(dirname -- "$REMOTE_PATH")"
-tmp_name="store.json.omaseal-sync.$$.tmp"
-REMOTE_TMP="$remote_dir/$tmp_name"
-q_tmp="$(quote_remote "$REMOTE_TMP")"
-q_dest="$(quote_remote "$REMOTE_PATH")"
-q_dir="$(quote_remote "$remote_dir")"
-
-# Make the destination directory if needed; never create identity files.
-ssh_base -- "$HOST" "mkdir -p $q_dir && test -d $q_dir" \
-  || die "failed to ensure remote directory $remote_dir on $HOST"
-
-cleanup_tmp() {
-  ssh_base -- "$HOST" "rm -f $q_tmp" >/dev/null 2>&1 || true
-}
-trap cleanup_tmp EXIT
-
-# scp the store only. Identity files in the same directory are not arguments.
-scp_base -- "$STORE" "$HOST:$REMOTE_TMP" \
-  || die "scp to $HOST:$REMOTE_TMP failed"
-
-remote_hash="$(
-  ssh_base -- "$HOST" "f=$q_tmp; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- \"\$f\"; else shasum -a 256 -- \"\$f\"; fi" \
-    | awk '{print $1}'
-)" || die "failed to hash remote temp file"
-
-if [ "$remote_hash" != "$local_hash" ]; then
-  die "checksum mismatch: local $local_hash vs remote temp $remote_hash (left $REMOTE_PATH unchanged)"
+if [ "$failed" -ne 0 ]; then
+  echo "omaseal-sync: finished with errors: $ok ok, $failed failed" >&2
+  exit 1
 fi
 
-# Atomic replace on the remote, then lock down mode. Identity files are
-# not touched. A failed mv leaves the previous store.json in place.
-ssh_base -- "$HOST" "mv -f $q_tmp $q_dest && chmod 600 $q_dest && test -f $q_dest" \
-  || die "remote install of $REMOTE_PATH failed; previous file left in place if it existed"
-
-trap - EXIT
-
-echo "omaseal-sync: installed $HOST:$REMOTE_PATH ($local_hash)"
+echo "omaseal-sync: all $ok host(s) updated"

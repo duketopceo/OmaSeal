@@ -184,15 +184,15 @@ mini_id_hash="$(hash_of "$DST/identity.age")"
 
 export OMASEAL_STORE="$SRC/store.json"
 
-# 0. OMASEAL_REPLICA_HOST is required — there is no default host
+# 0. A replica host is required — there is no default host
 set +e
 host_out="$(
-  env -u OMASEAL_REPLICA_HOST "$SYNC" --dry-run 2>&1
+  env -u OMASEAL_REPLICA_HOST -u OMASEAL_REPLICA_HOSTS "$SYNC" --dry-run 2>&1
 )"
 host_rc=$?
 set -e
-assert_eq "unset OMASEAL_REPLICA_HOST exits 1" "$host_rc" "1"
-assert "unset OMASEAL_REPLICA_HOST names the variable"   grep -q "OMASEAL_REPLICA_HOST" <<<"$host_out"
+assert_eq "unset replica host exits 1" "$host_rc" "1"
+assert "unset replica host names OMASEAL_REPLICA_HOST" grep -q "OMASEAL_REPLICA_HOST" <<<"$host_out"
 
 # 1. dry-run does not change the destination or copy identities
 before_dst="$(hash_of "$DST/store.json")"
@@ -315,8 +315,153 @@ assert doc["error"]
 PY
 assert_eq "replica-check did not repair or replace a broken store" "$(hash_of "$DST/store.json")" "$broken_hash"
 
+# --- three-device path: primary + two replicas ---
+DST_B="$tmpdir/dst-b"
+DST_C="$tmpdir/dst-c"
+mkdir -p "$DST_B" "$DST_C"
+printf 'REPLICA-B-IDENTITY\n' > "$DST_B/identity.age"
+printf 'age1replica-b\n' > "$DST_B/identity.pub"
+printf 'REPLICA-C-IDENTITY\n' > "$DST_C/identity.age"
+printf 'age1replica-c\n' > "$DST_C/identity.pub"
+printf '{"items":{"old/b":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST_B/store.json"
+printf '{"items":{"old/c":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST_C/store.json"
+id_b_hash="$(hash_of "$DST_B/identity.age")"
+id_c_hash="$(hash_of "$DST_C/identity.age")"
+
+# Host-routed ssh/scp: formula resolve and file ops land under the mapped root.
+cat > "$BIN/ssh" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    --) shift; break ;;
+    -o|-l|-p|-F|-i|-w) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ "\$#" -lt 1 ]; then
+  echo "fake-ssh: missing host" >&2
+  exit 2
+fi
+host="\$1"
+shift
+case "\$host" in
+  replica-b) root="$DST_B" ;;
+  replica-c) root="$DST_C" ;;
+  replica-host) root="$DST" ;;
+  *) echo "fake-ssh: unknown host \$host" >&2; exit 2 ;;
+esac
+if [ "\$#" -eq 0 ]; then
+  echo "fake-ssh: missing command" >&2
+  exit 2
+fi
+# Path resolution only: the sync script asks for the remote formula via printf.
+# Do not match mkdir/mv paths that merely contain store.json.
+cmd="\$*"
+case "\$cmd" in
+  printf*'omaseal/native/store.json'*)
+    printf '%s\n' "\$root/store.json"
+    exit 0
+    ;;
+esac
+if [ -n "\${SHA256_LIE:-}" ]; then
+  liebin="\$(dirname -- "\$0")/lie"
+  mkdir -p "\$liebin"
+  if [ ! -x "\$liebin/sha256sum" ]; then
+    printf '%s\n' '#!/usr/bin/env bash' "echo \${SHA256_LIE}  \\"\\\$2\\"" > "\$liebin/sha256sum"
+    printf '%s\n' '#!/usr/bin/env bash' "echo \${SHA256_LIE}  \\"\\\$3\\"" > "\$liebin/shasum"
+    chmod +x "\$liebin/sha256sum" "\$liebin/shasum"
+  fi
+  PATH="\$liebin:\$PATH" eval "\$@"
+else
+  eval "\$@"
+fi
+SH
+cat > "$BIN/scp" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    -o|-P|-F|-i|-c|-l) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ "$#" -ne 2 ]; then
+  echo "fake-scp: expected src dest, got: $*" >&2
+  exit 2
+fi
+src=$1
+dest=$2
+dest="${dest#*:}"
+cp -- "$src" "$dest"
+SH
+chmod +x "$BIN/ssh" "$BIN/scp"
+
+# 8. three-stanza store → two hosts (primary + 2 replicas)
+make_store "$SRC/store.json" 3 2
+export OMASEAL_STORE="$SRC/store.json"
+unset OMASEAL_REPLICA_PATH || true
+export OMASEAL_REPLICA_HOSTS="replica-b, replica-c"
+unset OMASEAL_REPLICA_HOST || true
+
+set +e
+three_dry="$("$SYNC" --dry-run 2>&1)"
+three_dry_rc=$?
+set -e
+assert_eq "three-device dry-run exits 0" "$three_dry_rc" "0"
+assert "three-device dry-run mentions 2 hosts" grep -q "hosts  2" <<<"$three_dry"
+assert "three-device dry-run mentions min stanzas 3" grep -q "min stanzas 3" <<<"$three_dry"
+before_b="$(hash_of "$DST_B/store.json")"
+before_c="$(hash_of "$DST_C/store.json")"
+assert_eq "three-device dry-run leaves dst-b unchanged" "$(hash_of "$DST_B/store.json")" "$before_b"
+assert_eq "three-device dry-run leaves dst-c unchanged" "$(hash_of "$DST_C/store.json")" "$before_c"
+
+set +e
+"$SYNC" >/dev/null
+three_rc=$?
+set -e
+assert_eq "three-device sync exits 0" "$three_rc" "0"
+assert_eq "three-device: dst-b matches source" "$(hash_of "$DST_B/store.json")" "$(hash_of "$SRC/store.json")"
+assert_eq "three-device: dst-c matches source" "$(hash_of "$DST_C/store.json")" "$(hash_of "$SRC/store.json")"
+assert_eq "three-device: dst-b identity untouched" "$(hash_of "$DST_B/identity.age")" "$id_b_hash"
+assert_eq "three-device: dst-c identity untouched" "$(hash_of "$DST_C/identity.age")" "$id_c_hash"
+assert "three-device: recipients.json not on dst-b" \
+  bash -c '[ ! -f "'"$DST_B"'/recipients.json" ]'
+assert "three-device: recipients.json not on dst-c" \
+  bash -c '[ ! -f "'"$DST_C"'/recipients.json" ]'
+
+# 9. two-stanza store refused when syncing to two hosts (need ≥3)
+make_store "$SRC/store.json" 2 1
+keep_b="$(hash_of "$DST_B/store.json")"
+keep_c="$(hash_of "$DST_C/store.json")"
+set +e
+short_out="$("$SYNC" 2>&1)"
+short_rc=$?
+set -e
+assert "two-stanza vs two hosts exits non-zero" bash -c "[ $short_rc -ne 0 ]"
+assert "two-stanza vs two hosts names stanza need" \
+  output_has "$short_out" "need ≥3"
+assert_eq "two-stanza refuse leaves dst-b" "$(hash_of "$DST_B/store.json")" "$keep_b"
+assert_eq "two-stanza refuse leaves dst-c" "$(hash_of "$DST_C/store.json")" "$keep_c"
+
+# 10. OMASEAL_REPLICA_HOSTS back-compat: single host via HOSTS still works
+make_store "$SRC/store.json" 2 1
+export OMASEAL_REPLICA_HOSTS="replica-host"
+export OMASEAL_REPLICA_PATH="$DST/store.json"
+printf '{"items":{"keep/me":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST/store.json"
+set +e
+"$SYNC" >/dev/null
+hostsonly_rc=$?
+set -e
+assert_eq "HOSTS with one host exits 0" "$hostsonly_rc" "0"
+assert_eq "HOSTS with one host updates dest" "$(hash_of "$DST/store.json")" "$(hash_of "$SRC/store.json")"
+
 echo
 echo "passed: $passes  failed: $failures"
 if [ "$failures" -ne 0 ]; then
   exit 1
 fi
+
