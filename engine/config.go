@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -13,9 +14,12 @@ import (
 // and other local (non-agent-policy) settings. agent.json stays scoped to
 // agent policy; this file owns everything else.
 type omasealConfig struct {
-	// Backend selects the secret store: "secretservice" (default, gnome-
-	// keyring via D-Bus) or "native" (age-encrypted file store — see
-	// docs/design/native-store.md).
+	// Backend selects the secret store: "secretservice" (Linux default,
+	// gnome-keyring via D-Bus), "native" (age-encrypted file store —
+	// see docs/design/native-store.md; the default on macOS), or
+	// "keychain" (opt-in, macOS only: native store.json for items,
+	// login Keychain for the passphrase-wrapped age identity). Never
+	// the default. Ignored in replica mode — see selectStore.
 	Backend string `json:"backend"`
 	// Replica marks this instance as a read-only synced copy. Set, Delete,
 	// import, migrate, and recipient rotation refuse with errReplicaReadOnly.
@@ -45,7 +49,7 @@ func omasealConfigPath() string {
 }
 
 func loadConfig() (omasealConfig, error) {
-	cfg := omasealConfig{Backend: "secretservice"}
+	cfg := omasealConfig{Backend: defaultBackend()}
 	path := omasealConfigPath()
 	if path == "" {
 		return cfg, nil
@@ -63,7 +67,7 @@ func loadConfig() (omasealConfig, error) {
 		}
 	}
 	if cfg.Backend == "" {
-		cfg.Backend = "secretservice"
+		cfg.Backend = defaultBackend()
 	}
 	return cfg, nil
 }
@@ -76,7 +80,7 @@ func saveConfig(cfg omasealConfig) error {
 		return errors.New("no config directory")
 	}
 	if cfg.Backend == "" {
-		cfg.Backend = "secretservice"
+		cfg.Backend = defaultBackend()
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
@@ -99,21 +103,55 @@ func replicaFromEnv() bool {
 	}
 }
 
+// replicaEnabled is true when either the config flag or the env is set.
+func replicaEnabled(cfg omasealConfig) bool {
+	return cfg.Replica || replicaFromEnv()
+}
+
+// defaultBackend is the backend used when config omits or leaves
+// "backend" empty. Linux stays secretservice (existing installs,
+// gnome-keyring consumers). macOS has no Secret Service bus, so the
+// default is the native file store — never Keychain, which is opt-in.
+func defaultBackend() string {
+	if runtime.GOOS == "darwin" {
+		return "native"
+	}
+	return "secretservice"
+}
+
 // selectStore installs the configured backend as currentStore. Called once
 // at startup before command dispatch — every op lane (CLI, IPC, MCP,
 // providers) routes through the package dispatchers after this.
+//
+// Replica mode always gets the native file store, even if config says
+// keychain (or secretservice): the replica syncs store.json
+// and keeps its identity in identity.age. A Keychain config is ignored,
+// not a startup error, so a copied config cannot strand the replica.
 func selectStore() error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	switch cfg.Backend {
-	case "", "secretservice":
+	if replicaEnabled(cfg) {
+		currentStore = newNativeStore()
+		return nil
+	}
+	backend := cfg.Backend
+	if backend == "" {
+		backend = defaultBackend()
+	}
+	switch backend {
+	case "secretservice":
 		currentStore = ssStore{}
 	case "native":
 		currentStore = newNativeStore()
+	case "keychain":
+		if !keychainBackendSupported() {
+			return fmt.Errorf("backend %q is only available on macOS; use backend %q or omit the key (Linux default is secretservice)", backend, "native")
+		}
+		currentStore = newNativeStore()
 	default:
-		return fmt.Errorf("unknown backend %q in %s (want secretservice or native)", cfg.Backend, omasealConfigPath())
+		return fmt.Errorf("unknown backend %q in %s (want secretservice, native, or keychain)", backend, omasealConfigPath())
 	}
 	return nil
 }

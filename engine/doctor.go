@@ -166,8 +166,9 @@ func versionInfo() string {
 	return fmt.Sprintf("omaseal %s (%s) %s", version, commit, target())
 }
 
-// checkBackend reports the configured backend and, for native, whether the
-// store is initialized and a session window is live. Informational — an
+// checkBackend reports the configured backend and, for the native item
+// store (native, keychain, or any replica), whether the store is
+// initialized and a session window is live. Informational — an
 // uninitialized native store degrades to a warning, not a doctor failure.
 func checkBackend() checkResult {
 	cfg, err := loadConfig()
@@ -175,18 +176,47 @@ func checkBackend() checkResult {
 		return checkResult{name: "backend", ok: false, optional: true,
 			message: fmt.Sprintf("cannot read %s: %v", omasealConfigPath(), err)}
 	}
-	if cfg.Backend != "native" {
-		return checkResult{name: "backend", ok: true, optional: true,
-			message: "secretservice — gnome-keyring login collection"}
+	backend := cfg.Backend
+	if backend == "" {
+		backend = defaultBackend()
 	}
+	replica := replicaEnabled(cfg)
+	// Replica always uses the native file store — report that, and
+	// mention a Keychain (or other) config that was ignored.
+	if replica || backend == "native" || backend == "keychain" {
+		return checkNativeBackend(backend, replica)
+	}
+	return checkResult{name: "backend", ok: true, optional: true,
+		message: "secretservice — gnome-keyring login collection"}
+}
+
+func checkNativeBackend(backend string, replica bool) checkResult {
 	ns := newNativeStore()
-	if _, err := os.Stat(filepath.Join(ns.dir, nativeIdentityFile)); err != nil {
-		return checkResult{name: "backend", ok: false, optional: true,
-			message: "native — not initialized (run `omaseal migrate` or `omaseal get` in a terminal)"}
+	if _, err := ns.readIdentity(); err != nil {
+		kind := "native"
+		if !replica && backend == "keychain" {
+			kind = "keychain"
+		}
+		msg := kind + " — not initialized (run `omaseal migrate` or `omaseal get` in a terminal)"
+		if replica && backend == "keychain" {
+			msg += "; config backend=keychain ignored"
+		}
+		return checkResult{name: "backend", ok: false, optional: true, message: msg}
 	}
-	msg := "native — age-encrypted store"
-	if cfg.Replica || replicaFromEnv() {
-		msg += ", replica (read-only)"
+	var msg string
+	switch {
+	case replica:
+		msg = "native — age-encrypted store, replica (read-only)"
+		if backend == "keychain" {
+			msg += "; config backend=keychain ignored"
+		}
+	case backend == "keychain":
+		msg = "keychain — native store, age identity in login Keychain"
+		if _, err := os.Stat(filepath.Join(ns.dir, nativeIdentityFile)); err == nil {
+			msg += ", leftover identity.age on disk"
+		}
+	default:
+		msg = "native — age-encrypted store"
 	}
 	if err := ns.loadExtra(); err != nil {
 		msg += ", recipients unreadable"
@@ -218,11 +248,25 @@ func checkBackend() checkResult {
 	return checkResult{name: "backend", ok: true, optional: true, message: msg}
 }
 
+// usesNativeStore reports whether this instance stores items in the
+// age-encrypted file store — including the Keychain identity variant
+// and every replica (which forces the native file store).
+func usesNativeStore(cfg omasealConfig) bool {
+	if replicaEnabled(cfg) {
+		return true
+	}
+	backend := cfg.Backend
+	if backend == "" {
+		backend = defaultBackend()
+	}
+	return backend == "native" || backend == "keychain"
+}
+
 func checkSecretService() checkResult {
 	// On backend: native the daemon is optional infrastructure — needed only
 	// for `omaseal migrate` and the secretservice rollback, not for reads.
 	cfg, cfgErr := loadConfig()
-	nativeBackend := cfgErr == nil && cfg.Backend == "native"
+	nativeBackend := cfgErr == nil && usesNativeStore(cfg)
 	degraded := func(msg string) checkResult {
 		return checkResult{name: "secret-service", ok: !nativeBackend, optional: nativeBackend,
 			message: msg}
