@@ -17,7 +17,7 @@ type omasealConfig struct {
 	// Backend selects the secret store: "secretservice" (Linux default,
 	// gnome-keyring via D-Bus), "native" (age-encrypted file store —
 	// see docs/design/native-store.md; the default on macOS), or
-	// "keychain" (opt-in, macOS only: native store.json for items,
+	// "keychain" (opt-in, macOS and Windows: native store.json for items,
 	// login Keychain for the passphrase-wrapped age identity). Never
 	// the default. Ignored in replica mode — see selectStore.
 	Backend string `json:"backend"`
@@ -147,7 +147,7 @@ func selectStore() error {
 		currentStore = newNativeStore()
 	case "keychain":
 		if !keychainBackendSupported() {
-			return fmt.Errorf("backend %q is only available on macOS; use backend %q or omit the key (Linux default is secretservice)", backend, "native")
+			return fmt.Errorf("backend %q is not available on this platform; use backend %q or omit the key", backend, "native")
 		}
 		currentStore = newNativeStore()
 	default:

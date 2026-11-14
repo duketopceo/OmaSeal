@@ -1,10 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package main
 
-// systemKeyring is a refusing stub on non-darwin builds. selectStore
-// rejects backend: keychain on Linux before this is used; the stub
-// exists so the call compiles and a stray call fails closed.
+// systemKeyring is a refusing stub on builds without a system keyring the
+// identity holder can use. selectStore rejects backend: keychain on those
+// platforms before this is used; the stub exists so the call compiles and
+// a stray call fails closed.
 func systemKeyring() identityKeyring {
 	return unsupportedKeyring{}
 }
