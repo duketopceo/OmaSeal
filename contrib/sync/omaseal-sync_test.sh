@@ -129,13 +129,16 @@ export OMASEAL_REPLICA_HOST="replica-host"
 export OMASEAL_REPLICA_PATH="$DST/store.json"
 
 # Build a store.json whose ct values are base64(raw age v1) with N stanzas.
+# Args: out_path stanzas item_count [format]
+# format 1 (default): {"items":{key:{...}}} — legacy
+# format 2: {"format":2,"items":[{key,ct,...},...]} — engine marshalNativeDoc
 make_store() {
-  local out="$1" n="${2:-2}" items="${3:-1}"
-  python3 - "$out" "$n" "$items" <<'PY'
-import base64, json, sys
+  local out="$1" n="${2:-2}" items="${3:-1}" fmt="${4:-1}"
+  python3 - "$out" "$n" "$items" "$fmt" <<'PY'
+import base64, json, os, sys
 from pathlib import Path
 
-out, n, items = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+out, n, items, fmt = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 n = max(n, 0)
 
 def ct(stanzas: int) -> str:
@@ -147,15 +150,25 @@ def ct(stanzas: int) -> str:
     raw = "\n".join(lines).encode("ascii") + b"\n" + b"\x00fake"
     return base64.b64encode(raw).decode("ascii")
 
-doc = {"items": {}}
-for i in range(items):
-    doc["items"][f"svc{i}/acct"] = {
-        "ct": ct(n),
-        "created": 1,
-        "updated": 1,
-    }
+if fmt == 2:
+    recs = []
+    for i in range(items):
+        recs.append({
+            "key": f"svc{i}/acct",
+            "ct": ct(n),
+            "created": 1,
+            "updated": 1,
+        })
+    doc = {"format": 2, "items": recs}
+else:
+    doc = {"items": {}}
+    for i in range(items):
+        doc["items"][f"svc{i}/acct"] = {
+            "ct": ct(n),
+            "created": 1,
+            "updated": 1,
+        }
 out.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-import os
 os.chmod(out, 0o600)
 PY
 }
@@ -407,6 +420,8 @@ unset OMASEAL_REPLICA_PATH || true
 export OMASEAL_REPLICA_HOSTS="replica-b, replica-c"
 unset OMASEAL_REPLICA_HOST || true
 
+before_b="$(hash_of "$DST_B/store.json")"
+before_c="$(hash_of "$DST_C/store.json")"
 set +e
 three_dry="$("$SYNC" --dry-run 2>&1)"
 three_dry_rc=$?
@@ -414,8 +429,6 @@ set -e
 assert_eq "three-device dry-run exits 0" "$three_dry_rc" "0"
 assert "three-device dry-run mentions 2 hosts" grep -q "hosts  2" <<<"$three_dry"
 assert "three-device dry-run mentions min stanzas 3" grep -q "min stanzas 3" <<<"$three_dry"
-before_b="$(hash_of "$DST_B/store.json")"
-before_c="$(hash_of "$DST_C/store.json")"
 assert_eq "three-device dry-run leaves dst-b unchanged" "$(hash_of "$DST_B/store.json")" "$before_b"
 assert_eq "three-device dry-run leaves dst-c unchanged" "$(hash_of "$DST_C/store.json")" "$before_c"
 
@@ -459,9 +472,95 @@ set -e
 assert_eq "HOSTS with one host exits 0" "$hostsonly_rc" "0"
 assert_eq "HOSTS with one host updates dest" "$(hash_of "$DST/store.json")" "$(hash_of "$SRC/store.json")"
 
+# 11. Engine format-2 store (items array) syncs to two hosts
+make_store "$SRC/store.json" 3 2 2
+unset OMASEAL_REPLICA_PATH || true
+export OMASEAL_REPLICA_HOSTS="replica-b,replica-c"
+printf '{"items":{"old/b":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST_B/store.json"
+printf '{"items":{"old/c":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST_C/store.json"
+set +e
+"$SYNC" >/dev/null
+fmt2_rc=$?
+set -e
+assert_eq "format-2 three-device sync exits 0" "$fmt2_rc" "0"
+assert_eq "format-2: dst-b matches source" "$(hash_of "$DST_B/store.json")" "$(hash_of "$SRC/store.json")"
+assert_eq "format-2: dst-c matches source" "$(hash_of "$DST_C/store.json")" "$(hash_of "$SRC/store.json")"
+assert "format-2: dest is array items" \
+  python3 - "$DST_B/store.json" <<'PY'
+import json, sys
+from pathlib import Path
+doc = json.loads(Path(sys.argv[1]).read_text())
+assert doc.get("format") == 2
+assert isinstance(doc["items"], list) and len(doc["items"]) == 2
+PY
+
+# 12. Empty format-2 store warns and continues (exit 2 path → warning)
+printf '{"format":2,"items":[]}\n' > "$SRC/store.json"
+chmod 600 "$SRC/store.json"
+export OMASEAL_REPLICA_HOSTS="replica-host"
+export OMASEAL_REPLICA_PATH="$DST/store.json"
+printf '{"items":{"keep/me":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST/store.json"
+set +e
+empty_out="$("$SYNC" 2>&1)"
+empty_rc=$?
+set -e
+assert_eq "empty format-2 sync exits 0" "$empty_rc" "0"
+assert "empty format-2 warns undetectable" \
+  output_has "$empty_out" "multi-recipient cannot be detected"
+assert_eq "empty format-2 still installs" "$(hash_of "$DST/store.json")" "$(hash_of "$SRC/store.json")"
+
+# 13. One host path-resolve failure: other host still updated; overall exit 1
+make_store "$SRC/store.json" 3 1 2
+unset OMASEAL_REPLICA_PATH || true
+export OMASEAL_REPLICA_HOSTS="replica-dead,replica-c"
+# Fake ssh: replica-dead fails formula resolve; replica-c works.
+cat > "$BIN/ssh" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    --) shift; break ;;
+    -o|-l|-p|-F|-i|-w) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+host="\$1"; shift
+case "\$host" in
+  replica-dead)
+    echo "fake-ssh: replica-dead unreachable" >&2
+    exit 255
+    ;;
+  replica-c) root="$DST_C" ;;
+  *) echo "fake-ssh: unknown host \$host" >&2; exit 2 ;;
+esac
+cmd="\$*"
+case "\$cmd" in
+  printf*'omaseal/native/store.json'*)
+    printf '%s\n' "\$root/store.json"
+    exit 0
+    ;;
+esac
+eval "\$@"
+SH
+chmod +x "$BIN/ssh"
+printf '{"items":{"old/c":{"ct":"YQ==","created":0,"updated":0}}}\n' > "$DST_C/store.json"
+keep_c_before="$(hash_of "$DST_C/store.json")"
+set +e
+partial_out="$("$SYNC" 2>&1)"
+partial_rc=$?
+set -e
+assert "partial host failure exits non-zero" bash -c "[ $partial_rc -ne 0 ]"
+assert_eq "healthy replica still updated" "$(hash_of "$DST_C/store.json")" "$(hash_of "$SRC/store.json")"
+assert "partial failure mentions finished with errors" \
+  output_has "$partial_out" "finished with errors"
+# Sanity: we did change dst-c from the old keep value
+assert "dst-c changed from pre-sync" bash -c "[ \"$(hash_of "$DST_C/store.json")\" != \"$keep_c_before\" ]"
+
 echo
 echo "passed: $passes  failed: $failures"
 if [ "$failures" -ne 0 ]; then
   exit 1
 fi
+
 

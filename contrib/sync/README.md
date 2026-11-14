@@ -170,7 +170,10 @@ drop the replica as a recipient on the laptop (presence-gated, re-encrypts
 every item):
 
 ```sh
-omaseal recipients rm replica
+omaseal recipients rm replica-b
+omaseal recipients rm replica-c
+# or a single-host name from an older setup:
+# omaseal recipients rm replica
 ```
 
 To discard the replica copy only, delete `store.json` on the replica Mac.
