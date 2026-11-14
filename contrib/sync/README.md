@@ -1,14 +1,15 @@
 # OmaSeal replica sync
 
-One-way copy of the native store from the laptop (the only writer) to a
-read-only replica Mac over Tailscale SSH. Pair this with the
+One-way copy of the native store from the laptop (the only writer) to one
+or more read-only replica machines over Tailscale SSH. Pair this with the
 multi-recipient and replica mode work in pull request #72, and with the
-requirements and plan in pull request #74.
+requirements and plan in pull request #74. Three-device sync (primary + two
+replicas) is covered below and in
+`docs/plans/2026-11-14-0908-feat-omaseal-three-device-sync-plan.md`.
 
 Sync copies only `store.json`. It never copies `identity.age`,
 `identity.pub`, `store.lock`, `recipients.json`, or session files.
-Copying a laptop identity onto the replica would collapse the two keys
-into one.
+Copying a laptop identity onto a replica would collapse the keys into one.
 
 ## How the path is resolved
 
@@ -21,35 +22,58 @@ The engine roots the native store at `$XDG_STATE_HOME/omaseal/native`
 
 ## One-time key exchange
 
-The replica must be able to decrypt a copied `store.json`. That requires
-the laptop to encrypt every item to both keys before the first sync.
+Each replica must be able to decrypt a copied `store.json`. That requires
+the laptop to encrypt every item to the laptop key **and** every replica
+public key before the first sync.
 
-1. On the replica Mac, use a native backend in replica mode
+1. On each replica, use a native backend in replica mode
    (`"replica": true` in the OmaSeal config, or `OMASEAL_REPLICA=1`).
    First TTY use (`omaseal get` or `omaseal recipients local`) creates
    this machine's `identity.age` / `identity.pub`.
-2. On the replica Mac, print the public key:
+2. On each replica, print the public key:
 
    ```sh
    omaseal recipients local
    ```
 
-3. On the laptop, add that key (this is presence-gated and re-encrypts
-   every item; `allow_ungated` does not bypass it):
+3. On the laptop, add each key (presence-gated; re-encrypts every item;
+   `allow_ungated` does not bypass it). Use a distinct `--name` per device:
 
    ```sh
-   omaseal recipients add age1example... --name replica
+   omaseal recipients add age1example-b... --name replica-b
+   omaseal recipients add age1example-c... --name replica-c
    ```
 
-4. Confirm `omaseal recipients list` on the laptop shows both the
-   laptop key and `replica`. Then enable the units below.
+4. Confirm `omaseal recipients list` on the laptop shows the laptop key
+   plus every replica name. Then enable the units below.
+
+### Three devices (primary + two replicas)
+
+Device count is primary + N sync targets. For two replica hosts, every
+ciphertext must have at least three age recipient stanzas before
+`omaseal-sync` will copy.
+
+```sh
+# On primary after both recipients are added:
+omaseal recipients list
+
+# Push to both replicas in one run:
+export OMASEAL_REPLICA_HOSTS=replica-b,replica-c
+omaseal-sync --dry-run
+omaseal-sync
+```
+
+`OMASEAL_REPLICA_HOST` (singular) still works for a single replica.
+Prefer `OMASEAL_REPLICA_HOSTS` when syncing more than one.
 
 `omaseal-sync` refuses to copy a store whose items do not look
-multi-recipient. It base64-decodes each `ct` and counts age recipient
-stanzas (`-> …` lines in the header). It does not decrypt. An empty
-store has nothing to inspect; the script warns and continues. If the
-store has items with only one stanza, the copy is aborted and the
-replica is left unchanged.
+multi-recipient for the host count. It base64-decodes each `ct` and
+counts age recipient stanzas (`-> …` lines in the header). Minimum
+stanzas = `1 + number of replica hosts`. It does not decrypt. An empty
+store has nothing to inspect; the script warns and continues. If any
+item has too few stanzas, the copy is aborted for that run (already
+updated hosts are left as-is; failed hosts keep their previous
+`store.json`).
 
 ## Laptop setup (push)
 
@@ -65,19 +89,21 @@ replica is left unchanged.
       ~/.config/systemd/user/
    ```
 
-2. SSH to the replica must already work in batch mode over Tailscale
-   (no password prompt). Set `OMASEAL_REPLICA_HOST` to that host — there
-   is no default — in a systemd user drop-in, or in
-   `~/.config/environment.d/`:
+2. SSH to each replica must already work in batch mode over Tailscale
+   (no password prompt). Set `OMASEAL_REPLICA_HOSTS` (or singular
+   `OMASEAL_REPLICA_HOST`) — there is no default — in a systemd user
+   drop-in, or in `~/.config/environment.d/`:
 
    ```sh
-   export OMASEAL_REPLICA_HOST=replica-host
-   ssh -o BatchMode=yes "$OMASEAL_REPLICA_HOST" true
+   export OMASEAL_REPLICA_HOSTS=replica-b,replica-c
+   for h in ${OMASEAL_REPLICA_HOSTS//,/ }; do
+     ssh -o BatchMode=yes "$h" true
+   done
    ```
 
-   The default remote path is the engine path on that host; override
-   with `OMASEAL_REPLICA_PATH` only if the replica's state dir is
-   elsewhere. The path must still be a file named `store.json`.
+   The default remote path is the engine path on each host; override
+   with `OMASEAL_REPLICA_PATH` only if every replica's state dir shares
+   that path. The path must still be a file named `store.json`.
 
 3. If this machine's `XDG_STATE_HOME` is not `$HOME/.local/state`,
    edit the paths in `omaseal-sync.path` before enabling.
@@ -144,7 +170,10 @@ drop the replica as a recipient on the laptop (presence-gated, re-encrypts
 every item):
 
 ```sh
-omaseal recipients rm replica
+omaseal recipients rm replica-b
+omaseal recipients rm replica-c
+# or a single-host name from an older setup:
+# omaseal recipients rm replica
 ```
 
 To discard the replica copy only, delete `store.json` on the replica Mac.
@@ -155,8 +184,9 @@ Leave `identity.age` and `identity.pub` alone.
 | Variable | Role |
 | --- | --- |
 | `OMASEAL_STORE` | Local `store.json` path |
-| `OMASEAL_REPLICA_HOST` | Required SSH host of the replica (for example `replica-host`) |
-| `OMASEAL_REPLICA_PATH` | Remote `store.json` path |
+| `OMASEAL_REPLICA_HOSTS` | Comma/whitespace-separated SSH hosts (preferred for ≥2 replicas) |
+| `OMASEAL_REPLICA_HOST` | Single SSH host when `HOSTS` is unset |
+| `OMASEAL_REPLICA_PATH` | Remote `store.json` path (same on every host) |
 | `OMASEAL_REPLICA_STATUS` | Status sidecar path for the checker |
 | `OMASEAL_SSH` / `OMASEAL_SCP` | Override `ssh` / `scp` (used by tests) |
 
