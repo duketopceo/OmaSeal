@@ -73,8 +73,10 @@ before expecting `./install.sh` to fetch that tag:
 ```
 
 Manual equivalent — download the tarball and checksums for your
-architecture from the **same pin as `install.sh`** (or a tag you chose
-deliberately), then verify before installing:
+architecture from the **same pin as `install.sh`**. A different tag has
+no embedded digest in this script, so its checksum file comes only from
+that same release — confirm that checksum from a source you trust before
+installing:
 
 ```sh
 VER=v0.4.0   # keep in sync with install.sh OMASEAL_VERSION

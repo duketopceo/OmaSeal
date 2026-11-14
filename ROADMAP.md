@@ -8,7 +8,7 @@ Design direction: [DESIGN.md](DESIGN.md). Written directly rather than via `ce-p
 |---|---|---|---|---|---|
 | U1 AUR `omaseal-bin` (issue #12) | Now | blocked on registration | easy once open | AUR registration portal closed; human browser step | none; keep `install.sh` with pinned checksum |
 | U2 Replace emoji social card, refresh README header | Now | done in this PR (brand proposal) | easy | owner signs off the mark | keep `docs/assets/social.png` |
-| U3 Install docs versus releases: `install.sh` pin must match a published tag; after `v0.5.0` cut, merge the automated `bump-packaging` PR (and README pin literals) before treating `./install.sh` as Latest | Now | open until pin-bump merges | easy | none | keep installing the pinned tag deliberately |
+| U3 Install docs versus releases: `install.sh` pin must match a published tag; after `v0.5.0` cut, merge the automated `bump-packaging` PR (and README pin literals) before treating `./install.sh` as Latest | Now | open until pin-bump merges and README pin literals are updated | easy | none | keep installing the pinned tag deliberately |
 | U4 First-party Omarchy integration (`omarchy-secrets-*`, panel, menu) | Next | open | hard | depends on `omacom/omarchy-mac` maintainers accepting a PR | ship commands + menu only (the existing phased fallback) |
 | U5 BrowserOS resolves secret at request time | Next | deferred | medium | needs an `omarchy-browser` checkout | document the `omaseal run` pattern |
 | U6 Panel component extraction | Later | done (#51) | medium | `Panel.qml` was 1,268 lines; now 466 lines plus sibling files (`PanelJobs.qml`, `PanelModel.qml`, `AddEditForm.qml`, `SecretsView.qml`, `AgentSection.qml`) | none left |
@@ -130,7 +130,7 @@ Shipped since `v0.4.0` (evidence = merged PRs on main):
 
 **Not in this tag (still open):** U9 session vs store lock (#68); AUR registration (U1); first-party Omarchy (U4); open PRs #84 (Keychain, Luke OK required) and #73 (backup, draft).
 
-**Install pin:** do not hand-edit `install.sh` checksums. After the GitHub Release publishes assets, merge the automated `bump-packaging` PR from `release.yml`, then align README `VER=` / pin comments if the bump job did not rewrite them.
+**Install pin:** do not hand-edit `install.sh` checksums. After the GitHub Release publishes assets, merge the automated `bump-packaging` PR from `release.yml` (`bump.sh` also rewrites the README `VER=` example). U3 stays open until that PR merges.
 
 ## v0.6.0 — Marketplace stable
 
