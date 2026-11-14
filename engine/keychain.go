@@ -28,7 +28,7 @@ const (
 
 // errKeychainUnsupported is returned by systemKeyring on non-darwin
 // builds — selectStore should have refused backend: keychain first.
-var errKeychainUnsupported = errors.New("Keychain identity is only available on macOS")
+var errKeychainUnsupported = errors.New("keychain identity is not available on this platform")
 
 // identityHolder is the at-rest location of the passphrase-wrapped age
 // identity. The file holder writes identity.age; the Keychain holder

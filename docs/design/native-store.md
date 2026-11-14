@@ -306,6 +306,21 @@ If Keychain has no item and `identity.age` exists, the first Read
 promotes the file into Keychain and leaves the file in place. Writes
 go to Keychain only.
 
+## Windows Credential Manager identity (2026-11-14)
+
+The same opt-in shape on Windows (`backend: "keychain"`, never the
+default). go-keyring talks to Windows Credential Manager through
+win32 CredWrite/CredRead with no CGO, so cross-compilation from Linux
+still works. Credential Manager entries are per-user and DPAPI-protected
+at rest: unreadable to other local users, no passphrase to type.
+
+One honest difference from macOS: Credential Manager does not gate
+reads on Windows Hello the way the Keychain can on Touch ID. The
+protection here is per-user-at-rest, not per-use — the same trust
+level as the file holder minus the passphrase prompt. A Hello-gated
+variant can layer on later without changing the `identityHolder`
+seam. Replica mode ignores a Keychain config exactly as on macOS.
+
 Replica mode (`"replica": true` or `OMASEAL_REPLICA=1`) always uses the
 native file store and ignores a Keychain config. The replica syncs
 `store.json` and keeps its own `identity.age`. Putting secret items in
