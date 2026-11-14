@@ -62,19 +62,22 @@ not yet published to AUR.)
 ### From a release tarball (verified)
 
 `install.sh` pins an immutable release tag (`OMASEAL_VERSION`, default
-`v0.4.0`) and verifies the tarball against a checksum embedded in the
-script — it never follows `latest`:
+`v0.4.0` until the post-release pin-bump PR merges) and verifies the
+tarball against a checksum embedded in the script — it never follows
+`latest`. After a new GitHub Release, merge the automated packaging bump
+before expecting `./install.sh` to fetch that tag:
 
 ```sh
-./install.sh            # pinned v0.4.0, embedded sha256 verify
+./install.sh            # pinned tag + embedded sha256 verify
 ./install.sh --dry-run
 ```
 
 Manual equivalent — download the tarball and checksums for your
-architecture from the pinned tag, then verify before installing:
+architecture from the **same pin as `install.sh`** (or a tag you chose
+deliberately), then verify before installing:
 
 ```sh
-VER=v0.4.0
+VER=v0.4.0   # keep in sync with install.sh OMASEAL_VERSION
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
