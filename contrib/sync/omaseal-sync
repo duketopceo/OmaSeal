@@ -221,8 +221,27 @@ if [ -z "$REMOTE_PATH" ]; then
   if [ "$DRY_RUN" -eq 1 ]; then
     REMOTE_PATH="(default on $HOST: $remote_store_formula)"
   else
-    REMOTE_PATH="$(ssh_base -- "$HOST" "printf '%s\\n' \"$remote_store_formula\"")" \
-      || die "failed to resolve remote store path on $HOST"
+    # Ask the remote which shell it has before probing: a Windows OpenSSH
+    # server answers with cmd, where `printf` does not exist. The probe must
+    # run under the remote's own shell, so pass the formula unquoted and let
+    # cmd's %VAR% expansion do the substitution. POSIX remotes keep the
+    # sh -c form with the formula single-quoted for the remote shell.
+    remote_uname="$(ssh_base -- "$HOST" "uname 2>/dev/null || echo Windows_NT")" \
+      || die "failed to probe remote shell on $HOST"
+    case "$remote_uname" in
+      Windows*)
+        REMOTE_PATH="$(ssh_base -- "$HOST" "if defined XDG_STATE_HOME (echo %XDG_STATE_HOME%\\omaseal\\native\\store.json) else (echo %USERPROFILE%\\.local\\state\\omaseal\\native\\store.json)")" \
+          || die "failed to resolve remote store path on $HOST"
+        # cmd echoes a trailing space and CRLF; strip both.
+        REMOTE_PATH="${REMOTE_PATH%[[:space:]]}"
+        REMOTE_PATH="${REMOTE_PATH//$'\r'/}"
+        REMOTE_PATH="${REMOTE_PATH% }"
+        ;;
+      *)
+        REMOTE_PATH="$(ssh_base -- "$HOST" "printf '%s\\n' \"$remote_store_formula\"")" \
+          || die "failed to resolve remote store path on $HOST"
+        ;;
+    esac
     if [ -z "$REMOTE_PATH" ]; then
       die "remote store path on $HOST was empty"
     fi
