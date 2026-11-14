@@ -453,7 +453,7 @@ func checkPresenceGate() checkResult {
 	}
 	return checkResult{name: "presence-gate", ok: false, optional: true, message: "no user-presence mechanism for `omaseal agent unlock` — unlock will fail closed.\n" +
 		"  - Enroll a fingerprint (fprintd-enroll), or install pinentry/zenity for a GUI confirm dialog.\n" +
-		"  - Deliberate opt-out for headless machines: `omaseal agent mode ask --ungated`."}
+		"  - Headless machines: run `omaseal agent unlock` from an interactive session on the machine, or edit the agent policy file directly (`agent.json`) as the deliberate filesystem-level opt-out. `agent mode ask --ungated` does not work here: opting out of presence is itself a weakening change, so it goes through the same missing gate."}
 }
 
 func checkOnePassword() checkResult {
