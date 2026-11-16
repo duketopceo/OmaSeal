@@ -166,10 +166,23 @@ def stanza_count(ct: str) -> int:
             n += 1
     return n
 
+checked = 0
+short_history = 0
 for key, item in items.items():
     if not isinstance(item, dict):
         print(f"item {key!r} is not an object")
         sys.exit(1)
+    versions = item.get("versions") or []
+    if not isinstance(versions, list):
+        print(f"item {key!r}: versions is not an array")
+        sys.exit(1)
+    # Engine Purge keeps a ciphertext-free tombstone (tomb, empty ct, no
+    # versions) so the version number is never reused. Nothing to decrypt.
+    if item.get("tomb") is True and not item.get("ct"):
+        if any(isinstance(v, dict) and v.get("ct") for v in versions):
+            print(f"item {key!r} is a tombstone with history but no active ct")
+            sys.exit(1)
+        continue
     try:
         n = stanza_count(item.get("ct", ""))
     except ValueError as e:
@@ -181,10 +194,30 @@ for key, item in items.items():
             f"need at least {min_stanzas} (primary + each sync target)"
         )
         sys.exit(1)
+    checked += 1
+    # Recipient changes re-encrypt only the active ct, so retained history
+    # can lack replica stanzas. Replicas still read the active value; warn
+    # rather than block until the engine re-encrypts history on rotation.
+    for v in versions:
+        if not isinstance(v, dict) or not v.get("ct"):
+            continue
+        try:
+            if stanza_count(v["ct"]) < min_stanzas:
+                short_history += 1
+        except ValueError:
+            short_history += 1
 
-print(
-    f"{len(items)} item(s) each have at least {min_stanzas} age recipient stanza(s)"
-)
+if checked == 0:
+    print("store has only purged items; multi-recipient cannot be detected")
+    sys.exit(2)
+
+msg = f"{checked} item(s) each have at least {min_stanzas} age recipient stanza(s)"
+if short_history:
+    msg += (
+        f"; warning: {short_history} historical version(s) have fewer than "
+        f"{min_stanzas} stanza(s), so replicas cannot read that history"
+    )
+print(msg)
 sys.exit(0)
 PY
 }
@@ -402,7 +435,6 @@ done
 
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "omaseal-sync: dry-run; no files copied ($HOST_COUNT host(s))"
-  exit 0
 fi
 
 if [ "$failed" -ne 0 ]; then
@@ -410,4 +442,7 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
+if [ "$DRY_RUN" -eq 1 ]; then
+  exit 0
+fi
 echo "omaseal-sync: all $ok host(s) updated"

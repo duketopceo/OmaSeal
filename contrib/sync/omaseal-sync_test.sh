@@ -557,6 +557,56 @@ assert "partial failure mentions finished with errors" \
 # Sanity: we did change dst-c from the old keep value
 assert "dst-c changed from pre-sync" bash -c "[ \"$(hash_of "$DST_C/store.json")\" != \"$keep_c_before\" ]"
 
+# 14-15. format-2 purge tombstones and short history (engine Purge / rotateTo)
+# Args: out_path — live item: 3-stanza ct, 1-stanza history; purged item:
+# tomb, empty ct, no versions.
+make_versioned_store() {
+  python3 - "$1" <<'PY'
+import base64, json, os, sys
+from pathlib import Path
+
+def ct(stanzas):
+    lines = ["age-encryption.org/v1"]
+    for _ in range(stanzas):
+        lines += ["-> X25519 " + "A" * 43, "B" * 32]
+    lines.append("--- DUMMYMAC")
+    return base64.b64encode(("\n".join(lines) + "\n").encode() + b"\x00fake").decode()
+
+doc = {"format": 2, "items": [
+    {"key": "gone/acct", "ct": "", "created": 1, "updated": 2, "tomb": True, "last_v": 1},
+    {"key": "live/acct", "ct": ct(3), "created": 1, "updated": 2,
+     "versions": [{"v": 1, "ct": ct(1), "created": 1}, {"v": 2, "ct": ct(3), "created": 2}],
+     "last_v": 2},
+]}
+out = Path(sys.argv[1])
+out.write_text(json.dumps(doc) + "\n", encoding="utf-8")
+os.chmod(out, 0o600)
+PY
+}
+make_versioned_store "$SRC/store.json"
+unset OMASEAL_REPLICA_PATH || true
+# One host: min stanzas 2, so the 1-stanza history entry is short.
+export OMASEAL_REPLICA_HOSTS="replica-c"
+set +e
+purge_out="$("$SYNC" 2>&1)"
+purge_rc=$?
+set -e
+assert_eq "purged tombstone does not block sync" "$purge_rc" "0"
+assert_eq "purged-store sync installs" "$(hash_of "$DST_C/store.json")" "$(hash_of "$SRC/store.json")"
+assert "short history warns, does not block" \
+  output_has "$purge_out" "historical version(s) have fewer than"
+
+# 16. dry-run still exits non-zero when a host fails resolution
+make_store "$SRC/store.json" 2 1 2
+export OMASEAL_REPLICA_PATH="$DST_C/not-a-store.txt"
+set +e
+dry_fail_out="$("$SYNC" --dry-run 2>&1)"
+dry_fail_rc=$?
+set -e
+assert "dry-run with a failing host exits non-zero" bash -c "[ $dry_fail_rc -ne 0 ]"
+assert "dry-run failure names the bad path" output_has "$dry_fail_out" "must be a store.json"
+unset OMASEAL_REPLICA_PATH || true
+
 echo
 echo "passed: $passes  failed: $failures"
 if [ "$failures" -ne 0 ]; then
