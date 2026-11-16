@@ -283,10 +283,34 @@ resolve_remote_path() {
       printf '%s\n' "(default on $host: $remote_store_formula)"
       return 0
     fi
-    if ! remote_path="$(ssh_base -- "$host" "printf '%s\\n' \"$remote_store_formula\"")"; then
-      echo "omaseal-sync: failed to resolve remote store path on $host" >&2
+    # Ask the remote which shell it has before probing: a Windows OpenSSH
+    # server answers with cmd, where `printf` does not exist. The probe must
+    # run under the remote's own shell, so pass the formula unquoted and let
+    # cmd's %VAR% expansion do the substitution. POSIX remotes keep the
+    # sh -c form with the formula single-quoted for the remote shell.
+    local remote_uname
+    if ! remote_uname="$(ssh_base -- "$host" "uname 2>/dev/null || echo Windows_NT")"; then
+      echo "omaseal-sync: failed to probe remote shell on $host" >&2
       return 1
     fi
+    case "$remote_uname" in
+      Windows*)
+        if ! remote_path="$(ssh_base -- "$host" "if defined XDG_STATE_HOME (echo %XDG_STATE_HOME%\\omaseal\\native\\store.json) else (echo %USERPROFILE%\\.local\\state\\omaseal\\native\\store.json)")"; then
+          echo "omaseal-sync: failed to resolve remote store path on $host" >&2
+          return 1
+        fi
+        # cmd echoes a trailing space and CRLF; strip both.
+        remote_path="${remote_path%[[:space:]]}"
+        remote_path="${remote_path//$'\r'/}"
+        remote_path="${remote_path% }"
+        ;;
+      *)
+        if ! remote_path="$(ssh_base -- "$host" "printf '%s\\n' \"$remote_store_formula\"")"; then
+          echo "omaseal-sync: failed to resolve remote store path on $host" >&2
+          return 1
+        fi
+        ;;
+    esac
     if [ -z "$remote_path" ]; then
       echo "omaseal-sync: remote store path on $host was empty" >&2
       return 1

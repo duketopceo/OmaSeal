@@ -71,7 +71,10 @@ jobs:
 
   build-macos:
     # Mac client groundwork: the engine must keep compiling on macOS.
-    # Tests stay Linux-only until the Keychain backend lands.
+    # Keychain identity unit tests run on the Linux test jobs via a
+    # fake keyring. Darwin-tagged live Keychain tests are for a real
+    # Mac; this job stays vet + build because the rest of the suite
+    # assumes a Linux Secret Service session.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
