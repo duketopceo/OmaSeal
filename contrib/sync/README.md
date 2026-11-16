@@ -11,6 +11,15 @@ Sync copies only `store.json`. It never copies `identity.age`,
 `identity.pub`, `store.lock`, `recipients.json`, or session files.
 Copying a laptop identity onto a replica would collapse the keys into one.
 
+## Version compatibility
+
+Since v0.5.0 the engine writes store format 2 (`{"format":2,"items":[...]}`,
+with version history and tombstones). An omaseal built before v0.5.0 cannot
+read that file, and a replica fails its reads until it is upgraded. Upgrade
+every replica to v0.5.0 or newer before the first sync from a v0.5.0
+primary. The synced file stays the replica's native `store.json`; sync
+copies the bytes unchanged and does not convert formats.
+
 ## How the path is resolved
 
 The engine roots the native store at `$XDG_STATE_HOME/omaseal/native`
