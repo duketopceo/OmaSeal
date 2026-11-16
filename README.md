@@ -62,10 +62,9 @@ not yet published to AUR.)
 ### From a release tarball (verified)
 
 `install.sh` pins an immutable release tag (`OMASEAL_VERSION`, default
-`v0.4.0` until the post-release pin-bump PR merges) and verifies the
-tarball against a checksum embedded in the script — it never follows
-`latest`. After a new GitHub Release, merge the automated packaging bump
-before expecting `./install.sh` to fetch that tag:
+`v0.5.0`) and verifies the tarball against a checksum embedded in the
+script — it never follows `latest`. After a new GitHub Release, the pin
+moves only when the automated packaging bump PR merges:
 
 ```sh
 ./install.sh            # pinned tag + embedded sha256 verify
@@ -79,7 +78,7 @@ that same release — confirm that checksum from a source you trust before
 installing:
 
 ```sh
-VER=v0.4.0   # keep in sync with install.sh OMASEAL_VERSION
+VER=v0.5.0   # keep in sync with install.sh OMASEAL_VERSION
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  TAR=omaseal-linux-x86_64.tar.gz ;;
@@ -135,8 +134,16 @@ go build -o omaseal .
 install -m 755 omaseal ~/.local/bin/omaseal
 ```
 
-The native store (`{"backend": "native"}`) is the backend that supports
-multi-recipient encryption and replica mode.
+The native store (`{"backend": "native"}`) is the default on macOS and
+is the backend that supports multi-recipient encryption and replica
+mode. An opt-in `{"backend": "keychain"}` keeps items in that same
+`store.json` and holds only the passphrase-wrapped age identity in the
+system credential store — the login Keychain on macOS, Windows
+Credential Manager (DPAPI-protected, per user) on Windows. The backend
+is never the default. A replica
+(`"replica": true` or `OMASEAL_REPLICA=1`) always uses the native file
+store and ignores a Keychain config — the replica syncs `store.json`,
+and the replica's identity stays in `identity.age`.
 
 ### Menu bar app
 

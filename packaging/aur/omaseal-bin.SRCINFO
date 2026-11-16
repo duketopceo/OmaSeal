@@ -1,6 +1,6 @@
 pkgbase = omaseal-bin
 	pkgdesc = First-party Omarchy keyring manager (prebuilt binary)
-	pkgver = 0.4.0
+	pkgver = 0.5.0
 	pkgrel = 1
 	url = https://github.com/duketopceo/OmaSeal
 	install = omaseal-bin.install
@@ -13,9 +13,9 @@ pkgbase = omaseal-bin
 	optdepends = pinentry: GUI unlock prompt
 	provides = omaseal
 	conflicts = omaseal
-	source_x86_64 = omaseal-linux-x86_64-0.4.0.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v0.4.0/omaseal-linux-x86_64.tar.gz
-	sha256sums_x86_64 = f13ebeb996f8637a8cd55e300849e43e0008e6f2075298edf387aa8acb23f372
-	source_aarch64 = omaseal-linux-aarch64-0.4.0.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v0.4.0/omaseal-linux-aarch64.tar.gz
-	sha256sums_aarch64 = 9629b5ac287b3a5c2a092cd0881a7af5a26ce328a81893a02e6820d87f7cf1e6
+	source_x86_64 = omaseal-linux-x86_64-0.5.0.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v0.5.0/omaseal-linux-x86_64.tar.gz
+	sha256sums_x86_64 = c169eed802e417309df28a0273ca8219c233dd6adee9cb842434927af582d7f9
+	source_aarch64 = omaseal-linux-aarch64-0.5.0.tar.gz::https://github.com/duketopceo/OmaSeal/releases/download/v0.5.0/omaseal-linux-aarch64.tar.gz
+	sha256sums_aarch64 = 9dc66171223ce45e0e593cca597dc359a05725ba58437f9307fe84ce50cb8e63
 
 pkgname = omaseal-bin
