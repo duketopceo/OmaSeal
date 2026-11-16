@@ -195,9 +195,10 @@ for key, item in items.items():
         )
         sys.exit(1)
     checked += 1
-    # Recipient changes re-encrypt only the active ct, so retained history
-    # can lack replica stanzas. Replicas still read the active value; warn
-    # rather than block until the engine re-encrypts history on rotation.
+    # Stores rotated before engine history re-encrypt can leave retained
+    # versions[].ct short of replica stanzas. Replicas still read the
+    # active value; warn rather than block. Re-run recipients add/rm on
+    # a current engine to refresh history ciphertext.
     for v in versions:
         if not isinstance(v, dict) or not v.get("ct"):
             continue
