@@ -139,12 +139,47 @@ try:
 except (UnicodeDecodeError, json.JSONDecodeError) as e:
     print(f"store.json does not parse: {e}")
     sys.exit(1)
-if not isinstance(doc, dict) or not isinstance(doc.get("items"), dict):
+# Format 1: {"items":{key:{...}}}. Format 2 (engine since v0.5.0):
+# {"format":2,"items":[{"key":...,"ct":...,"versions":[...],"tomb":...}]}.
+# Keep in step with parseNativeDoc / nativeStoreFormat in engine/nativestore.go.
+SUPPORTED_FORMAT = 2
+if not isinstance(doc, dict):
     print("store.json is missing a top-level items object")
     sys.exit(1)
+fmt = doc.get("format", 1)
+if not isinstance(fmt, int) or isinstance(fmt, bool) or fmt < 1:
+    print(f"store.json has an invalid format field: {fmt!r}")
+    sys.exit(1)
+if fmt > SUPPORTED_FORMAT:
+    print(f"store.json format {fmt} is newer than this check supports (up to {SUPPORTED_FORMAT}); upgrade omaseal")
+    sys.exit(1)
+items = doc.get("items")
+if isinstance(items, dict):
+    records = list(items.values())
+elif isinstance(items, list):
+    records = items
+    for i, rec in enumerate(records):
+        if not isinstance(rec, dict):
+            print(f"store.json items[{i}] is not an object")
+            sys.exit(1)
+        if not isinstance(rec.get("key"), str) or not rec["key"]:
+            print(f"store.json items[{i}] is missing a string key")
+            sys.exit(1)
+else:
+    print("store.json is missing a top-level items object or array")
+    sys.exit(1)
+# Count live items the way `omaseal list` does: tombstoned (deleted or
+# purged) records are kept for history but are not secrets on this replica.
+live = 0
+for rec in records:
+    if not isinstance(rec, dict):
+        print("store.json has an item that is not an object")
+        sys.exit(1)
+    if rec.get("tomb") is not True:
+        live += 1
 digest = hashlib.sha256(raw).hexdigest()
 mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-print(f"ok\t{digest}\t{mtime}\t{len(doc['items'])}")
+print(f"ok\t{digest}\t{mtime}\t{live}")
 sys.exit(0)
 PY
 )"
