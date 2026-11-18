@@ -95,6 +95,78 @@ func TestAddRecipientBothIdentitiesDecrypt(t *testing.T) {
 	}
 }
 
+// T1b: recipient rotation re-encrypts retained Versions[].ct so a replica
+// can GetVersion historical values after sync (not only the active CT).
+// initNative seeds svc/acct; use a fresh key so history is only this test's Sets.
+func TestAddRecipientReencryptsVersions(t *testing.T) {
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	if err := s.Set("hist", "acct", "v1-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("hist", "acct", "v2-secret"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.addRecipient("replica", other.Recipient().String()); err != nil {
+		t.Fatalf("addRecipient: %v", err)
+	}
+	d, err := s.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := d.Items[nativeKey("hist", "acct")]
+	if len(it.Versions) < 2 {
+		t.Fatalf("want ≥2 versions, got %d", len(it.Versions))
+	}
+	for _, ver := range it.Versions {
+		if n := ageStanzaCount(t, ver.CT); n != 2 {
+			t.Fatalf("version v%d stanza count = %d, want 2", ver.V, n)
+		}
+	}
+	if got := decryptWithIdentity(t, it.Versions[0].CT, other, "hist", "acct"); got != "v1-secret" {
+		t.Fatalf("replica decrypt v1 = %q", got)
+	}
+	if got := decryptWithIdentity(t, it.Versions[1].CT, other, "hist", "acct"); got != "v2-secret" {
+		t.Fatalf("replica decrypt v2 = %q", got)
+	}
+	if got, err := s.GetVersion("hist", "acct", 1); err != nil || got != "v1-secret" {
+		t.Fatalf("primary GetVersion(1) = %q, %v", got, err)
+	}
+}
+
+// T1c: purged (ciphertext-free) records do not block recipient rotation.
+func TestAddRecipientSkipsPurged(t *testing.T) {
+	s, _ := nativeTestStore(t)
+	initNative(t, s, "test-pass")
+	if err := s.Set("purge", "keep", "alive"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("purge", "gone", "bye"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Purge("purge", "gone"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.addRecipient("replica", other.Recipient().String()); err != nil {
+		t.Fatalf("addRecipient with purged item: %v", err)
+	}
+	if got, err := s.Get("purge", "keep"); err != nil || got != "alive" {
+		t.Fatalf("Get keep = %q, %v", got, err)
+	}
+	ct := itemCT(t, s, "purge", "keep")
+	if n := ageStanzaCount(t, ct); n != 2 {
+		t.Fatalf("stanza count = %d, want 2", n)
+	}
+}
+
 // T2: a fresh Set after add is also decryptable by both identities,
 // including a Set performed while locked (I1, public-key path).
 func TestSetAfterAddRecipientUsesBothKeys(t *testing.T) {
