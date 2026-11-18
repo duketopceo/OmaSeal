@@ -37,9 +37,10 @@ git push
 
 1. Tag and push `vX.Y.Z` — `release.yml` builds both arches, publishes
    the release, then the `bump-packaging` job runs `bump.sh` and opens a
-   pin-bump PR automatically.
+   pin-bump PR automatically. `bump.sh` rewrites `install.sh`, both
+   PKGBUILDs, and the README `VER=` pin example.
 2. Review and merge that PR — check the pinned hashes against the
-   release assets.
+   release assets, and confirm README/`install.sh` both name the new tag.
 3. Sync the AUR clone and push:
 
    ```sh
