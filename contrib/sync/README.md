@@ -115,8 +115,11 @@ The launchd agent does not copy the store. It only parses the replica
 
 2. The agent runs at load and every 15 minutes. A successful status
    file includes `ok`, `last_sync` (mtime of `store.json`, UTC),
-   `checked_at`, `checksum`, and `item_count`. It never writes
-   `store.json` or identity files.
+   `checked_at`, `checksum`, and `item_count`. It reads store format 1
+   and format 2 (written since v0.5.0); `item_count` counts live items as
+   `omaseal list` does, so deleted and purged tombstones are excluded. A
+   store format newer than the script supports reports `ok: false`. It
+   never writes `store.json` or identity files.
 
 3. On the replica Mac, OmaSeal itself must stay in replica mode so a `Set` or
    migrate is refused.

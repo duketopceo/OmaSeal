@@ -315,6 +315,97 @@ assert doc["error"]
 PY
 assert_eq "replica-check did not repair or replace a broken store" "$(hash_of "$DST/store.json")" "$broken_hash"
 
+# 8-12. replica-check reads format 1 and format 2 (engine since v0.5.0),
+# counts live items the way `omaseal list` does, and fails closed on a
+# format newer than it supports. Fixture ct values are placeholders; the
+# check never decrypts.
+write_fixture() {
+  python3 - "$1" "$2" <<'PY'
+import json, os, sys
+from pathlib import Path
+kind = sys.argv[2]
+v = lambda n: {"v": n, "ct": "YQ==", "created": n}
+if kind == "f1":
+    doc = {"items": {"a/x": {"ct": "YQ==", "created": 1, "updated": 1},
+                     "b/x": {"ct": "YQ==", "created": 1, "updated": 1}}}
+elif kind == "f2":
+    doc = {"format": 2, "items": [
+        {"key": "a/x", "ct": "YQ==", "created": 1, "updated": 2, "versions": [v(1), v(2)], "last_v": 2},
+        {"key": "b/x", "ct": "YQ==", "created": 1, "updated": 1, "versions": [v(1)], "last_v": 1},
+        {"key": "c/x", "ct": "YQ==", "created": 1, "updated": 1, "versions": [v(1)], "last_v": 1}]}
+elif kind == "f2tomb":
+    doc = {"format": 2, "items": [
+        {"key": "live/x", "ct": "YQ==", "created": 1, "updated": 1, "versions": [v(1)], "last_v": 1},
+        {"key": "deleted/x", "ct": "YQ==", "created": 1, "updated": 3, "versions": [v(1), v(2)], "tomb": True, "last_v": 2},
+        {"key": "purged/x", "ct": "", "created": 1, "updated": 4, "tomb": True, "last_v": 3}]}
+elif kind == "f2empty":
+    doc = {"format": 2, "items": []}
+elif kind == "f3":
+    doc = {"format": 3, "items": []}
+elif kind == "f2badrec":
+    doc = {"format": 2, "items": [{"ct": "YQ=="}]}
+out = Path(sys.argv[1])
+out.write_text(json.dumps(doc) + "\n", encoding="utf-8")
+os.chmod(out, 0o600)
+PY
+}
+
+# Runs replica-check on a fixture. Sets rc_out / out_out; asserts the store
+# bytes are untouched.
+run_check_on() {
+  write_fixture "$DST/store.json" "$1"
+  local before
+  before="$(hash_of "$DST/store.json")"
+  set +e
+  out_out="$(OMASEAL_STORE="$DST/store.json" OMASEAL_REPLICA_STATUS="$STATUS" "$CHECK" 2>&1)"
+  rc_out=$?
+  set -e
+  assert_eq "replica-check ($1) did not write the store" "$(hash_of "$DST/store.json")" "$before"
+}
+
+status_is() {
+  python3 - "$STATUS" "$1" "$2" <<'PY'
+import json, sys
+from pathlib import Path
+doc = json.loads(Path(sys.argv[1]).read_text())
+want_ok = sys.argv[2] == "true"
+assert doc["ok"] is want_ok, doc
+if want_ok:
+    assert doc["error"] is None and doc["checksum"] and doc["last_sync"], doc
+    assert doc["item_count"] == int(sys.argv[3]), doc
+else:
+    assert doc["error"] and doc["item_count"] is None, doc
+PY
+}
+
+run_check_on f1
+assert_eq "replica-check format 1 exits 0" "$rc_out" "0"
+assert "replica-check format 1 status ok, 2 items" status_is true 2
+assert "replica-check format 1 prints items=2" output_has "$out_out" "ok items=2 "
+
+run_check_on f2
+assert_eq "replica-check format 2 exits 0" "$rc_out" "0"
+assert "replica-check format 2 status ok, 3 items" status_is true 3
+assert "replica-check format 2 prints items=3" output_has "$out_out" "ok items=3 "
+
+run_check_on f2tomb
+assert_eq "replica-check format 2 with tombstones exits 0" "$rc_out" "0"
+assert "replica-check counts live items only (deleted + purged excluded)" status_is true 1
+assert "replica-check tombstones prints items=1" output_has "$out_out" "ok items=1 "
+
+run_check_on f2empty
+assert_eq "replica-check empty format 2 exits 0" "$rc_out" "0"
+assert "replica-check empty format 2 status ok, 0 items" status_is true 0
+
+run_check_on f3
+assert "replica-check newer format exits non-zero" bash -c "[ $rc_out -ne 0 ]"
+assert "replica-check newer format records ok=false" status_is false 0
+assert "replica-check newer format says upgrade" output_has "$out_out" "upgrade omaseal"
+
+run_check_on f2badrec
+assert "replica-check format 2 record without key exits non-zero" bash -c "[ $rc_out -ne 0 ]"
+assert "replica-check record without key records ok=false" status_is false 0
+
 echo
 echo "passed: $passes  failed: $failures"
 if [ "$failures" -ne 0 ]; then
