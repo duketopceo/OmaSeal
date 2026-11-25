@@ -2,6 +2,7 @@
 
 build:
 	swift build --product OmaSealBar
+	swift build --product omaseal-presence
 
 test:
 	swift test

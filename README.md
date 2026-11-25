@@ -352,7 +352,11 @@ and `omaseal://` reference grammar every consumer should follow.
   logs, argv, or persists them in the panel state. The secret is held only by
   the active input field until `set` completes and is then cleared.
 - `list` returns metadata only.
-- `reveal` and `agent unlock` share a user-presence gate: fingerprint via
+- `reveal` and `agent unlock` share a user-presence gate: on macOS, Touch ID
+  or the login password via the `omaseal-presence` helper shipped with the
+  menu-bar app (see `macos/README.md`; SSH sessions cannot show the prompt,
+  so remote unlock uses `agent unlock --passphrase-stdin`; Macs can drop
+  `--ungated` with `omaseal agent mode ask`); on Linux, fingerprint via
   `fprintd` when a reader is enrolled, else a GUI confirm dialog (pinentry or
   zenity) when a graphical session and prompter exist. When neither is
   available the gate **fails closed** — `reveal`/`unlock` refuse until you

@@ -8,6 +8,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "OmaSealBar", targets: ["OmaSealBar"]),
+        .executable(name: "omaseal-presence", targets: ["omaseal-presence"]),
         .library(name: "OmaSealBarCore", targets: ["OmaSealBarCore"]),
     ],
     targets: [
@@ -19,6 +20,11 @@ let package = Package(
             name: "OmaSealBar",
             dependencies: ["OmaSealBarCore"],
             path: "Sources/OmaSealBar"
+        ),
+        .executableTarget(
+            name: "omaseal-presence",
+            dependencies: ["OmaSealBarCore"],
+            path: "Sources/omaseal-presence"
         ),
         .testTarget(
             name: "OmaSealBarTests",

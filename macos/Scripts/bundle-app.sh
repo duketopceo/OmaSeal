@@ -8,10 +8,17 @@ cd "$ROOT"
 
 CONFIG="${1:-release}"
 swift build -c "$CONFIG" --product OmaSealBar
+swift build -c "$CONFIG" --product omaseal-presence
 
 BIN="$(swift build -c "$CONFIG" --product OmaSealBar --show-bin-path)/OmaSealBar"
 if [ ! -x "$BIN" ]; then
   echo "bundle-app: built binary not found at $BIN" >&2
+  exit 1
+fi
+
+PRESENCE="$(swift build -c "$CONFIG" --product omaseal-presence --show-bin-path)/omaseal-presence"
+if [ ! -x "$PRESENCE" ]; then
+  echo "bundle-app: built helper not found at $PRESENCE" >&2
   exit 1
 fi
 
@@ -20,6 +27,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/OmaSealBar"
 chmod +x "$APP/Contents/MacOS/OmaSealBar"
+# User-presence helper (Touch ID / password). The omaseal CLI looks for it at
+# <app>/Contents/MacOS/omaseal-presence; it must stay owner-only writable.
+cp "$PRESENCE" "$APP/Contents/MacOS/omaseal-presence"
+chmod 755 "$APP/Contents/MacOS/omaseal-presence"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
