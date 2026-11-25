@@ -62,6 +62,9 @@ func newSvcTestDaemon(t *testing.T, bus *svcTestBus) *svcDaemon {
 	if err := svcClaimName(conn); err != nil {
 		t.Fatalf("daemon claim: %v", err)
 	}
+	// lockDaemonLocked wipes the agent session under agentRuntimeDir — never
+	// let a daemon test reach the real runtime dir.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	d := &svcDaemon{
 		conn:     conn,
 		store:    newNativeStoreAt(t.TempDir(), t.TempDir()),

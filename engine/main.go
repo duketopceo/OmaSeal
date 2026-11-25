@@ -248,7 +248,7 @@ func handleGet() {
 		printError("retrieving secret: ", err)
 		os.Exit(1)
 	}
-	WriteLog("get %s/%s", service, account)
+	WriteLog("get %s/%s caller=cli", service, account)
 	warnIfFlagged(service, account)
 	fmt.Print(secret)
 }
@@ -320,7 +320,7 @@ func handleGetVersion() {
 		printError("retrieving version: ", err)
 		os.Exit(1)
 	}
-	WriteLog("getver %s/%s v%d", service, account, n)
+	WriteLog("getver %s/%s v%d caller=cli", service, account, n)
 	fmt.Print(secret)
 }
 
@@ -540,7 +540,7 @@ func handleReveal() {
 		printError("getting secret: ", err)
 		os.Exit(1)
 	}
-	WriteLog("reveal %s/%s", service, account)
+	WriteLog("reveal %s/%s caller=cli", service, account)
 	warnIfFlagged(service, account)
 	fmt.Print(secret)
 }
@@ -570,7 +570,7 @@ func handleResolve() {
 		printError("resolving secret: ", err)
 		os.Exit(1)
 	}
-	WriteLog("resolve %s/%s", service, account)
+	WriteLog("resolve %s/%s caller=cli", service, account)
 	warnIfFlagged(service, account)
 	fmt.Print(secret)
 }

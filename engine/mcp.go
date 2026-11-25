@@ -375,7 +375,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
-		WriteLog("access %s/%s", service, account)
+		WriteLog("access %s/%s caller=mcp", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 		if w := rotationWarning(service, account); w != "" {
 			r.Content = append(r.Content, map[string]any{"type": "text", "text": w})
@@ -400,7 +400,7 @@ func callMCPTool(req mcpToolCall) *mcpResponse {
 		if err != nil {
 			return toolErrorResp(req, err)
 		}
-		WriteLog("access %s/%s", service, account)
+		WriteLog("access %s/%s caller=mcp", service, account)
 		r.Content = append(r.Content, map[string]any{"type": "text", "text": v})
 		if w := rotationWarning(service, account); w != "" {
 			r.Content = append(r.Content, map[string]any{"type": "text", "text": w})

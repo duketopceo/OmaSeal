@@ -103,7 +103,7 @@ func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, 
 		if err != nil {
 			return fail(err, helpFromError(err))
 		}
-		WriteLog("access %s/%s", service, account)
+		WriteLog("access %s/%s caller=ipc", service, account)
 		resp.Secret = secret
 
 	case "set":
@@ -191,7 +191,7 @@ func ipcDispatch(method string, jsonArgs string, stdin io.Reader) (ipcResponse, 
 		if err != nil {
 			return fail(err, helpFromError(err))
 		}
-		WriteLog("access %s/%s", service, account)
+		WriteLog("access %s/%s caller=ipc", service, account)
 		resp.Secret = secret
 
 	default:
