@@ -59,6 +59,10 @@ func writeSessionExpiryAt(t *testing.T, expiry time.Time) {
 	if err := os.WriteFile(agentSessionPath(), []byte(sessionExpiryText(expiry)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A real unlock records its start; keep-alive refuses to renew without it.
+	if err := writeSessionStart(agentRuntimeDir(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func mcpCall(name string, args map[string]any) *mcpResponse {

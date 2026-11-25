@@ -326,3 +326,43 @@ native file store and ignores a Keychain config. The replica syncs
 `store.json` and keeps its own `identity.age`. Putting secret items in
 Keychain is out of scope: it would break that sync contract, and
 go-keyring has no List API.
+
+## Unlock window, hard cap, and one lock (2026-11-25)
+
+The native tmpfs session (`native-session.{age,json}`) and the agent session
+(`$XDG_RUNTIME_DIR/omaseal/session`) used to expire on different clocks (a
+fixed 15 minutes versus `session_minutes`), so agents could hold an active
+session against a locked store, and `agent lock` left the store readable.
+They are now one window.
+
+**One window.** Every unlock path computes the expiry once
+(`unlockExpiryAt`: now + `session_minutes`, 15 minutes if unset) and hands
+the same instant to both sessions: the `ensureIdentity` prompt,
+`agent unlock` (presence plus prompt, and `--passphrase-stdin`), and the
+provider daemon's prompt unlock (memory-only; it mints no files). An unlock is
+a fresh presence proof, so it replaces any older agent session, even a longer
+one.
+
+**Keep-alive and the hard cap.** With `keep_alive`, an authorized agent call
+slides both expiries to now + `session_minutes`, but never past
+`unlock start + max_unlock_hours`. The start is recorded in
+`$XDG_RUNTIME_DIR/omaseal/session-start` (unix seconds, 0600, non-secret) when
+an unlock mints a session. `max_unlock_hours` in `agent.json` accepts 1..24;
+absent or invalid means 16. Renewal rewrites `native-session.json`
+atomically with the same key. It only touches a native session that exists and
+is unexpired, never creates or revives one, and never shortens one. A session
+with no start record (minted before this change) is not renewed at all, so it
+ends at its existing expiry.
+
+**One lock.** `omaseal agent lock` and the logind suspend/session-lock relock
+(`svclock.go`) wipe everything: the in-memory identity, the native session
+pair, the agent session, `session-start`, and (for the daemon) the
+`unlock-epoch` marker. Both succeed when files are already gone. A long-lived
+process (MCP server, provider daemon) that holds the identity from a tmpfs
+session re-checks the session file on each access (`ensureIdentity`) and drops
+the identity when the file is gone or expired. A prompt-derived identity in the
+daemon is governed by its own marker and TTL, not by session files.
+
+**Audit.** Every logged secret read carries `caller=cli|mcp|ipc`, for example
+`access svc/acct caller=mcp`. The caller tag sits before the chain hash;
+`omaseal stats` ignores it.

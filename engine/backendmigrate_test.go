@@ -51,7 +51,7 @@ func TestMigrateCopiesAll(t *testing.T) {
 		},
 		vals: map[string]string{
 			"openrouter/default": "sk-or-1",
-			"sudo/tester":          "hunter2",
+			"sudo/tester":        "hunter2",
 			"foreign/key":        "ext-val",
 		},
 	}

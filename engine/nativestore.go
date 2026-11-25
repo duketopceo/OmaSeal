@@ -50,10 +50,15 @@ type nativeStore struct {
 	identityEnc []byte                             // passphrase-wrapped identity blob
 	prompt      func(label string) (string, error) // nil → never prompt
 	now         func() time.Time
-	sessionTTL  time.Duration
-	replica     bool             // read-only synced copy — Set/Delete/rotate refuse
-	extra       []namedRecipient // committed additional recipients; Set encrypts to these
-	ids         identityHolder   // at-rest wrapped identity; file or Keychain
+	// sessionIdent is the identity pointer that came from (or was written to)
+	// the tmpfs session. A held identity equal to it is session-backed and is
+	// dropped when the session files vanish or expire; any other held identity
+	// (the provider daemon's prompt-derived unlock) is governed by its own
+	// marker/TTL and never touched here.
+	sessionIdent atomic.Pointer[age.X25519Identity]
+	replica      bool             // read-only synced copy — Set/Delete/rotate refuse
+	extra        []namedRecipient // committed additional recipients; Set encrypts to these
+	ids          identityHolder   // at-rest wrapped identity; file or Keychain
 }
 
 var _ Store = (*nativeStore)(nil)
@@ -187,7 +192,6 @@ func newNativeStoreAt(dir, runtimeDir string) *nativeStore {
 		runtimeDir: runtimeDir,
 		prompt:     nativePassphrasePromptTTY,
 		now:        func() time.Time { return time.Now().UTC() },
-		sessionTTL: defaultNativeTTL,
 		ids:        fileIdentityHolder{dir: dir},
 	}
 }
@@ -504,6 +508,21 @@ func (s *nativeStore) unlockIdentity(passphrase string, expires time.Time) error
 	return s.seedSession(expires)
 }
 
+// sessionLive reports whether the tmpfs session file exists and is
+// unexpired. It reads only the non-secret JSON header's expiry; key material
+// stays untouched.
+func (s *nativeStore) sessionLive() bool {
+	raw, err := os.ReadFile(filepath.Join(s.runtimeDir, nativeSessJSONFile))
+	if err != nil {
+		return false
+	}
+	var sess nativeSession
+	if json.Unmarshal(raw, &sess) != nil {
+		return false
+	}
+	return s.now().Unix() <= sess.Expires
+}
+
 // unwrapIdentity is unlockIdentity minus the tmpfs session seed — the
 // provider daemon's prompt-derived unlock stops here, holding identity in
 // memory only so file-derived vs prompt-derived provenance stays
@@ -554,8 +573,15 @@ func (s *nativeStore) unwrapIdentityPass(passphrase string) (*age.X25519Identity
 // ensureIdentity resolves the decryption identity: memory → tmpfs session →
 // TTY prompt → locked error. Never prompts for agents/non-TTY callers.
 func (s *nativeStore) ensureIdentity() error {
-	if s.identity.Load() != nil {
-		return nil
+	if cur := s.identity.Load(); cur != nil {
+		// A long-lived process (MCP server, daemon) must not outlive a lock
+		// done elsewhere: a session-backed identity is only valid while its
+		// session files are. Checked per access.
+		if cur != s.sessionIdent.Load() || s.sessionLive() {
+			return nil
+		}
+		s.identity.CompareAndSwap(cur, nil)
+		s.sessionIdent.Store(nil)
 	}
 	if err := s.loadSession(); err == nil {
 		return nil
@@ -563,8 +589,10 @@ func (s *nativeStore) ensureIdentity() error {
 	if s.prompt != nil {
 		pass, err := s.prompt("OmaSeal passphrase")
 		if err == nil && pass != "" {
-			if uerr := s.unlockIdentity(pass, s.now().Add(s.sessionTTL)); uerr == nil {
-				mintAgentSessionIfAsk()
+			// One computed expiry for both the native and agent windows.
+			exp := unlockExpiryAt(s.now())
+			if uerr := s.unlockIdentity(pass, exp); uerr == nil {
+				mintAgentSessionIfAsk(exp)
 				return nil
 			} else {
 				return uerr
@@ -595,6 +623,11 @@ func (s *nativeStore) seedSession(expires time.Time) error {
 	if err := w.Close(); err != nil {
 		return keyringError(err)
 	}
+	// Record when this unlock began (non-secret) before the session exists,
+	// so keep-alive never sees a session without its start.
+	if err := writeSessionStart(s.runtimeDir, s.now()); err != nil {
+		return keyringError(err)
+	}
 	sess := nativeSession{
 		Key:     eph.String(),
 		Expires: expires.Unix(),
@@ -609,7 +642,40 @@ func (s *nativeStore) seedSession(expires time.Time) error {
 	if err := atomicWriteFile(filepath.Join(s.runtimeDir, nativeSessJSONFile), raw, 0600); err != nil {
 		return keyringError(err)
 	}
-	return atomicWriteFile(filepath.Join(s.runtimeDir, nativeSessAgeFile), buf.Bytes(), 0600)
+	if err := atomicWriteFile(filepath.Join(s.runtimeDir, nativeSessAgeFile), buf.Bytes(), 0600); err != nil {
+		return keyringError(err)
+	}
+	s.sessionIdent.Store(s.identity.Load())
+	return nil
+}
+
+// renewNativeSessionExpiry slides the native session's expiry to expiry,
+// keeping the same key, via an atomic 0600 rewrite. It only acts on a session
+// that exists and is unexpired at now — it never creates or revives one — and
+// never moves the expiry earlier: the shared instant the caller computed is
+// always >= the current one, and an earlier value is ignored.
+func renewNativeSessionExpiry(dir string, expiry, now time.Time) error {
+	path := filepath.Join(dir, nativeSessJSONFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var sess nativeSession
+	if err := json.Unmarshal(raw, &sess); err != nil {
+		return err
+	}
+	if now.Unix() > sess.Expires {
+		return errNativeLocked
+	}
+	if expiry.Unix() <= sess.Expires {
+		return nil
+	}
+	sess.Expires = expiry.Unix()
+	out, err := json.Marshal(sess)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, out, 0600)
 }
 
 // loadSession unwraps the tmpfs session identity if present and unexpired.
@@ -653,6 +719,7 @@ func (s *nativeStore) loadSession() error {
 		return err
 	}
 	s.identity.Store(id)
+	s.sessionIdent.Store(id)
 	return nil
 }
 
@@ -660,10 +727,23 @@ func (s *nativeStore) loadSession() error {
 // failures so callers cannot mistake retained key material for scrubbed
 // material. Missing files are not errors.
 func (s *nativeStore) unlinkSessionFiles() error {
+	return wipeNativeSessionFiles(s.runtimeDir)
+}
+
+func wipeNativeSessionFiles(dir string) error {
 	return errors.Join(
-		removeIfExists(filepath.Join(s.runtimeDir, nativeSessJSONFile)),
-		removeIfExists(filepath.Join(s.runtimeDir, nativeSessAgeFile)),
+		removeIfExists(filepath.Join(dir, nativeSessJSONFile)),
+		removeIfExists(filepath.Join(dir, nativeSessAgeFile)),
 	)
+}
+
+// wipeSession is the full lock for the native backend: drop the in-memory
+// identity, remove the tmpfs session pair and the unlock-start record.
+// Succeeds when the files are already gone.
+func (s *nativeStore) wipeSession() error {
+	s.identity.Store(nil)
+	s.sessionIdent.Store(nil)
+	return errors.Join(s.unlinkSessionFiles(), removeIfExists(sessionStartPath(s.runtimeDir)))
 }
 
 func removeIfExists(path string) error {
@@ -677,8 +757,7 @@ func removeIfExists(path string) error {
 // clearNativeSession removes the tmpfs session identity — called by
 // `agent lock` so locking the agent also drops the unwrapped key path.
 func (s *nativeStore) clearNativeSession() error {
-	s.identity.Store(nil)
-	return s.unlinkSessionFiles()
+	return s.wipeSession()
 }
 
 // --- init / file layer -----------------------------------------------------
@@ -795,7 +874,7 @@ func (s *nativeStore) initFresh() error {
 	s.identity.Store(id)
 	s.identityEnc = wrapped
 	s.pub = id.Recipient()
-	return s.seedSession(s.now().Add(s.sessionTTL))
+	return s.seedSession(unlockExpiryAt(s.now()))
 }
 
 func (s *nativeStore) loadPub() error {

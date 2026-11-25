@@ -497,8 +497,11 @@ func TestStorePromptUnlockSkipsAgentSessionInLockMode(t *testing.T) {
 	}
 }
 
-// An existing agent session that outlives the new window must not shrink.
-func TestStorePromptUnlockNeverShrinksSession(t *testing.T) {
+// An unlock is a fresh presence proof: it replaces any existing agent session
+// (even a longer one) so both windows end at the same instant. Deliberate
+// change from the old never-shrink rule, which let the agent window outlive
+// the native one.
+func TestStorePromptUnlockReplacesExistingSession(t *testing.T) {
 	setupAgentEnv(t)
 	askPolicy(t, false)
 	s, _ := nativeTestStore(t)
@@ -512,7 +515,11 @@ func TestStorePromptUnlockNeverShrinksSession(t *testing.T) {
 	if _, err := s.Get("svc", "acct"); err != nil {
 		t.Fatalf("store unlock: %v", err)
 	}
-	if exp, _ := readSessionExpiry(); exp.Unix() < long.Unix() {
-		t.Fatalf("mint shrank existing session: %v < %v", exp, long)
+	exp, _ := readSessionExpiry()
+	if exp.Unix() >= long.Unix() {
+		t.Fatalf("unlock kept the stale long session: %v", exp)
+	}
+	if nat := nativeSessionExpiry(t, s.runtimeDir); nat != exp.Unix() {
+		t.Fatalf("native %d != agent %d", nat, exp.Unix())
 	}
 }

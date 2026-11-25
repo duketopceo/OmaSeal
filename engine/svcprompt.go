@@ -197,10 +197,7 @@ func (d *svcDaemon) unlockViaPrompt(ctx context.Context, exe string) error {
 	if err != nil {
 		return err
 	}
-	expiry := d.now().Add(defaultNativeTTL)
-	if p, perr := loadAgentPolicy(); perr == nil && p.SessionMinutes > 0 {
-		expiry = d.now().Add(time.Duration(p.SessionMinutes) * time.Minute)
-	}
+	expiry := unlockExpiryAt(d.now()) // same window rule + hard cap as the CLI paths
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if ctx.Err() != nil {
@@ -240,13 +237,17 @@ func (d *svcDaemon) lockDaemonLocked() {
 			p.cancel()
 		}
 	}
-	d.store.identity.Store(nil)
 	d.promptIdentity = false
-	if err := d.store.unlinkSessionFiles(); err != nil {
+	if err := d.store.wipeSession(); err != nil {
 		WriteLog("provider: native session unlink: %v", err)
 	}
 	if err := os.Remove(svcUnlockEpochPath()); err != nil && !os.IsNotExist(err) {
 		WriteLog("provider: unlock-epoch marker remove: %v", err)
+	}
+	// One lock: an agent session must not outlive the store it unlocks, or
+	// agents see an active session and hit `store locked`.
+	if err := wipeAgentSession(); err != nil {
+		WriteLog("provider: agent session wipe: %v", err)
 	}
 	d.emitPropsChanged(svcCollectionPath(), "org.freedesktop.Secret.Collection",
 		map[string]dbus.Variant{"Locked": dbus.MakeVariant(true)})

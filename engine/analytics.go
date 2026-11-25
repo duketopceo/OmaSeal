@@ -18,7 +18,7 @@ import (
 // Every successful secret read is counted: `get`, `reveal`, and `resolve`
 // are logged by their CLI handlers, while MCP/IPC read paths emit an
 // explicit `access` line so agent traffic is tallied too.
-var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+?)(?:\s+chain=[0-9a-f]{64})?\s*$`)
+var accessLogRe = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:get|reveal|resolve|access)\s+(.+?)(?:\s+caller=[a-z]+)?(?:\s+chain=[0-9a-f]{64})?\s*$`)
 
 // opTelemetryRe matches the structured failure lines emitted by logOpResult.
 // Only failures are logged — successes already have stats lines — so every

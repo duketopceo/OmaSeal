@@ -18,7 +18,19 @@ const (
 	agentConfigDirName = "omaseal"
 	agentPolicyFile    = "agent.json"
 	agentSessionFile   = "session"
+	// agentSessionStartFile records when the current unlock began (unix
+	// seconds, non-secret, 0600) so keep-alive can enforce the hard cap.
+	agentSessionStartFile = "session-start"
+
+	// defaultMaxUnlockWindow is the hard ceiling on one unlock: neither the
+	// agent nor the native session may be slid past unlock start + this.
+	defaultMaxUnlockWindow = 16 * time.Hour
+	minMaxUnlockHours      = 1
+	maxMaxUnlockHours      = 24
 )
+
+// agentNow is the clock for session minting and renewal; tests inject it.
+var agentNow = func() time.Time { return time.Now().UTC() }
 
 // AgentPolicy is the user-controlled gate for agent/MCP access.
 // mode:
@@ -42,10 +54,14 @@ const (
 // `omaseal agent mode ask --ungated` and cleared by any other `agent mode`
 // invocation, so it is never on silently.
 type AgentPolicy struct {
-	Mode           string   `json:"mode"`
-	SessionMinutes int      `json:"session_minutes"`
-	KeepAlive      bool     `json:"keep_alive,omitempty"`
-	AllowUngated   bool     `json:"allow_ungated,omitempty"`
+	Mode           string `json:"mode"`
+	SessionMinutes int    `json:"session_minutes"`
+	KeepAlive      bool   `json:"keep_alive,omitempty"`
+	AllowUngated   bool   `json:"allow_ungated,omitempty"`
+	// MaxUnlockHours is the hard cap on one unlock window, keep-alive
+	// included. Valid range 1..24; anything else (or absent) means the
+	// 16h default. See maxUnlockWindow.
+	MaxUnlockHours int      `json:"max_unlock_hours,omitempty"`
 	PrimaryAgent   string   `json:"primary_agent,omitempty"`
 	Agents         []string `json:"agents,omitempty"`
 }
@@ -101,7 +117,73 @@ func loadAgentPolicy() (AgentPolicy, error) {
 	if p.SessionMinutes <= 0 {
 		p.SessionMinutes = defaultAgentPolicy().SessionMinutes
 	}
+	if !validMaxUnlockHours(p.MaxUnlockHours) {
+		p.MaxUnlockHours = 0 // invalid -> default (16h)
+	}
 	return p, nil
+}
+
+func validMaxUnlockHours(h int) bool {
+	return h >= minMaxUnlockHours && h <= maxMaxUnlockHours
+}
+
+// maxUnlockWindow is the effective hard cap for one unlock.
+func (p AgentPolicy) maxUnlockWindow() time.Duration {
+	if validMaxUnlockHours(p.MaxUnlockHours) {
+		return time.Duration(p.MaxUnlockHours) * time.Hour
+	}
+	return defaultMaxUnlockWindow
+}
+
+// sessionWindow is the policy's unlock window; 15 minutes when unset.
+func (p AgentPolicy) sessionWindow() time.Duration {
+	if p.SessionMinutes <= 0 {
+		return defaultNativeTTL
+	}
+	return time.Duration(p.SessionMinutes) * time.Minute
+}
+
+// unlockExpiryAt computes THE expiry for an unlock that begins at now: now +
+// SessionMinutes (15m fallback), clamped to now + the hard cap. Every unlock
+// path computes it once and hands the same instant to the native session and
+// the agent session, so the two windows can never drift apart.
+func unlockExpiryAt(now time.Time) time.Time {
+	p, _ := loadAgentPolicy() // defaults on any error
+	window := p.sessionWindow()
+	if p.Mode == "lock" {
+		// Agents are refused in lock mode, so a long window would only keep
+		// key material on tmpfs with no one to serve: stay at the short TTL.
+		window = defaultNativeTTL
+	}
+	exp := now.Add(window)
+	if limit := now.Add(p.maxUnlockWindow()); exp.After(limit) {
+		exp = limit
+	}
+	return exp
+}
+
+func sessionStartPath(dir string) string {
+	return filepath.Join(dir, agentSessionStartFile)
+}
+
+// writeSessionStart records the unlock start time under dir (0600).
+func writeSessionStart(dir string, start time.Time) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return atomicWriteFile(sessionStartPath(dir), []byte(strconv.FormatInt(start.Unix(), 10)), 0o600)
+}
+
+func readSessionStart(dir string) (time.Time, bool) {
+	data, err := os.ReadFile(sessionStartPath(dir))
+	if err != nil {
+		return time.Time{}, false
+	}
+	ts, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || ts <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(ts, 0).UTC(), true
 }
 
 func saveAgentPolicy(p AgentPolicy) error {
@@ -149,7 +231,12 @@ func agentSessionPath() string {
 	return filepath.Join(agentRuntimeDir(), agentSessionFile)
 }
 
+// writeSessionExpiry mints the agent session. It is only called by unlock
+// paths, so it also records the unlock start that bounds keep-alive.
 func writeSessionExpiry(expiry time.Time) error {
+	if err := writeSessionStart(agentRuntimeDir(), agentNow()); err != nil {
+		return err
+	}
 	path := agentSessionPath()
 	return writeFileMode(path, []byte(sessionExpiryText(expiry)), 0600)
 }
@@ -159,14 +246,12 @@ func writeSessionExpiry(expiry time.Time) error {
 // correct passphrase is the same presence proof UnlockAgent relies on, so
 // ask-mode callers get one unlock for the store and the agent window alike.
 // Mode "lock" still denies agents; mode "open" needs no session. Never
-// shrinks an existing session that already outlives the new window.
-func mintAgentSessionIfAsk() {
+// replaces any existing session: an unlock is a fresh presence proof, and the
+// agent expiry must equal the native expiry the caller just seeded (expiry is
+// computed once by the caller via unlockExpiryAt).
+func mintAgentSessionIfAsk(expiry time.Time) {
 	p, err := loadAgentPolicy()
 	if err != nil || p.Mode != "ask" {
-		return
-	}
-	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
-	if cur, ok := readSessionExpiry(); ok && cur.After(expiry) {
 		return
 	}
 	if err := writeSessionExpiry(expiry); err != nil {
@@ -175,7 +260,7 @@ func mintAgentSessionIfAsk() {
 	}
 	// The unlock also armed same-UID agents — say so on stderr (stdout can
 	// carry a secret) so the grant is never silent.
-	fmt.Fprintf(os.Stderr, "omaseal: store unlock armed the agent session for %dm — `omaseal agent lock` revokes\n", p.SessionMinutes)
+	fmt.Fprintf(os.Stderr, "omaseal: store unlock armed the agent session until %s — `omaseal agent lock` revokes\n", expiry.Local().Format("15:04"))
 }
 
 // renewSessionExpiry updates an existing session file in place. Unlike
@@ -213,14 +298,33 @@ func readSessionExpiry() (time.Time, bool) {
 	return time.Unix(ts, 0).UTC(), true
 }
 
+// wipeAgentSession removes the agent session expiry and the unlock-start
+// record from the agent runtime dir. Missing files are fine.
+func wipeAgentSession() error {
+	return errors.Join(removeIfExists(agentSessionPath()), removeIfExists(sessionStartPath(agentRuntimeDir())))
+}
+
 func clearAgentSession() error {
 	var nerr error
+	dirs := []string{agentRuntimeDir()}
 	if ns, ok := currentStore.(*nativeStore); ok {
 		nerr = ns.clearNativeSession()
+		if ns.runtimeDir != dirs[0] {
+			dirs = append(dirs, ns.runtimeDir)
+		}
+	} else {
+		// No native store in this process (keyring backend, or a CLI that
+		// never selected one): still wipe session files a native unlock may
+		// have left in the runtime dir.
+		nerr = wipeNativeSessionFiles(dirs[0])
+	}
+	errs := []error{nerr, wipeAgentSession(), removeIfExists(svcUnlockEpochPath())}
+	for _, d := range dirs {
+		errs = append(errs, removeIfExists(sessionStartPath(d)))
 	}
 	// The unlock-epoch marker is how a running provider daemon revokes a
 	// prompt-derived in-memory unlock — agent lock must reach it too.
-	return errors.Join(nerr, removeIfExists(agentSessionPath()), removeIfExists(svcUnlockEpochPath()))
+	return errors.Join(errs...)
 }
 
 // AgentMode returns the current mode for use in status/CLI output.
@@ -255,13 +359,40 @@ func CheckAgentOperation(op string) error {
 // With keep-alive on, each authorized check slides the window forward.
 func agentSessionActive(p AgentPolicy) bool {
 	expiry, ok := readSessionExpiry()
-	if !ok || !time.Now().UTC().Before(expiry) {
+	if !ok || !agentNow().Before(expiry) {
 		return false
 	}
 	if p.KeepAlive {
-		_ = renewSessionExpiry(time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute))
+		renewUnlockWindow(p, expiry)
 	}
 	return true
+}
+
+// renewUnlockWindow slides the agent expiry and, when a live native session
+// exists, the native session expiry to the SAME new instant: now +
+// SessionMinutes, clamped to unlock start + the hard cap. Without a recorded
+// start (a session minted before the cap existed) it renews nothing — the
+// conservative choice. It never creates a session of either kind and never
+// shortens one.
+func renewUnlockWindow(p AgentPolicy, current time.Time) {
+	dir := agentRuntimeDir()
+	if ns, ok := currentStore.(*nativeStore); ok {
+		dir = ns.runtimeDir
+	}
+	now := agentNow()
+	start, ok := readSessionStart(agentRuntimeDir())
+	if !ok {
+		return
+	}
+	next := now.Add(p.sessionWindow())
+	if limit := start.Add(p.maxUnlockWindow()); next.After(limit) {
+		next = limit
+	}
+	if !next.After(current) {
+		return // already at (or past) the cap
+	}
+	_ = renewSessionExpiry(next)
+	_ = renewNativeSessionExpiry(dir, next, now)
 }
 
 // SetAgentMode changes the persistent agent policy, preserving keep-alive,
@@ -395,7 +526,7 @@ func UnlockAgent(passphraseStdin bool) error {
 		if pass == "" {
 			return errors.New("empty passphrase on stdin")
 		}
-		expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
+		expiry := unlockExpiryAt(agentNow())
 		if err := ns.unlockIdentity(pass, expiry); err != nil {
 			WriteLog("presence: passphrase unlock failed (stdin)")
 			return fmt.Errorf("native store unlock: %w", err)
@@ -407,7 +538,7 @@ func UnlockAgent(passphraseStdin bool) error {
 			return err
 		}
 		WriteLog("presence: passphrase-verified agent unlock (stdin)")
-		fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), p.SessionMinutes)
+		fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), int(expiry.Sub(agentNow()).Round(time.Minute)/time.Minute))
 		fmt.Println("Native store unlocked for the same window.")
 		return nil
 	}
@@ -416,11 +547,11 @@ func UnlockAgent(passphraseStdin bool) error {
 		return fmt.Errorf("agent unlock denied: %w", err)
 	}
 
-	expiry := time.Now().UTC().Add(time.Duration(p.SessionMinutes) * time.Minute)
+	expiry := unlockExpiryAt(agentNow())
 	if err := writeSessionExpiry(expiry); err != nil {
 		return err
 	}
-	fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), p.SessionMinutes)
+	fmt.Printf("Agent access unlocked until %s (%d minutes).\n", expiry.Format(time.RFC3339), int(expiry.Sub(agentNow()).Round(time.Minute)/time.Minute))
 
 	// Native backend: the agent session alone doesn't give agents a
 	// decryption path — seed the tmpfs session identity under the same

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -162,7 +163,12 @@ func (d *svcDaemon) relockForSuspend(reason string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.store.identity.Load() == nil && !d.promptIdentity {
-		return // already locked — no work, no log noise
+		// Daemon holds nothing, but a CLI-seeded session may sit on tmpfs for
+		// another process to read across the sleep boundary: wipe it too.
+		if err := errors.Join(d.store.wipeSession(), wipeAgentSession()); err != nil {
+			WriteLog("provider: session wipe on %s: %v", reason, err)
+		}
+		return
 	}
 	WriteLog("provider: %s — relocking vault", reason)
 	d.lockDaemonLocked()
