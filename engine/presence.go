@@ -18,6 +18,10 @@ var errPresenceDenied = errors.New("user presence not confirmed")
 // headless machine can still change policy.
 var errNoPresenceMechanism = errors.New("no user-presence mechanism available")
 
+// errMacPresenceUnavailable: the macOS helper could not ask (missing, unsafe,
+// no GUI session, timed out). The chain falls through to the next mechanism.
+var errMacPresenceUnavailable = errors.New("macos presence helper unavailable")
+
 // Test seams — mirrors the pinentryCandidatePaths/zenityCandidatePaths stub
 // pattern in guiprompt.go so unit tests can drive every chain step without
 // D-Bus services or spawned dialogs.
@@ -25,6 +29,12 @@ var (
 	fprintdUsableFunc      = fprintdUsable
 	fprintdVerifyFunc      = FprintdVerify
 	guiPresenceConfirmFunc = guiPresenceConfirm
+
+	// macosPresenceFunc is the macOS Touch ID / password step. Non-darwin
+	// builds keep this default (always unavailable); presence_darwin.go swaps
+	// in the real helper runner.
+	macosPresenceFunc     = func(context.Context, string) error { return errMacPresenceUnavailable }
+	macosHelperUsableFunc = func() bool { return false }
 )
 
 // runPresenceChain asks the local user to confirm reason through the first
@@ -39,6 +49,19 @@ var (
 // chain (re-prompting elsewhere invites click-fatigue bypass). Only
 // mechanism-unavailable errors fall through to the next step.
 func runPresenceChain(ctx context.Context, reason string) error {
+	// macOS: Touch ID / login password through the omaseal-presence helper.
+	// Tried first; only "unavailable" falls through to the steps below.
+	switch err := macosPresenceFunc(ctx, reason); {
+	case err == nil:
+		WriteLog("presence: macOS local authentication confirmed %s", reason)
+		return nil
+	case errors.Is(err, errPresenceDenied):
+		WriteLog("presence: macOS local authentication declined for %s", reason)
+		return fmt.Errorf("%w: macOS authentication declined or failed", errPresenceDenied)
+	default:
+		// unavailable: fall through
+	}
+
 	if fprintdUsableFunc(ctx) {
 		if err := fprintdVerifyFunc(ctx, reason); err != nil {
 			WriteLog("presence: fingerprint failed for %s: %v", reason, err)
@@ -97,6 +120,9 @@ func requirePresenceStrict(ctx context.Context, reason, hint string) error {
 // fprintdUsableFunc probe so status paths probe once. "none" means unlock
 // fails closed unless the policy opted out.
 func presenceMechanism(ctx context.Context, p AgentPolicy, fprintdUsableNow bool) string {
+	if macosHelperUsableFunc() {
+		return "macos-local-auth"
+	}
 	if fprintdUsableNow {
 		return "fprintd"
 	}

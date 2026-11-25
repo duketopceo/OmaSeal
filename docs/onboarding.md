@@ -19,7 +19,7 @@ This checks:
   `secretservice`, informational on `native` — still needed for
   `omaseal migrate` and rollback)
 - `fprintd` for biometric `reveal`
-- the presence gate behind `agent unlock`/`reveal` — fingerprint, GUI
+- the presence gate behind `agent unlock`/`reveal` — macOS Touch ID helper, fingerprint, GUI
   confirm, deliberate `allow_ungated`, or fail-closed `none`
 - `op` (1Password) and `bw` (Bitwarden) CLI availability
 - a graphical prompter (GUI pinentry or zenity) for `resolve` without a TTY

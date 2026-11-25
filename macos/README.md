@@ -65,3 +65,38 @@ does not appear in the Dock. Open it with:
 ```sh
 open dist/OmaSealBar.app
 ```
+
+## User-presence helper (`omaseal-presence`)
+
+`omaseal-presence --reason <text>` is a small executable the `omaseal` CLI
+runs on macOS to prove the person at the Mac is present before `reveal`,
+`agent unlock`, and the other presence-gated actions. It shows the system
+Touch ID prompt (falling back to the login password) via LocalAuthentication
+and exits `0` (authenticated), `1` (denied, cancelled, or failed) or `2`
+(unavailable: no GUI session, nothing to evaluate, not interactive). It
+prints no secrets, and `omaseal` never lets its own stdin count as a
+confirmation.
+
+`make app` / `Scripts/bundle-app.sh` builds it and places it at
+`OmaSealBar.app/Contents/MacOS/omaseal-presence`. `omaseal` finds it, in
+order, next to the running `omaseal` executable, at
+`/Applications/OmaSealBar.app/Contents/MacOS/omaseal-presence`, then at
+`~/Applications/OmaSealBar.app/Contents/MacOS/omaseal-presence`. It refuses
+a helper that is not a regular file owned by you or root, or that is group
+or world writable. `omaseal agent status` reports `macos-local-auth` when a
+usable helper is installed.
+
+SSH sessions cannot show the prompt: the helper exits `2` there and the gate
+falls through (and, with no other mechanism, fails closed). Unlock remotely
+with `omaseal agent unlock --passphrase-stdin` instead.
+
+### Dropping `allow_ungated`
+
+Macs that had to set `--ungated` can switch back once the helper is
+installed:
+
+```sh
+omaseal agent mode ask
+```
+
+Then `omaseal agent unlock` shows a Touch ID prompt on the Mac.
