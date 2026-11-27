@@ -313,7 +313,8 @@ func (s *nativeStore) rotateTo(next []namedRecipient) error {
 			svc  string
 			acct string
 			it   nativeItem
-			val  string
+			val  string   // active CT plaintext; empty when CT is empty
+			vers []string // plaintext for each Versions[i].CT ("" if that slot has no ct)
 		}
 		items := make([]decoded, 0, len(d.Items))
 		for k, it := range d.Items {
@@ -322,21 +323,58 @@ func (s *nativeStore) rotateTo(next []namedRecipient) error {
 				return keyringError(fmt.Errorf("rotate: malformed store key %q", k))
 			}
 			svc, acct := unescKeyPart(rawSvc), unescKeyPart(rawAcct)
-			val, err := s.decryptEnvelope(svc, acct, it)
-			if err != nil {
-				return fmt.Errorf("rotate: decrypt %s/%s: %w", svc, acct, err)
+			// Fully purged records (tomb, no ciphertext) stay as-is.
+			if !itemHasCiphertext(it) {
+				continue
 			}
-			items = append(items, decoded{key: k, svc: svc, acct: acct, it: it, val: val})
+			var val string
+			if it.CT != "" {
+				var err error
+				val, err = s.decryptEnvelope(svc, acct, it)
+				if err != nil {
+					return fmt.Errorf("rotate: decrypt %s/%s: %w", svc, acct, err)
+				}
+			}
+			vers := make([]string, len(it.Versions))
+			for i, ver := range it.Versions {
+				if ver.CT == "" {
+					continue
+				}
+				vplain, err := s.decryptEnvelope(svc, acct, nativeItem{CT: ver.CT})
+				if err != nil {
+					return fmt.Errorf("rotate: decrypt %s/%s v%d: %w", svc, acct, ver.V, err)
+				}
+				vers[i] = vplain
+			}
+			items = append(items, decoded{key: k, svc: svc, acct: acct, it: it, val: val, vers: vers})
 		}
 		s.extra = next
 		for _, it := range items {
-			ct, err := s.encryptEnvelope(nativeEnvelope{Svc: it.svc, Acct: it.acct, Value: it.val})
-			if err != nil {
-				s.extra = prev
-				return err
-			}
 			rec := it.it
-			rec.CT = ct
+			if it.it.CT != "" {
+				ct, err := s.encryptEnvelope(nativeEnvelope{Svc: it.svc, Acct: it.acct, Value: it.val})
+				if err != nil {
+					s.extra = prev
+					return err
+				}
+				rec.CT = ct
+			}
+			if len(it.vers) > 0 {
+				newVers := make([]nativeVersion, len(it.it.Versions))
+				copy(newVers, it.it.Versions)
+				for i, plain := range it.vers {
+					if plain == "" {
+						continue
+					}
+					ct, err := s.encryptEnvelope(nativeEnvelope{Svc: it.svc, Acct: it.acct, Value: plain})
+					if err != nil {
+						s.extra = prev
+						return err
+					}
+					newVers[i].CT = ct
+				}
+				rec.Versions = newVers
+			}
 			rec.Updated = s.now().Unix()
 			d.Items[it.key] = rec
 		}
